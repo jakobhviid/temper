@@ -67,7 +67,11 @@ fn exec_opts<'a>(home: &'a Path, machine: &'a Machine, step: &'a Step) -> ExecOp
 }
 
 fn is_step(step: &Step) -> bool {
-    step.copy.is_some() || step.block.is_some() || step.setkey.is_some() || step.exec.is_some()
+    step.copy.is_some()
+        || step.block.is_some()
+        || step.setkey.is_some()
+        || step.exec.is_some()
+        || step.profile.is_some()
 }
 
 /// One drift finding across any primitive or assertion.
@@ -126,6 +130,16 @@ fn step_finding(
             status,
         }));
     }
+    if let Some(profile) = &step.profile {
+        // Not verifiable without MDM — reported status-only, never "drifted".
+        return Ok(Some(Finding {
+            app: app.to_string(),
+            kind: "profile",
+            target: profile.clone(),
+            ok: true,
+            status: "manual".into(),
+        }));
+    }
     Ok(None)
 }
 
@@ -177,6 +191,26 @@ pub fn run_drift(
         }
     }
 
+    // GNOME extensions + rpm-ostree (Linux; inert where their CLIs are absent).
+    for uuid in providers::gext_missing(&providers::effective_extensions(home, machine)?) {
+        findings.push(Finding {
+            app: "extensions".into(),
+            kind: "extension",
+            target: uuid,
+            ok: false,
+            status: "missing".into(),
+        });
+    }
+    for pkg in providers::rpm_missing(&providers::effective_rpm(home, machine)?) {
+        findings.push(Finding {
+            app: "rpm".into(),
+            kind: "rpm",
+            target: pkg,
+            ok: false,
+            status: "missing".into(),
+        });
+    }
+
     Ok(findings)
 }
 
@@ -208,7 +242,10 @@ fn apply_step(
         let check = step.check.as_ref().map(|c| home.join(c));
         return primitives::exec_apply(&home.join(exec), check.as_deref(), &opts);
     }
-    bail!("step names no known primitive (copy / block / setkey / exec)")
+    if let Some(profile) = &step.profile {
+        return primitives::profile_apply(&home.join(profile));
+    }
+    bail!("step names no known primitive (copy / block / setkey / exec / profile)")
 }
 
 /// A step's effective lifecycle. Defaults by primitive: exec & seed are
@@ -251,6 +288,8 @@ pub struct InstallReport {
     pub packages: usize,
     pub steps_changed: usize,
     pub steps_total: usize,
+    /// A layered rpm was added and the machine needs a reboot.
+    pub reboot: bool,
 }
 
 /// Install flow: phase 1 converges packages (whole-machine), phase 2 applies
@@ -265,6 +304,8 @@ pub fn run_install(
     // Phase 1 — packages (aggregate converge; inert without declared packages).
     let effective = packages::effective_set(home, machine)?;
     let packages = providers::converge(&effective, dry_run)?;
+    providers::gext_converge(&providers::effective_extensions(home, machine)?, dry_run)?;
+    let reboot = providers::rpm_converge(&providers::effective_rpm(home, machine)?, dry_run)?;
 
     // Phase 2 — config steps.
     let resolved = resolve(home, machine)?;
@@ -290,6 +331,7 @@ pub fn run_install(
         packages,
         steps_changed: changed,
         steps_total: total,
+        reboot,
     })
 }
 
@@ -371,5 +413,6 @@ pub fn run_update(
         packages: effective.len(),
         steps_changed: changed,
         steps_total: total,
+        reboot: false,
     })
 }

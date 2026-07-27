@@ -785,3 +785,21 @@ fn dconf_apply(sk: &SetKey) -> Result<bool> {
     }
     Ok(true)
 }
+
+// --- profile: install a macOS .mobileconfig -----------------------------------
+// Apply opens it in System Settings for the user to approve — installation
+// can't be silently scripted without MDM, so drift is status-only ("manual").
+
+pub fn profile_apply(file: &Path) -> Result<bool> {
+    if which("open").is_none() {
+        bail!("profile install needs macOS `open`");
+    }
+    let status = std::process::Command::new("open")
+        .arg(file)
+        .status()
+        .with_context(|| format!("opening {}", file.display()))?;
+    if !status.success() {
+        bail!("open {} failed", file.display());
+    }
+    Ok(true)
+}

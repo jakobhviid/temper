@@ -40,7 +40,7 @@ class Temper < Formula
   def install
     bin.install "temper"
     generate_completions_from_executable(bin/"temper", "completions")
-    (man1/"temper.1").write Utils.safe_popen_read(bin/"temper", "man")
+    (man1/"temper.1").write Utils.safe_popen_read(bin/"temper", "--man")
   end
 
   test do

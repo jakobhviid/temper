@@ -92,16 +92,25 @@ enum Cmd {
         /// The shell to generate for.
         shell: Shell,
     },
-    /// Print the man page (roff).
-    #[command(hide = true)]
-    Man,
 }
 
 fn main() -> ExitCode {
-    // `--llm` is a documentation flag like `--help`: works from anywhere, needs
-    // no subcommand, so intercept it before clap enforces one.
-    if std::env::args().skip(1).any(|a| a == "--llm") {
+    // `--llm` and `--man` are documentation flags like `--help`: they work from
+    // anywhere and need no subcommand, so intercept them before clap enforces
+    // one. `--man` is a flag (not a subcommand) so it never leaks into the shell
+    // completion list, which hidden subcommands do.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--llm") {
         print!("{}", llm_guide());
+        return ExitCode::SUCCESS;
+    }
+    if args.iter().any(|a| a == "--man") {
+        if clap_mangen::Man::new(Cli::command())
+            .render(&mut io::stdout())
+            .is_err()
+        {
+            return ExitCode::FAILURE;
+        }
         return ExitCode::SUCCESS;
     }
     let cli = Cli::parse();
@@ -122,9 +131,6 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Completions { shell }) => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "temper", &mut io::stdout());
-        }
-        Some(Cmd::Man) => {
-            clap_mangen::Man::new(Cli::command()).render(&mut io::stdout())?;
         }
         Some(Cmd::Install { machine, dry_run }) => cmd_install(machine, dry_run, json)?,
         Some(Cmd::Update) => cmd_update(json)?,
@@ -147,7 +153,8 @@ fn cmd_install(machine: Option<String>, dry_run: bool, json: bool) -> Result<()>
             "{}",
             serde_json::json!({
                 "machine": m.name, "packages": r.packages,
-                "changed": r.steps_changed, "total": r.steps_total, "dry_run": dry_run
+                "changed": r.steps_changed, "total": r.steps_total,
+                "reboot": r.reboot, "dry_run": dry_run
             })
         );
     } else {
@@ -156,6 +163,9 @@ fn cmd_install(machine: Option<String>, dry_run: bool, json: bool) -> Result<()>
             "install {}: {} package(s), {verb} {} of {} config step(s)",
             m.name, r.packages, r.steps_changed, r.steps_total
         );
+        if r.reboot {
+            println!("  ⚠ reboot required (rpm-ostree layered a package)");
+        }
     }
     Ok(())
 }

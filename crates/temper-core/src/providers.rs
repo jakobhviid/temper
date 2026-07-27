@@ -7,9 +7,9 @@
 //! The real converge (`brew bundle`, `flatpak install`) is VM-verified; it is
 //! never exercised by the sandboxed tests (which declare no packages).
 //!
-//! Not yet modeled here: `gext` (GNOME extensions) and `rpm-ostree` layered
-//! rpms — they don't use Brewfile grammar and need their own manifest fields;
-//! they land with the Linux/VM slice.
+//! `gext` (GNOME extensions) and `rpm-ostree` (layered rpms) are modeled at the
+//! bottom — they don't use Brewfile grammar, so they have their own bundle
+//! fields (`extensions`, `rpm`). Both are Linux/VM-only and guarded on their CLI.
 
 use std::collections::HashSet;
 use std::fs;
@@ -18,6 +18,7 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
+use crate::manifest::{self, Machine};
 use crate::packages::{Installed, Manager, Pkg};
 use crate::primitives::which;
 
@@ -214,4 +215,102 @@ pub fn dump(home: &Path, machine: &str) -> Result<PathBuf> {
         bail!("brew bundle dump failed");
     }
     Ok(bf)
+}
+
+// --- gext: GNOME extensions (Linux desktop) -----------------------------------
+
+/// Union of a machine's composed apps' `extensions`, de-duplicated.
+pub fn effective_extensions(home: &Path, machine: &Machine) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for app in &machine.apps {
+        for uuid in manifest::load_bundle(home, app)?.extensions {
+            if seen.insert(uuid.clone()) {
+                out.push(uuid);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn gext_installed() -> Vec<String> {
+    // `gnome-extensions list` prints one UUID per line.
+    if have("gnome-extensions") {
+        run_lines("gnome-extensions", &["list"]).unwrap_or_default()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Declared extensions not installed. Empty (no-op) where GNOME isn't present.
+pub fn gext_missing(effective: &[String]) -> Vec<String> {
+    if effective.is_empty() || (!have("gext") && !have("gnome-extensions")) {
+        return Vec::new();
+    }
+    let installed = gext_installed();
+    effective
+        .iter()
+        .filter(|e| !installed.contains(e))
+        .cloned()
+        .collect()
+}
+
+/// Install missing extensions via `gext`. VM-verified.
+pub fn gext_converge(effective: &[String], dry_run: bool) -> Result<()> {
+    if dry_run || !have("gext") {
+        return Ok(());
+    }
+    for uuid in gext_missing(effective) {
+        let _ = Command::new("gext").args(["install", &uuid]).status();
+    }
+    Ok(())
+}
+
+// --- rpm-ostree: layered rpms that can't be image-baked (Linux) ---------------
+
+pub fn effective_rpm(home: &Path, machine: &Machine) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for app in &machine.apps {
+        for pkg in manifest::load_bundle(home, app)?.rpm {
+            if seen.insert(pkg.clone()) {
+                out.push(pkg);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Declared rpms not installed (`rpm -q`). Empty where rpm isn't present.
+pub fn rpm_missing(effective: &[String]) -> Vec<String> {
+    if effective.is_empty() || !have("rpm") {
+        return Vec::new();
+    }
+    effective
+        .iter()
+        .filter(|p| {
+            !Command::new("rpm")
+                .args(["-q", p])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Layer missing rpms via `rpm-ostree install --idempotent`. Returns whether a
+/// reboot is needed. VM-verified.
+pub fn rpm_converge(effective: &[String], dry_run: bool) -> Result<bool> {
+    let missing = rpm_missing(effective);
+    if dry_run || missing.is_empty() || !have("rpm-ostree") {
+        return Ok(false);
+    }
+    let mut cmd = Command::new("rpm-ostree");
+    cmd.args(["install", "--idempotent"]);
+    for p in &missing {
+        cmd.arg(p);
+    }
+    let _ = cmd.status();
+    Ok(true) // layered rpms require a reboot to take effect
 }

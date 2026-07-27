@@ -64,6 +64,12 @@ pub struct Bundle {
     pub packages_mac: Vec<String>,
     #[serde(default)]
     pub packages_linux: Vec<String>,
+    /// GNOME extension UUIDs to install via `gext` (Linux desktop).
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    /// rpm-ostree layered packages (Linux; can't be image-baked).
+    #[serde(default)]
+    pub rpm: Vec<String>,
     #[serde(default)]
     pub step: Vec<Step>,
     /// Drift-only assertions (no converge action).
@@ -100,6 +106,10 @@ pub struct Step {
     // --- setkey: set a key in a structured file, preserving siblings ---
     #[serde(default)]
     pub setkey: Option<SetKey>,
+
+    // --- profile: install a macOS .mobileconfig (manual approval) ---
+    #[serde(default)]
+    pub profile: Option<String>,
 
     // --- exec: run a user script (the escape hatch) ---
     #[serde(default)]

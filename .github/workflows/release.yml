@@ -112,7 +112,7 @@ jobs:
           # from the Linux binary and reuse them in the macOS kegs too.
           tmp=$(mktemp -d)
           tar xzf art/temper-x86_64-unknown-linux-musl.tar.gz -C "$tmp"
-          "$tmp/temper" man              > "$tmp/temper.1"
+          "$tmp/temper" --man              > "$tmp/temper.1"
           "$tmp/temper" completions zsh  > "$tmp/_temper"
           "$tmp/temper" completions bash > "$tmp/temper.bash"
           "$tmp/temper" completions fish > "$tmp/temper.fish"
