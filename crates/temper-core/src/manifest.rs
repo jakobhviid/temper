@@ -146,8 +146,10 @@ pub struct Step {
     #[serde(default)]
     pub secrets: Vec<String>,
 
-    /// Lifecycle: "always" | "install" | "ensure" | "manual". Defaults by
-    /// primitive when unset (copy/setkey/block → always; exec → install).
+    /// Lifecycle: "always" (re-apply every update) | "install" (once) |
+    /// "ensure" (install-if-missing on update; never overwrites a present
+    /// target) | "manual" (only when explicitly invoked). Default by primitive:
+    /// copy/setkey/block → always; exec/seed → install.
     #[serde(default)]
     pub run: Option<String>,
 
@@ -203,6 +205,9 @@ pub struct Assert {
     pub json_semantic: Option<JsonSemantic>,
     #[serde(default)]
     pub os: Option<String>,
+    /// Skip this assertion unless the machine's role matches.
+    #[serde(default)]
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -233,7 +238,16 @@ pub struct JsonSemantic {
 pub fn load_fleet(home: &Path) -> Result<TemperToml> {
     let p = home.join("temper.toml");
     let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
-    toml::from_str(&s).with_context(|| format!("parsing {}", p.display()))
+    let ft: TemperToml =
+        toml::from_str(&s).with_context(|| format!("parsing {}", p.display()))?;
+    // Reject duplicate machine names — otherwise the second silently shadows.
+    let mut seen = std::collections::HashSet::new();
+    for m in &ft.machine {
+        if !seen.insert(m.name.to_lowercase()) {
+            anyhow::bail!("duplicate machine name '{}' in temper.toml", m.name);
+        }
+    }
+    Ok(ft)
 }
 
 pub fn load_bundle(home: &Path, name: &str) -> Result<Bundle> {

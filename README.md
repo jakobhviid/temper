@@ -54,9 +54,9 @@
 `gext`/`rpm-ostree` layering. The read-only paths (all of `drift`, package
 probing, `install --dry-run`) are verified against a real machine. Known
 limitations: `setkey` toml reserializes (drops comments); `defaults`/`dconf`
-writes aren't journaled; `profile` install is manual; `run = "ensure"` currently
-behaves like `always`; presence-gating (`when`/`needs`) is unbuilt (os/role
-only); role-gating is per-step (bundles must opt in — steel guards servers by
+writes aren't journaled; `profile` install is manual; presence-gating
+(`when`/`needs`) is unbuilt (os/role gating only); role-gating is per-step
+(bundles must opt in — steel guards servers by
 their app list too).
 
 `WORKFLOWS.md` (compiled into `--llm`) gets written once the VM run confirms the

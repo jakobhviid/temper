@@ -88,6 +88,52 @@ fn block_refuses_malformed_region() {
     assert_eq!(fs::read_to_string(&target).unwrap(), orig, "user content was altered");
 }
 
+// ensure = install-if-missing on update: create when absent, never overwrite.
+#[test]
+fn ensure_is_install_if_missing_on_update() {
+    let (home, fh, st) = (TempDir::new().unwrap(), TempDir::new().unwrap(), TempDir::new().unwrap());
+    fs::write(home.path().join("x"), "managed\n").unwrap();
+    machine(home.path(), "[[step]]\ncopy=\"x\"\nto=\"~/.config/e.conf\"\nrun=\"ensure\"\n");
+    let e = fh.path().join(".config/e.conf");
+
+    temper(home.path(), fh.path(), st.path()).arg("install").assert().success();
+    assert_eq!(fs::read_to_string(&e).unwrap(), "managed\n");
+
+    // user edits it → update (ensure) must NOT overwrite
+    fs::write(&e, "user-edited\n").unwrap();
+    temper(home.path(), fh.path(), st.path()).arg("update").assert().success();
+    assert_eq!(fs::read_to_string(&e).unwrap(), "user-edited\n", "ensure overwrote a present file");
+
+    // deleted → update (ensure) recreates it
+    fs::remove_file(&e).unwrap();
+    temper(home.path(), fh.path(), st.path()).arg("update").assert().success();
+    assert_eq!(fs::read_to_string(&e).unwrap(), "managed\n", "ensure did not recreate a missing file");
+}
+
+// setkey json refuses to descend into (and clobber) an existing scalar.
+#[test]
+fn setkey_json_refuses_scalar_intermediate() {
+    let (home, fh, st) = (TempDir::new().unwrap(), TempDir::new().unwrap(), TempDir::new().unwrap());
+    machine(home.path(),
+        "[[step]]\nsetkey = { backend = \"json\", file = \"~/d.json\", key = \"a.x\", value = \"1\" }\n");
+    let target = fh.path().join("d.json");
+    fs::write(&target, "{\"a\": 5, \"b\": 7}\n").unwrap();
+    temper(home.path(), fh.path(), st.path()).arg("install").assert().failure()
+        .stderr(predicates::str::contains("not an object"));
+    assert!(fs::read_to_string(&target).unwrap().contains("\"a\": 5"), "scalar was clobbered");
+}
+
+// duplicate machine names are rejected at load.
+#[test]
+fn duplicate_machine_names_error() {
+    let (home, fh, st) = (TempDir::new().unwrap(), TempDir::new().unwrap(), TempDir::new().unwrap());
+    fs::create_dir_all(home.path().join("apps")).unwrap();
+    fs::write(home.path().join("temper.toml"),
+        format!("[[machine]]\nname=\"t\"\nos=\"{}\"\n[[machine]]\nname=\"t\"\nos=\"{}\"\n", os(), os())).unwrap();
+    temper(home.path(), fh.path(), st.path()).args(["drift", "t"]).assert().failure()
+        .stderr(predicates::str::contains("duplicate machine name"));
+}
+
 // setkey json refuses to overwrite a file whose root isn't an object.
 #[test]
 fn setkey_json_refuses_non_object_root() {

@@ -48,7 +48,7 @@ pub fn resolve(home: &Path, machine: &Machine) -> Result<Resolved> {
             }
         }
         for assert in bundle.assert {
-            if !os_gated(&assert.os, machine) {
+            if !os_gated(&assert.os, machine) && !role_gated(&assert.role, machine) {
                 asserts.push((app.clone(), assert));
             }
         }
@@ -427,10 +427,26 @@ pub fn run_adopt(
     Ok(packages::extras(&effective, &installed, ignore))
 }
 
+/// Whether an `ensure` step should apply on `update`. Semantics: install-if-
+/// missing — create an absent target, but DON'T overwrite a present-but-drifted
+/// one (that's what `always` is for). An `exec` `ensure` runs when its
+/// drift-hook fails (not-yet-done); without a hook it's skipped on update.
+fn ensure_should_apply(
+    home: &Path,
+    machine: &Machine,
+    step: &Step,
+    vars: &BTreeMap<String, String>,
+) -> Result<bool> {
+    Ok(match step_finding(home, machine, "", step, vars)? {
+        Some(f) => !f.ok && (f.status == "missing" || step.exec.is_some()),
+        None => false,
+    })
+}
+
 /// Update flow: upgrade declared packages (only if any are declared — so a
 /// machine with no packages never triggers a global `brew upgrade`), then
-/// re-apply the `always`/`ensure` config steps. Skips install-only steps
-/// (seed, one-time exec) so it stays the "safe and boring" flow.
+/// re-apply `always` config steps and create-if-missing `ensure` steps. Skips
+/// install-only + manual steps so it stays the "safe and boring" flow.
 pub fn run_update(
     home: &Path,
     machine: &Machine,
@@ -450,9 +466,14 @@ pub fn run_update(
         if !is_step(step) {
             continue;
         }
-        let lc = lifecycle(step);
-        if lc != "always" && lc != "ensure" {
-            continue;
+        match lifecycle(step) {
+            "always" => {}                                    // re-apply (fixes drift)
+            "ensure" => {
+                if !ensure_should_apply(home, machine, step, vars)? {
+                    continue; // present already → don't overwrite
+                }
+            }
+            _ => continue, // install-only + manual are not applied on update
         }
         total += 1;
         if apply_step(home, machine, step, vars, &mut journal)? {

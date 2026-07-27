@@ -101,7 +101,13 @@ pub fn parse(line: &str) -> Result<Pkg> {
         other => bail!("unknown package type `{other}`"),
     };
     let id = if manager == Manager::Mas {
-        Some(mas_id(rest)?)
+        // Look for `id:` only AFTER the name's closing quote, so an "id:" inside
+        // the quoted name (e.g. `mas "Bid: 5 stars", id: 9`) isn't misread.
+        let after_name = rest
+            .match_indices('"')
+            .nth(1)
+            .map_or(rest, |(i, _)| &rest[i + 1..]);
+        Some(mas_id(after_name)?)
     } else {
         None
     };
@@ -233,6 +239,8 @@ mod tests {
         assert_eq!(mas.match_name(), "497799835");
         assert_eq!(parse("vscode \"Rust-Lang.Rust\"").unwrap().match_name(), "rust-lang.rust");
         assert!(parse("bogus \"x\"").is_err());
+        // `id:` inside the quoted name must not be mistaken for the id.
+        assert_eq!(parse("mas \"Bid: 5 stars\", id: 999").unwrap().match_name(), "999");
     }
 
     #[test]

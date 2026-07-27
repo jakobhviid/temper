@@ -86,8 +86,9 @@ pub fn copy_state(src: &Path, target: &Path, opts: &CopyOpts) -> Result<FileStat
     })
 }
 
-/// `copy` apply. Returns whether the file's content changed. A seed target that
-/// already exists is left untouched. Mode is (idempotently) enforced regardless.
+/// `copy` apply. Returns whether the file's content changed. A `seed` target
+/// that already exists is left entirely untouched (hands-off — including its
+/// mode); for a non-seed copy, `mode` is enforced idempotently.
 pub fn copy_apply(
     src: &Path,
     target: &Path,
@@ -337,10 +338,11 @@ fn json_satisfied(root: &Json, parts: &[&str], value: &Json, append: bool) -> bo
 }
 
 fn json_set(root: &mut Json, parts: &[&str], value: Json, append: bool) -> Result<()> {
-    if !root.is_object() {
-        *root = Json::Object(Default::default());
-    }
-    let obj = root.as_object_mut().unwrap();
+    // root is guaranteed an object by the caller (json_apply guards it, and each
+    // recursion guards the child below), so this never clobbers real data.
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("setkey json: `{}` is not an object", parts[0]))?;
     if parts.len() == 1 {
         if append {
             let arr = obj.entry(parts[0].to_string()).or_insert(Json::Array(vec![]));
@@ -358,6 +360,10 @@ fn json_set(root: &mut Json, parts: &[&str], value: Json, append: bool) -> Resul
     let child = obj
         .entry(parts[0].to_string())
         .or_insert(Json::Object(Default::default()));
+    // Refuse to descend into (and clobber) an existing scalar intermediate.
+    if !child.is_object() {
+        bail!("setkey json: intermediate key `{}` is not an object", parts[0]);
+    }
     json_set(child, &parts[1..], value, append)
 }
 
@@ -534,10 +540,9 @@ fn toml_satisfied(root: &toml::Value, parts: &[&str], value: &toml::Value, appen
 }
 
 fn toml_set(root: &mut toml::Value, parts: &[&str], value: toml::Value, append: bool) -> Result<()> {
-    if !root.is_table() {
-        *root = toml::Value::Table(Default::default());
-    }
-    let tbl = root.as_table_mut().unwrap();
+    let tbl = root
+        .as_table_mut()
+        .ok_or_else(|| anyhow!("setkey toml: `{}` is not a table", parts[0]))?;
     if parts.len() == 1 {
         if append {
             let arr = tbl
@@ -557,6 +562,9 @@ fn toml_set(root: &mut toml::Value, parts: &[&str], value: toml::Value, append: 
     let child = tbl
         .entry(parts[0].to_string())
         .or_insert(toml::Value::Table(Default::default()));
+    if !child.is_table() {
+        bail!("setkey toml: intermediate key `{}` is not a table", parts[0]);
+    }
     toml_set(child, &parts[1..], value, append)
 }
 
