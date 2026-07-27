@@ -358,6 +358,79 @@ pub fn setkey_state(sk: &SetKey) -> Result<FileState> {
     })
 }
 
+// --- exec: run a user script (the escape hatch) -------------------------------
+
+/// Execution context for `exec`/`check` scripts.
+pub struct ExecOpts<'a> {
+    pub sudo: bool,
+    pub secrets: &'a [String],
+    pub home: &'a Path,
+    pub machine: &'a str,
+    pub os: &'a str,
+}
+
+fn exec_command(script: &Path, opts: &ExecOpts) -> Result<std::process::Command> {
+    use std::process::Command;
+    let mut cmd = if opts.sudo {
+        let mut c = Command::new("sudo");
+        c.arg("sh").arg(script);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.arg(script);
+        c
+    };
+    cmd.current_dir(opts.home);
+    cmd.env("FLEET_HOME", opts.home);
+    cmd.env("FLEET_MACHINE", opts.machine);
+    cmd.env("FLEET_OS", opts.os);
+    for s in opts.secrets {
+        let v = std::env::var(s)
+            .map_err(|_| anyhow!("exec: required secret env `{s}` is not set"))?;
+        cmd.env(s, v);
+    }
+    Ok(cmd)
+}
+
+/// Run a drift-hook: true if it exits 0 (in sync).
+pub fn exec_check(check: &Path, opts: &ExecOpts) -> Result<bool> {
+    let status = exec_command(check, opts)?
+        .status()
+        .with_context(|| format!("running check {}", check.display()))?;
+    Ok(status.success())
+}
+
+/// Apply an `exec` step. If a `check` is given and already passes, the script is
+/// skipped (in sync). Otherwise the script runs; a non-zero exit is an error.
+/// Returns whether the script ran. Not journaled — exec is imperative.
+pub fn exec_apply(script: &Path, check: Option<&Path>, opts: &ExecOpts) -> Result<bool> {
+    if let Some(check) = check {
+        if exec_check(check, opts)? {
+            return Ok(false);
+        }
+    }
+    let status = exec_command(script, opts)?
+        .status()
+        .with_context(|| format!("running {}", script.display()))?;
+    if !status.success() {
+        bail!("exec {} failed ({})", script.display(), status);
+    }
+    Ok(true)
+}
+
+/// Drift state for an `exec` step: uses the `check` hook if present, else
+/// reports that there is no drift story (visible, not failing).
+pub fn exec_state(check: Option<&Path>, opts: &ExecOpts) -> Result<(bool, String)> {
+    match check {
+        Some(check) => Ok(if exec_check(check, opts)? {
+            (true, "in sync".into())
+        } else {
+            (false, "drifted".into())
+        }),
+        None => Ok((true, "no drift-check".into())),
+    }
+}
+
 pub fn setkey_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
     if sk.backend != "json" {
         bail!("setkey backend `{}` is not implemented yet (json only)", sk.backend);

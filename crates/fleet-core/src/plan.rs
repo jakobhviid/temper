@@ -1,6 +1,6 @@
 //! Build the ordered steps + assertions for a machine, then evaluate (drift) or
-//! apply (install) them. Live step primitives: `copy`, `block`, `setkey(json)`.
-//! Assertions are drift-only.
+//! apply (install) them. Live step primitives: `copy`, `block`, `setkey(json)`,
+//! `exec`. Assertions are drift-only.
 //!
 //! Flows: `install` applies every step (with a `dry_run` preview); `update` /
 //! `ensure` / `adopt` land later.
@@ -10,10 +10,10 @@ use std::path::Path;
 
 use anyhow::{bail, Result};
 
+use crate::drift;
 use crate::journal::Journal;
 use crate::manifest::{self, expand_tilde, Assert, Machine, Step};
-use crate::primitives::{self, CopyOpts, FileState};
-use crate::drift;
+use crate::primitives::{self, CopyOpts, ExecOpts, FileState};
 
 fn os_gated(step_os: &Option<String>, machine: &Machine) -> bool {
     match step_os {
@@ -24,7 +24,7 @@ fn os_gated(step_os: &Option<String>, machine: &Machine) -> bool {
 
 /// Everything a machine composes, OS-gated to this host.
 pub struct Resolved {
-    pub steps: Vec<(String, Step)>,   // (app, step)
+    pub steps: Vec<(String, Step)>,     // (app, step)
     pub asserts: Vec<(String, Assert)>, // (app, assert)
 }
 
@@ -56,6 +56,20 @@ fn copy_opts<'a>(step: &'a Step, vars: &'a BTreeMap<String, String>) -> CopyOpts
     }
 }
 
+fn exec_opts<'a>(home: &'a Path, machine: &'a Machine, step: &'a Step) -> ExecOpts<'a> {
+    ExecOpts {
+        sudo: step.sudo,
+        secrets: &step.secrets,
+        home,
+        machine: &machine.name,
+        os: &machine.os,
+    }
+}
+
+fn is_step(step: &Step) -> bool {
+    step.copy.is_some() || step.block.is_some() || step.setkey.is_some() || step.exec.is_some()
+}
+
 /// One drift finding across any primitive or assertion.
 pub struct Finding {
     pub app: String,
@@ -66,7 +80,7 @@ pub struct Finding {
 }
 
 impl Finding {
-    fn from_state(app: &str, kind: &'static str, target: String, state: FileState) -> Finding {
+    fn state(app: &str, kind: &'static str, target: String, state: FileState) -> Finding {
         Finding {
             app: app.to_string(),
             kind,
@@ -77,26 +91,40 @@ impl Finding {
     }
 }
 
-/// Drift a single step, if it's one we evaluate. Returns None for empty steps.
+/// Drift a single step, if it's one we evaluate.
 fn step_finding(
     home: &Path,
+    machine: &Machine,
     app: &str,
     step: &Step,
     vars: &BTreeMap<String, String>,
 ) -> Result<Option<Finding>> {
     if let (Some(copy), Some(to)) = (&step.copy, &step.to) {
-        let state = primitives::copy_state(&home.join(copy), &expand_tilde(to), &copy_opts(step, vars))?;
-        return Ok(Some(Finding::from_state(app, "copy", to.clone(), state)));
+        let state =
+            primitives::copy_state(&home.join(copy), &expand_tilde(to), &copy_opts(step, vars))?;
+        return Ok(Some(Finding::state(app, "copy", to.clone(), state)));
     }
     if let (Some(block), Some(in_file)) = (&step.block, &step.in_file) {
         let marker = step.marker.as_deref().unwrap_or("block");
         let state = primitives::block_state(&home.join(block), &expand_tilde(in_file), marker)?;
-        return Ok(Some(Finding::from_state(app, "block", in_file.clone(), state)));
+        return Ok(Some(Finding::state(app, "block", in_file.clone(), state)));
     }
     if let Some(sk) = &step.setkey {
         let state = primitives::setkey_state(sk)?;
         let target = format!("{}:{}", sk.file.as_deref().unwrap_or(&sk.backend), sk.key);
-        return Ok(Some(Finding::from_state(app, "setkey", target, state)));
+        return Ok(Some(Finding::state(app, "setkey", target, state)));
+    }
+    if let Some(exec) = &step.exec {
+        let opts = exec_opts(home, machine, step);
+        let check = step.check.as_ref().map(|c| home.join(c));
+        let (ok, status) = primitives::exec_state(check.as_deref(), &opts)?;
+        return Ok(Some(Finding {
+            app: app.to_string(),
+            kind: "exec",
+            target: exec.clone(),
+            ok,
+            status,
+        }));
     }
     Ok(None)
 }
@@ -109,7 +137,7 @@ pub fn run_drift(
     let resolved = resolve(home, machine)?;
     let mut findings = Vec::new();
     for (app, step) in &resolved.steps {
-        if let Some(f) = step_finding(home, app, step, vars)? {
+        if let Some(f) = step_finding(home, machine, app, step, vars)? {
             findings.push(f);
         }
     }
@@ -129,12 +157,18 @@ pub fn run_drift(
 /// Apply a single step. Returns whether it changed anything.
 fn apply_step(
     home: &Path,
+    machine: &Machine,
     step: &Step,
     vars: &BTreeMap<String, String>,
     journal: &mut Journal,
 ) -> Result<bool> {
     if let (Some(copy), Some(to)) = (&step.copy, &step.to) {
-        return primitives::copy_apply(&home.join(copy), &expand_tilde(to), &copy_opts(step, vars), journal);
+        return primitives::copy_apply(
+            &home.join(copy),
+            &expand_tilde(to),
+            &copy_opts(step, vars),
+            journal,
+        );
     }
     if let (Some(block), Some(in_file)) = (&step.block, &step.in_file) {
         let marker = step.marker.as_deref().unwrap_or("block");
@@ -143,16 +177,37 @@ fn apply_step(
     if let Some(sk) = &step.setkey {
         return primitives::setkey_apply(sk, journal);
     }
-    bail!("step names no known primitive (copy / block / setkey)")
+    if let Some(exec) = &step.exec {
+        let opts = exec_opts(home, machine, step);
+        let check = step.check.as_ref().map(|c| home.join(c));
+        return primitives::exec_apply(&home.join(exec), check.as_deref(), &opts);
+    }
+    bail!("step names no known primitive (copy / block / setkey / exec)")
 }
 
-/// Would this step change anything? (dry-run preview.)
-fn step_would_change(home: &Path, step: &Step, vars: &BTreeMap<String, String>) -> Result<bool> {
-    Ok(step_finding(home, "", step, vars)?.map_or(false, |f| !f.ok))
+/// Would this step change anything? (dry-run preview — never runs an `exec`.)
+fn step_would_change(
+    home: &Path,
+    machine: &Machine,
+    step: &Step,
+    vars: &BTreeMap<String, String>,
+) -> Result<bool> {
+    if step.exec.is_some() {
+        // Never run the script during a preview. Use the check hook if present;
+        // otherwise we can't tell, so assume it would run.
+        return match &step.check {
+            Some(check) => {
+                let opts = exec_opts(home, machine, step);
+                Ok(!primitives::exec_check(&home.join(check), &opts)?)
+            }
+            None => Ok(true),
+        };
+    }
+    Ok(step_finding(home, machine, "", step, vars)?.map_or(false, |f| !f.ok))
 }
 
 /// Apply every step (install flow). With `dry_run`, report what would change
-/// without writing or journaling. Returns (changed, total) mutating steps.
+/// without writing, journaling, or running any `exec`. Returns (changed, total).
 pub fn run_install(
     home: &Path,
     machine: &Machine,
@@ -163,17 +218,15 @@ pub fn run_install(
     let mut journal = Journal::begin();
     let (mut changed, mut total) = (0usize, 0usize);
     for (_app, step) in &resolved.steps {
-        // Only steps that name a primitive are mutating; skip anything else.
-        let is_step = step.copy.is_some() || step.block.is_some() || step.setkey.is_some();
-        if !is_step {
+        if !is_step(step) {
             continue;
         }
         total += 1;
         if dry_run {
-            if step_would_change(home, step, vars)? {
+            if step_would_change(home, machine, step, vars)? {
                 changed += 1;
             }
-        } else if apply_step(home, step, vars, &mut journal)? {
+        } else if apply_step(home, machine, step, vars, &mut journal)? {
             changed += 1;
         }
     }

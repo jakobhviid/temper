@@ -69,6 +69,24 @@ pub struct Step {
     #[serde(default)]
     pub setkey: Option<SetKey>,
 
+    // --- exec: run a user script (the escape hatch) ---
+    #[serde(default)]
+    pub exec: Option<String>,
+    /// Companion drift-hook: exit 0 = in sync. Also gates whether `exec` re-runs.
+    #[serde(default)]
+    pub check: Option<String>,
+    /// Run the exec/check under `sudo`.
+    #[serde(default)]
+    pub sudo: bool,
+    /// Env var names that must be present and are passed through to the script.
+    #[serde(default)]
+    pub secrets: Vec<String>,
+
+    /// Lifecycle: "always" | "install" | "ensure" | "manual". Defaults by
+    /// primitive when unset (copy/setkey/block → always; exec → install).
+    #[serde(default)]
+    pub run: Option<String>,
+
     /// Skip this step unless the machine's OS matches ("mac" | "linux").
     #[serde(default)]
     pub os: Option<String>,
