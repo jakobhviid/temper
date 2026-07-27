@@ -1,11 +1,12 @@
-//! Drift-only assertions — checks that aren't a converge action. Live:
-//! `absent`, `contains_line`, `mode`, `executable_resolves`. (`not_member`,
-//! `shell`, `json_semantic` land with the system-facing slices.)
+//! Drift-only assertions — checks that aren't a converge action:
+//! `absent`, `contains_line`, `mode`, `executable_resolves`, `not_member`,
+//! `shell`, `json_semantic`.
 //!
 //! Each returns (ok, human status). The plan layer folds these into the drift
 //! report alongside the file/key primitives.
 
 use std::fs;
+use std::path::Path;
 
 use anyhow::{bail, Result};
 
@@ -22,6 +23,12 @@ pub fn kind(a: &Assert) -> &'static str {
         "mode"
     } else if a.executable_resolves.is_some() {
         "executable-resolves"
+    } else if a.not_member.is_some() {
+        "not-member"
+    } else if a.shell.is_some() {
+        "shell"
+    } else if a.json_semantic.is_some() {
+        "json-semantic"
     } else {
         "unknown"
     }
@@ -37,13 +44,61 @@ pub fn target(a: &Assert) -> String {
         m.path.clone()
     } else if let Some(x) = &a.executable_resolves {
         x.clone()
+    } else if let Some(g) = &a.not_member {
+        format!("group:{}", g.group)
+    } else if let Some(s) = &a.shell {
+        s.clone()
+    } else if let Some(j) = &a.json_semantic {
+        j.file.clone()
     } else {
         String::new()
     }
 }
 
-/// Evaluate an assertion: (ok, status message).
-pub fn eval(a: &Assert) -> Result<(bool, String)> {
+/// The current user's group names (`id -Gn`), split on whitespace.
+fn user_groups() -> Vec<String> {
+    std::process::Command::new("id")
+        .arg("-Gn")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split_whitespace()
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The current user's login shell (dscl on macOS, getent on Linux).
+fn login_shell() -> Option<String> {
+    let user = std::env::var("USER").ok()?;
+    if cfg!(target_os = "macos") {
+        let out = std::process::Command::new("dscl")
+            .args([".", "-read", &format!("/Users/{user}"), "UserShell"])
+            .output()
+            .ok()?;
+        // "UserShell: /bin/zsh"
+        String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .last()
+            .map(String::from)
+    } else {
+        let out = std::process::Command::new("getent")
+            .args(["passwd", &user])
+            .output()
+            .ok()?;
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .rsplit(':')
+            .next()
+            .map(String::from)
+    }
+}
+
+/// Evaluate an assertion: (ok, status message). `home` resolves reference files.
+pub fn eval(home: &Path, a: &Assert) -> Result<(bool, String)> {
     if let Some(path) = &a.absent {
         let p = expand_tilde(path);
         return Ok(if p.exists() {
@@ -92,6 +147,38 @@ pub fn eval(a: &Assert) -> Result<(bool, String)> {
             (true, "resolves".into())
         } else {
             (false, "not on PATH".into())
+        });
+    }
+
+    if let Some(g) = &a.not_member {
+        let member = user_groups().iter().any(|x| x == &g.group);
+        return Ok(if member {
+            (false, format!("in group {}", g.group))
+        } else {
+            (true, "not a member".into())
+        });
+    }
+
+    if let Some(want) = &a.shell {
+        return Ok(match login_shell() {
+            Some(have) if &have == want => (true, have),
+            Some(have) => (false, format!("shell {have}, want {want}")),
+            None => (false, "could not read login shell".into()),
+        });
+    }
+
+    if let Some(j) = &a.json_semantic {
+        let dep = expand_tilde(&j.file);
+        let reference = home.join(&j.against);
+        if !dep.exists() {
+            return Ok((false, "file missing".into()));
+        }
+        let a_val: serde_json::Value = serde_json::from_str(&fs::read_to_string(&dep)?)?;
+        let b_val: serde_json::Value = serde_json::from_str(&fs::read_to_string(&reference)?)?;
+        return Ok(if a_val == b_val {
+            (true, "matches reference".into())
+        } else {
+            (false, "differs from reference".into())
         });
     }
 

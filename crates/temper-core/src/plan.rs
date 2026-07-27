@@ -143,7 +143,7 @@ pub fn run_drift(
         }
     }
     for (app, assert) in &resolved.asserts {
-        let (ok, status) = drift::eval(assert)?;
+        let (ok, status) = drift::eval(home, assert)?;
         findings.push(Finding {
             app: app.clone(),
             kind: drift::kind(assert),

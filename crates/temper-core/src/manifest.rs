@@ -155,6 +155,15 @@ pub struct Assert {
     /// A command that must resolve on PATH.
     #[serde(default)]
     pub executable_resolves: Option<String>,
+    /// The current user must NOT belong to this group.
+    #[serde(default)]
+    pub not_member: Option<GroupCheck>,
+    /// The current user's login shell must equal this path.
+    #[serde(default)]
+    pub shell: Option<String>,
+    /// A deployed json file must be semantically equal to a reference.
+    #[serde(default)]
+    pub json_semantic: Option<JsonSemantic>,
     #[serde(default)]
     pub os: Option<String>,
 }
@@ -169,6 +178,19 @@ pub struct ContainsLine {
 pub struct ModeCheck {
     pub path: String,
     pub mode: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct GroupCheck {
+    pub group: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct JsonSemantic {
+    /// The deployed file to check (on the machine).
+    pub file: String,
+    /// The reference file (relative to the temper-home folder).
+    pub against: String,
 }
 
 pub fn load_fleet(home: &Path) -> Result<TemperToml> {
