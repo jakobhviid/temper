@@ -160,7 +160,13 @@ pub fn run_drift(
     let resolved = resolve(home, machine)?;
     let mut findings = Vec::new();
     for (app, step) in &resolved.steps {
-        if let Some(f) = step_finding(home, machine, app, step, vars)? {
+        if let Some(mut f) = step_finding(home, machine, app, step, vars)? {
+            // A `manual` step is never applied by install/update, so don't
+            // report it as permanent, unfixable drift — mark it status-only.
+            if lifecycle(step) == "manual" && !f.ok {
+                f.status = format!("manual — {}", f.status);
+                f.ok = true;
+            }
             findings.push(f);
         }
     }
@@ -327,6 +333,18 @@ pub fn run_install(
     brew_trust: &[String],
     dry_run: bool,
 ) -> Result<InstallReport> {
+    // Never apply one machine's config to a different-OS host (drift/dry-run
+    // from anywhere is fine — only a live converge is refused).
+    if !dry_run && machine.os != crate::machine::current_os() {
+        bail!(
+            "refusing to install '{}' (os={}) on a {} host — run it on the target machine, \
+             or use --dry-run to preview",
+            machine.name,
+            machine.os,
+            crate::machine::current_os()
+        );
+    }
+
     // Phase 1 — packages (aggregate converge; inert without declared packages).
     let effective = packages::effective_set(home, machine)?;
     if !dry_run {

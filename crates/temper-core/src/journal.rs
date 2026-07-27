@@ -139,42 +139,82 @@ fn newest_run(runs: &Path) -> Result<PathBuf> {
     best.map(|(_, p)| p).ok_or_else(|| anyhow!("nothing to undo"))
 }
 
-/// Revert the newest run. Returns (reverted, skipped) counts. `dry_run` reports
-/// without touching anything.
-pub fn undo(dry_run: bool) -> Result<(usize, usize)> {
+/// Revertible run ids, newest first.
+pub fn list_runs() -> Result<Vec<String>> {
+    let runs = state_root().join("runs");
+    if !runs.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut v: Vec<(SystemTime, String)> = Vec::new();
+    for entry in fs::read_dir(&runs)? {
+        let entry = entry?;
+        if !entry.path().join("manifest.json").is_file() {
+            continue;
+        }
+        v.push((
+            entry.metadata()?.modified()?,
+            entry.file_name().to_string_lossy().into_owned(),
+        ));
+    }
+    v.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(v.into_iter().map(|(_, id)| id).collect())
+}
+
+/// Revert a run — the one named by `run` (its id), else the newest. `dry_run`
+/// reports without touching anything. Returns (reverted, skipped). A guard
+/// check (does the file still hash to what temper left?) and a missing content
+/// object both cause that entry to be *skipped and reported*, never clobbered
+/// or aborted mid-run.
+pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
     let root = state_root();
-    let run_dir = newest_run(&root.join("runs"))?;
-    let run: RunFile = serde_json::from_slice(&fs::read(run_dir.join("manifest.json"))?)?;
+    let runs = root.join("runs");
+    let run_dir = match run {
+        Some(id) => {
+            let d = runs.join(id);
+            if !d.join("manifest.json").is_file() {
+                bail!("no revertible run '{id}' (see `temper undo --list`)");
+            }
+            d
+        }
+        None => newest_run(&runs)?,
+    };
+    let rf: RunFile = serde_json::from_slice(&fs::read(run_dir.join("manifest.json"))?)?;
 
     let (mut reverted, mut skipped) = (0usize, 0usize);
-    for entry in run.entries.iter().rev() {
-        match entry {
-            Entry::Create { path, hash: h } => {
-                let p = PathBuf::from(path);
-                if p.is_file() && &hash(&fs::read(&p)?) == h {
-                    if !dry_run {
-                        fs::remove_file(&p)?;
-                    }
-                    reverted += 1;
-                } else {
-                    skipped += 1;
+    for entry in rf.entries.iter().rev() {
+        let (path, expect_after) = match entry {
+            Entry::Create { path, hash } => (path, hash),
+            Entry::Restore { path, after, .. } => (path, after),
+        };
+        let p = PathBuf::from(path);
+        let current = if p.is_file() { fs::read(&p).ok() } else { None };
+        // Only revert if the file still hashes to what temper left it as.
+        if !current.as_deref().is_some_and(|b| hash(b).as_str() == expect_after.as_str()) {
+            skipped += 1;
+            continue;
+        }
+        if dry_run {
+            reverted += 1;
+            continue;
+        }
+        let done = match entry {
+            Entry::Create { .. } => fs::remove_file(&p).is_ok(),
+            Entry::Restore { before, .. } => {
+                // A missing object is a skip, not a fatal abort mid-run.
+                match fs::read(root.join("objects").join(before)) {
+                    Ok(bytes) => fs::write(&p, bytes).is_ok(),
+                    Err(_) => false,
                 }
             }
-            Entry::Restore { path, before, after } => {
-                let p = PathBuf::from(path);
-                if p.is_file() && &hash(&fs::read(&p)?) == after {
-                    if !dry_run {
-                        let bytes = fs::read(root.join("objects").join(before))?;
-                        fs::write(&p, bytes)?;
-                    }
-                    reverted += 1;
-                } else {
-                    skipped += 1;
-                }
-            }
+        };
+        if done {
+            reverted += 1;
+        } else {
+            skipped += 1;
         }
     }
-    if !dry_run {
+    // Keep the run dir if anything was skipped, so it can be inspected/retried.
+    if !dry_run && skipped == 0 {
         fs::remove_dir_all(&run_dir).ok();
     }
     Ok((reverted, skipped))

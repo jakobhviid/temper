@@ -136,7 +136,7 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Install { machine, dry_run }) => cmd_install(machine, dry_run, json)?,
         Some(Cmd::Update) => cmd_update(json)?,
         Some(Cmd::Drift { machine }) => cmd_drift(machine, json)?,
-        Some(Cmd::Undo { dry_run, .. }) => cmd_undo(dry_run, json)?,
+        Some(Cmd::Undo { run, list, dry_run }) => cmd_undo(run, list, dry_run, json)?,
         Some(Cmd::Prune { dry_run }) => cmd_prune(dry_run, json)?,
         Some(Cmd::Backup { machine }) => cmd_backup(machine, json)?,
         Some(Cmd::Adopt) => cmd_adopt(json)?,
@@ -300,8 +300,22 @@ fn cmd_adopt(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_undo(dry_run: bool, json: bool) -> Result<()> {
-    let (reverted, skipped) = journal::undo(dry_run)?;
+fn cmd_undo(run: Option<String>, list: bool, dry_run: bool, json: bool) -> Result<()> {
+    if list {
+        let runs = journal::list_runs()?;
+        if json {
+            println!("{}", serde_json::json!({ "runs": runs }));
+        } else if runs.is_empty() {
+            println!("undo: no revertible runs");
+        } else {
+            println!("revertible runs (newest first):");
+            for r in &runs {
+                println!("  {r}");
+            }
+        }
+        return Ok(());
+    }
+    let (reverted, skipped) = journal::undo(run.as_deref(), dry_run)?;
     if json {
         println!(
             "{}",

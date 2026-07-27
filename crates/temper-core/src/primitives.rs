@@ -21,6 +21,9 @@ pub enum FileState {
     InSync,
     /// Target present but differs.
     Drifted,
+    /// Can't be evaluated here (the backend's tool is absent, e.g. dconf on a
+    /// Mac host). Not a failure — degrade, don't abort.
+    Unavailable,
 }
 
 impl FileState {
@@ -29,11 +32,12 @@ impl FileState {
             FileState::Missing => "missing",
             FileState::InSync => "in sync",
             FileState::Drifted => "drifted",
+            FileState::Unavailable => "unavailable",
         }
     }
 
     pub fn is_ok(self) -> bool {
-        matches!(self, FileState::InSync)
+        matches!(self, FileState::InSync | FileState::Unavailable)
     }
 }
 
@@ -193,27 +197,42 @@ fn markers(marker: &str) -> (String, String) {
 }
 
 /// The file content that should result from ensuring `body` sits inside the
-/// marker region — replacing an existing region or appending a new one.
-fn block_desired(existing: &str, begin: &str, end: &str, body: &str) -> String {
+/// marker region — replacing a well-formed existing region or appending a new
+/// one. Refuses (errors) on a malformed region rather than silently deleting
+/// user content or growing the file on every run.
+fn block_desired(existing: &str, begin: &str, end: &str, body: &str) -> Result<String> {
+    if body.contains(begin) || body.contains(end) {
+        bail!("block body contains the marker delimiter — pick a different marker name");
+    }
     let region = format!("{begin}\n{}\n{end}", body.trim_end_matches('\n'));
-    if let (Some(bs), Some(es)) = (existing.find(begin), existing.find(end)) {
-        let region_end = es + end.len();
-        let mut out = String::with_capacity(existing.len() + region.len());
-        out.push_str(&existing[..bs]);
-        out.push_str(&region);
-        out.push_str(&existing[region_end..]);
-        out
-    } else {
-        let mut out = existing.to_string();
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
+    match (existing.find(begin), existing.find(end)) {
+        // A well-formed region: replace it in place.
+        (Some(bs), Some(es)) if es > bs => {
+            let region_end = es + end.len();
+            let mut out = String::with_capacity(existing.len() + region.len());
+            out.push_str(&existing[..bs]);
+            out.push_str(&region);
+            out.push_str(&existing[region_end..]);
+            Ok(out)
         }
-        if !out.is_empty() {
+        // No region yet: append one.
+        (None, None) => {
+            let mut out = existing.to_string();
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&region);
             out.push('\n');
+            Ok(out)
         }
-        out.push_str(&region);
-        out.push('\n');
-        out
+        // Orphaned/out-of-order markers: refuse rather than corrupt.
+        _ => bail!(
+            "malformed marker region (unbalanced or out-of-order `{begin}` / `{end}`) — \
+             fix or remove it by hand"
+        ),
     }
 }
 
@@ -226,7 +245,8 @@ pub fn block_state(body_src: &Path, target: &Path, marker: &str) -> Result<FileS
     let existing =
         fs::read_to_string(target).with_context(|| format!("reading {}", target.display()))?;
     let (begin, end) = markers(marker);
-    let want = block_desired(&existing, &begin, &end, &body);
+    let want = block_desired(&existing, &begin, &end, &body)
+        .with_context(|| format!("in {}", target.display()))?;
     Ok(if existing == want {
         FileState::InSync
     } else {
@@ -252,7 +272,8 @@ pub fn block_apply(
         .map(|b| String::from_utf8_lossy(b).into_owned())
         .unwrap_or_default();
     let (begin, end) = markers(marker);
-    let want = block_desired(&existing, &begin, &end, &body);
+    let want = block_desired(&existing, &begin, &end, &body)
+        .with_context(|| format!("in {}", target.display()))?;
     if before.as_deref() == Some(want.as_bytes()) {
         return Ok(false);
     }
@@ -467,6 +488,11 @@ pub fn setkey_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
 fn json_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
     let file = sk_file(sk)?;
     let mut root = read_json_root(&file)?;
+    // read_json_root gives {} for absent/empty; a non-object here means the file
+    // has real array/scalar content — refuse rather than overwrite it wholesale.
+    if !root.is_object() {
+        bail!("setkey json: {} root is not an object", file.display());
+    }
     let parts: Vec<&str> = sk.key.split('.').collect();
     let value = toml_to_json(&sk.value);
     if json_satisfied(&root, &parts, &value, sk.append) {
@@ -551,6 +577,9 @@ fn toml_state(sk: &SetKey) -> Result<FileState> {
 fn toml_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
     let file = sk_file(sk)?;
     let mut root = read_toml_root(&file)?;
+    if !root.is_table() {
+        bail!("setkey toml: {} root is not a table", file.display());
+    }
     let parts: Vec<&str> = sk.key.split('.').collect();
     if toml_satisfied(&root, &parts, &sk.value, sk.append) {
         return Ok(false);
@@ -695,21 +724,29 @@ fn defaults_target(sk: &SetKey) -> Result<String> {
     })
 }
 
+/// Compare `defaults read` output to the wanted value. `defaults` stores bools
+/// as "1"/"0", so a Boolean(true) must match "1", not "true".
+fn defaults_matches(have: &str, want: &toml::Value) -> bool {
+    match want {
+        toml::Value::Boolean(b) => have == if *b { "1" } else { "0" },
+        other => have == scalar_str(other),
+    }
+}
+
 fn defaults_state(sk: &SetKey) -> Result<FileState> {
     if which("defaults").is_none() {
-        bail!("setkey(defaults) requires macOS `defaults`");
+        return Ok(FileState::Unavailable); // degrade, don't abort (e.g. on Linux)
     }
     let target = defaults_target(sk)?;
-    let want = scalar_str(&sk.value);
     Ok(match defaults_read(&target, &sk.key) {
         None => FileState::Missing,
-        Some(have) if have == want => FileState::InSync,
+        Some(have) if defaults_matches(&have, &sk.value) => FileState::InSync,
         Some(_) => FileState::Drifted,
     })
 }
 
 fn defaults_apply(sk: &SetKey) -> Result<bool> {
-    if matches!(defaults_state(sk)?, FileState::InSync) {
+    if matches!(defaults_state(sk)?, FileState::InSync | FileState::Unavailable) {
         return Ok(false);
     }
     let target = defaults_target(sk)?;
@@ -741,10 +778,15 @@ fn dconf_read(key: &str) -> Option<String> {
     (out.status.success() && !s.is_empty()).then_some(s)
 }
 
+/// Escape a string for a single-quoted GVariant literal.
+fn gvariant_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
 /// Render a toml scalar as a GVariant literal for `dconf write`.
 fn gvariant(v: &toml::Value) -> String {
     match v {
-        toml::Value::String(s) => format!("'{s}'"),
+        toml::Value::String(s) => format!("'{}'", gvariant_escape(s)),
         toml::Value::Boolean(b) => b.to_string(),
         toml::Value::Integer(i) => i.to_string(),
         toml::Value::Float(f) => f.to_string(),
@@ -752,13 +794,13 @@ fn gvariant(v: &toml::Value) -> String {
             let items: Vec<String> = a.iter().map(gvariant).collect();
             format!("[{}]", items.join(", "))
         }
-        other => format!("'{other}'"),
+        other => format!("'{}'", gvariant_escape(&other.to_string())),
     }
 }
 
 fn dconf_state(sk: &SetKey) -> Result<FileState> {
     if which("dconf").is_none() {
-        bail!("setkey(dconf) requires Linux `dconf`");
+        return Ok(FileState::Unavailable); // degrade, don't abort (e.g. on Mac)
     }
     let want = gvariant(&sk.value);
     Ok(match dconf_read(&sk.key) {
@@ -769,7 +811,7 @@ fn dconf_state(sk: &SetKey) -> Result<FileState> {
 }
 
 fn dconf_apply(sk: &SetKey) -> Result<bool> {
-    if matches!(dconf_state(sk)?, FileState::InSync) {
+    if matches!(dconf_state(sk)?, FileState::InSync | FileState::Unavailable) {
         return Ok(false);
     }
     let status = std::process::Command::new("dconf")
