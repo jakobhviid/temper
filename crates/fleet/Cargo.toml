@@ -1,0 +1,26 @@
+[package]
+name = "fleet"
+description = "Converge a machine to a declared spec kept in a folder of human-readable files."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "fleet"
+path = "src/main.rs"
+
+[dependencies]
+fleet-core = { path = "../fleet-core" }
+anyhow = "1"
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+clap_mangen = "0.2"
+dialoguer = { version = "0.11", default-features = false }
+indicatif = "0.17"
+
+[dev-dependencies]
+assert_cmd = "2"
+tempfile = "3"
+predicates = "3"
