@@ -1,9 +1,16 @@
-# FUTURE.md — temper's deferred work & known limitations
+# ROADMAP.md — temper's deferred features & scope
 
-Not bugs (nothing here is broken) — **deliberately deferred features** and
-**inherent limitations**, each with why it's parked, the current mitigation, and
-enough of a sketch to act on cold. The user-facing summary lives in the README
-status table (and rides `--llm`); this is the maintainer's "why + plan" ledger.
+What we intend to build (parked, not broken), what's deliberately **not**
+temper's job, and the migration-verification gap. Each item has why it's parked,
+the current mitigation, and enough of a sketch to act on cold.
+
+This is planning — it is **not** embedded in `--llm`. *Current behavior*,
+including the limitations that are simply how temper works today
+(non-journaled `exec`/`setkey(defaults)`/`setkey(dconf)`, `setkey(toml)` dropping
+comments, `profile` being a manual install, `run = "ensure"` on a checkless
+`exec` being skipped, os/role-only gating, `mas` failures being fatal), is
+documented as **behavior** in `SPEC.md` / `ARCHITECTURE.md` / the README status
+table — which *do* ride `--llm`. This file is only the "what's coming" ledger.
 
 See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 
@@ -22,7 +29,7 @@ on a box without Ghostty just leaves a dead file — harmless.
 `binary|brew|cask|flatpak|mas|gext|rpm|path|exec`; evaluate before apply; skip
 loudly (Principle #6). Default `when` = "my declared package is installed."
 
-### `extensions` / `rpm` not os/role-gated
+### `extensions` / `rpm` os/role gating
 **Status:** deferred. These bundle-level lists are aggregated across a machine's
 apps with no os/role filter.
 **Now:** convention (servers don't list gnome/proton-vpn) + `have(gext|rpm)`
@@ -43,10 +50,11 @@ the prefix (Homebrew is at `/home/linuxbrew/.linuxbrew` on Bazzite).
 **Sketch:** port dotsync's `discovery.rs` (scan common cloud-folder locations, a
 saved pointer, first-run prompt).
 
-### `mas` converge is not "forgiving"
-**Status:** deferred. ARCHITECTURE says MAS failures should be reported-not-fatal
-(no App Store sign-in → skip, continue). Today `mas` rides the aggregate
-`brew bundle`, which bails on any failure → a MAS failure fails the whole run.
+### Forgiving `mas` converge
+**Status:** deferred. Today `mas` rides the aggregate `brew bundle`, which bails
+on any failure → a MAS failure (no App Store sign-in, an app not associated with
+the Apple ID) fails the whole run. MAS is the flakiest provider, so it *should*
+be reported-and-skipped.
 **Sketch:** converge mas separately from `brew bundle` (own `mas install` loop)
 so its failures are warned, not fatal.
 
@@ -58,23 +66,11 @@ mode/owner, escalating internally for just that write (Ansible's per-task
 `become` on a `copy`). Lets `/etc` writes be declarative + drift-checkable
 instead of buried in `exec`.
 
----
-
-## Inherent limitations (can't fully fix; document, don't chase)
-
-- **`exec` / `setkey(defaults)` / `setkey(dconf)` aren't journaled** → `undo`
-  can't revert them (they mutate a domain / dconf DB / arbitrary state, not a
-  file we can snapshot). Drift still catches them; they degrade to `unavailable`
-  when their tool is absent. A future defaults/dconf journal could snapshot the
-  prior `read` value, but it's fiddly and low-value.
-- **`setkey(toml)` drops comments** — the `toml` crate reserializes. Fix would be
-  `toml_edit` (format/comment-preserving). Fine for machine-written config; a
-  trap for hand-commented TOML.
-- **`profile` (macOS `.mobileconfig`) install is manual** — modern macOS needs
-  user approval in System Settings (no scriptable install without MDM). Drift is
-  status-only ("manual"); apply just `open`s it.
-- **`run = "ensure"` for an `exec` with no `check`** is skipped on `update` (we
-  can't tell "missing"). Give such steps a `check`, or use `run = "always"`.
+### Journaled system-side `setkey`, comment-preserving toml (maybe)
+Low-value polish, only if the need shows up: snapshot the prior `defaults read` /
+`dconf read` value so those `setkey` backends become undoable; and swap `toml`
+for `toml_edit` so a hand-commented TOML keeps its comments on write. Both are
+"current behavior" today (see the note at the top), not bugs.
 
 ---
 
@@ -88,7 +84,7 @@ instead of buried in `exec`.
 
 ---
 
-## Verification gap (a state, not a limitation)
+## Verification gap (a state, not a feature)
 
 The Linux half of the `steel` migration is transcribed + parse-valid but has
 **never run** — the dconf loads, 1Password NMH surgery, PWAs, speaker-eq exec

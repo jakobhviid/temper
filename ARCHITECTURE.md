@@ -107,7 +107,7 @@ app-bundles it wants. Drift at app scope is per-file / per-key / per-assertion.
 | `setkey` | both | set one or more keys in a structured store, preserving siblings. **Backends:** `dconf`, macOS `defaults`, `ini`/`.desktop`, `json`, `toml`. Supports **list-append** (array-union, e.g. `custom-keybindings`). This is the generalization of the old standalone `dconf`. |
 | `brew` | machine | converge the aggregate Brewfile (`brew bundle`); internalizes tap-trust; knows the `vscode` sub-type |
 | `flatpak` | machine | converge the flatpak set (with ignore-list); `flatpak override` env/perms is a `setkey`-style op on the override store |
-| `mas` | machine | converge Mac App Store apps — **forgiving** (see below) |
+| `mas` | machine | converge Mac App Store apps (rides `brew bundle`; a MAS failure currently fails the run — see below) |
 | `gext` | machine | converge GNOME extensions (install from EGO + `gext update`); distinct from *enabling* them (a dconf key) |
 | `rpm-ostree` | machine | layer an rpm that can't be image-baked (proton-vpn); emits a **reboot-required** signal temper reports but never automates |
 | `profile` | app/machine | install a macOS `.mobileconfig` — **weaker contract** (apply is a GUI `open`; drift is a plist key-subset compare; not silently undoable) |
@@ -165,11 +165,12 @@ real orphan from a shared dependency; drift gets **wrong**. (RIS documents this
 in `brew_cleanup_extras`: "*a kept entry's deps are NOT listed — which is why
 this can't be replaced by naive set subtraction*.")
 
-**MAS is the forgiving provider.** It needs an App Store sign-in and can only
-install apps already associated with the Apple ID, so converge failures are
-**reported, not fatal** (`mas: skipped Xcode (not signed in)`). brew/flatpak may
-be strict; MAS must not fail the whole run. (Note: on macOS, mas lines ride
-`brew bundle` today; the aggregate is still one call.)
+**MAS.** `mas` lines ride the aggregate `brew bundle` today, so a MAS failure
+(no App Store sign-in, an app not associated with the Apple ID) **fails the
+whole converge** like any other `brew bundle` failure. Making MAS *forgiving*
+(reported-and-skipped, since it's the flakiest provider) needs a separate
+`mas install` loop — see ROADMAP.md. Behavior to know now: sign in to the App
+Store before `install`, or drop the `mas` lines.
 
 ### The gate: presence probes config
 

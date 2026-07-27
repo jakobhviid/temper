@@ -63,8 +63,9 @@ non-matching OS/role; an unknown os/role errors at load); `run = "always"|
 "install"|"ensure"|"manual"` (lifecycle; default: copy/block/setkey → always,
 exec/seed → install). `always` re-applies every update (fixes drift); `ensure`
 is **install-if-missing** on update (creates an absent target, never overwrites
-a present one); `manual` is skipped by automated flows — run it only when
-explicitly invoked; `install` runs once (on install, not update).
+a present one — an `exec` `ensure` needs a `check` to be applied on update,
+without one it's skipped); `manual` is skipped by automated flows — run it only
+when explicitly invoked; `install` runs once (on install, not update).
 
 ```toml
 # copy: deploy a file
