@@ -341,9 +341,17 @@ fn json_set(root: &mut Json, parts: &[&str], value: Json, append: bool) -> Resul
 }
 
 pub fn setkey_state(sk: &SetKey) -> Result<FileState> {
-    if sk.backend != "json" {
-        bail!("setkey backend `{}` is not implemented yet (json only)", sk.backend);
+    match sk.backend.as_str() {
+        "json" => json_state(sk),
+        "toml" => toml_state(sk),
+        "ini" | "desktop" => ini_state(sk),
+        "defaults" => defaults_state(sk),
+        "dconf" => dconf_state(sk),
+        other => bail!("setkey backend `{other}` is not recognized"),
     }
+}
+
+fn json_state(sk: &SetKey) -> Result<FileState> {
     let file = sk_file(sk)?;
     if !file.exists() {
         return Ok(FileState::Missing);
@@ -356,6 +364,24 @@ pub fn setkey_state(sk: &SetKey) -> Result<FileState> {
     } else {
         FileState::Drifted
     })
+}
+
+/// Read a file's prior bytes, journal the write, and write the new bytes.
+fn journaled_write(file: &Path, new: &[u8], journal: &mut Journal) -> Result<bool> {
+    let before = if file.exists() {
+        Some(fs::read(file)?)
+    } else {
+        None
+    };
+    if before.as_deref() == Some(new) {
+        return Ok(false);
+    }
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    journal.record_write(file, before.as_deref(), new)?;
+    fs::write(file, new)?;
+    Ok(true)
 }
 
 // --- exec: run a user script (the escape hatch) -------------------------------
@@ -432,9 +458,17 @@ pub fn exec_state(check: Option<&Path>, opts: &ExecOpts) -> Result<(bool, String
 }
 
 pub fn setkey_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
-    if sk.backend != "json" {
-        bail!("setkey backend `{}` is not implemented yet (json only)", sk.backend);
+    match sk.backend.as_str() {
+        "json" => json_apply(sk, journal),
+        "toml" => toml_apply(sk, journal),
+        "ini" | "desktop" => ini_apply(sk, journal),
+        "defaults" => defaults_apply(sk),
+        "dconf" => dconf_apply(sk),
+        other => bail!("setkey backend `{other}` is not recognized"),
     }
+}
+
+fn json_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
     let file = sk_file(sk)?;
     let mut root = read_json_root(&file)?;
     let parts: Vec<&str> = sk.key.split('.').collect();
@@ -445,15 +479,309 @@ pub fn setkey_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
     json_set(&mut root, &parts, value, sk.append)?;
     let mut new = serde_json::to_string_pretty(&root)?;
     new.push('\n');
-    let before = if file.exists() {
-        Some(fs::read(&file)?)
-    } else {
-        None
-    };
-    if let Some(parent) = file.parent() {
-        fs::create_dir_all(parent)?;
+    journaled_write(&file, new.as_bytes(), journal)
+}
+
+// --- setkey: toml backend -----------------------------------------------------
+
+fn read_toml_root(file: &Path) -> Result<toml::Value> {
+    if !file.exists() {
+        return Ok(toml::Value::Table(Default::default()));
     }
-    journal.record_write(&file, before.as_deref(), new.as_bytes())?;
-    fs::write(&file, new.as_bytes())?;
+    let s = fs::read_to_string(file)?;
+    if s.trim().is_empty() {
+        return Ok(toml::Value::Table(Default::default()));
+    }
+    toml::from_str(&s).with_context(|| format!("parsing toml {}", file.display()))
+}
+
+fn toml_get<'a>(root: &'a toml::Value, parts: &[&str]) -> Option<&'a toml::Value> {
+    let mut cur = root;
+    for p in parts {
+        cur = cur.as_table()?.get(*p)?;
+    }
+    Some(cur)
+}
+
+fn toml_satisfied(root: &toml::Value, parts: &[&str], value: &toml::Value, append: bool) -> bool {
+    match toml_get(root, parts) {
+        None => false,
+        Some(cur) if append => cur.as_array().is_some_and(|a| a.contains(value)),
+        Some(cur) => cur == value,
+    }
+}
+
+fn toml_set(root: &mut toml::Value, parts: &[&str], value: toml::Value, append: bool) -> Result<()> {
+    if !root.is_table() {
+        *root = toml::Value::Table(Default::default());
+    }
+    let tbl = root.as_table_mut().unwrap();
+    if parts.len() == 1 {
+        if append {
+            let arr = tbl
+                .entry(parts[0].to_string())
+                .or_insert(toml::Value::Array(vec![]));
+            let a = arr
+                .as_array_mut()
+                .ok_or_else(|| anyhow!("setkey append: `{}` is not an array", parts[0]))?;
+            if !a.contains(&value) {
+                a.push(value);
+            }
+        } else {
+            tbl.insert(parts[0].to_string(), value);
+        }
+        return Ok(());
+    }
+    let child = tbl
+        .entry(parts[0].to_string())
+        .or_insert(toml::Value::Table(Default::default()));
+    toml_set(child, &parts[1..], value, append)
+}
+
+fn toml_state(sk: &SetKey) -> Result<FileState> {
+    let file = sk_file(sk)?;
+    if !file.exists() {
+        return Ok(FileState::Missing);
+    }
+    let root = read_toml_root(&file)?;
+    let parts: Vec<&str> = sk.key.split('.').collect();
+    Ok(if toml_satisfied(&root, &parts, &sk.value, sk.append) {
+        FileState::InSync
+    } else {
+        FileState::Drifted
+    })
+}
+
+fn toml_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
+    let file = sk_file(sk)?;
+    let mut root = read_toml_root(&file)?;
+    let parts: Vec<&str> = sk.key.split('.').collect();
+    if toml_satisfied(&root, &parts, &sk.value, sk.append) {
+        return Ok(false);
+    }
+    toml_set(&mut root, &parts, sk.value.clone(), sk.append)?;
+    let new = toml::to_string_pretty(&root)?;
+    journaled_write(&file, new.as_bytes(), journal)
+}
+
+// --- setkey: ini / .desktop backend -------------------------------------------
+// Key is "Section.Key" (e.g. "Desktop Entry.Icon") or a bare "Key" (no section).
+
+fn ini_split(key: &str) -> (Option<&str>, &str) {
+    match key.rsplit_once('.') {
+        Some((section, k)) => (Some(section), k),
+        None => (None, key),
+    }
+}
+
+/// A scalar value rendered for an INI line.
+fn scalar_str(v: &toml::Value) -> String {
+    match v {
+        toml::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+fn ini_current<'a>(content: &'a str, section: Option<&str>, key: &str) -> Option<&'a str> {
+    let mut in_section = section.is_none();
+    for line in content.lines() {
+        let t = line.trim();
+        if t.starts_with('[') && t.ends_with(']') {
+            in_section = section == Some(&t[1..t.len() - 1]);
+            continue;
+        }
+        if in_section {
+            if let Some((k, v)) = line.split_once('=') {
+                if k.trim() == key {
+                    return Some(v.trim());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn ini_desired(content: &str, section: Option<&str>, key: &str, value: &str) -> String {
+    let want = format!("{key}={value}");
+    let mut out: Vec<String> = Vec::new();
+    let mut in_section = section.is_none();
+    let mut done = false;
+    for line in content.lines() {
+        let t = line.trim();
+        if t.starts_with('[') && t.ends_with(']') {
+            if in_section && !done {
+                out.push(want.clone());
+                done = true;
+            }
+            in_section = section == Some(&t[1..t.len() - 1]);
+            out.push(line.to_string());
+            continue;
+        }
+        if in_section && !done {
+            if let Some((k, _)) = line.split_once('=') {
+                if k.trim() == key {
+                    out.push(want.clone());
+                    done = true;
+                    continue;
+                }
+            }
+        }
+        out.push(line.to_string());
+    }
+    if !done {
+        if in_section {
+            out.push(want);
+        } else if let Some(s) = section {
+            if out.last().is_some_and(|l| !l.trim().is_empty()) {
+                out.push(String::new());
+            }
+            out.push(format!("[{s}]"));
+            out.push(want);
+        } else {
+            out.push(want);
+        }
+    }
+    let mut s = out.join("\n");
+    s.push('\n');
+    s
+}
+
+fn ini_state(sk: &SetKey) -> Result<FileState> {
+    let file = sk_file(sk)?;
+    if !file.exists() {
+        return Ok(FileState::Missing);
+    }
+    let content = fs::read_to_string(&file)?;
+    let (section, key) = ini_split(&sk.key);
+    Ok(if ini_current(&content, section, key) == Some(scalar_str(&sk.value).as_str()) {
+        FileState::InSync
+    } else {
+        FileState::Drifted
+    })
+}
+
+fn ini_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
+    let file = sk_file(sk)?;
+    let content = if file.exists() {
+        fs::read_to_string(&file)?
+    } else {
+        String::new()
+    };
+    let (section, key) = ini_split(&sk.key);
+    let value = scalar_str(&sk.value);
+    let new = ini_desired(&content, section, key, &value);
+    journaled_write(&file, new.as_bytes(), journal)
+}
+
+// --- setkey: macOS `defaults` backend -----------------------------------------
+// `file` is a domain (com.foo.bar) or a plist path. Not journaled (system-side).
+
+fn defaults_read(target: &str, key: &str) -> Option<String> {
+    let out = std::process::Command::new("defaults")
+        .args(["read", target, key])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn defaults_target(sk: &SetKey) -> Result<String> {
+    let raw = sk
+        .file
+        .clone()
+        .ok_or_else(|| anyhow!("setkey(defaults) needs `file` (a domain or plist path)"))?;
+    // A path target (~/… or /…) is expanded; a bare domain (com.foo.bar) is left as-is.
+    Ok(if raw.starts_with("~/") || raw.starts_with('/') {
+        crate::manifest::expand_tilde(&raw).to_string_lossy().into_owned()
+    } else {
+        raw
+    })
+}
+
+fn defaults_state(sk: &SetKey) -> Result<FileState> {
+    if which("defaults").is_none() {
+        bail!("setkey(defaults) requires macOS `defaults`");
+    }
+    let target = defaults_target(sk)?;
+    let want = scalar_str(&sk.value);
+    Ok(match defaults_read(&target, &sk.key) {
+        None => FileState::Missing,
+        Some(have) if have == want => FileState::InSync,
+        Some(_) => FileState::Drifted,
+    })
+}
+
+fn defaults_apply(sk: &SetKey) -> Result<bool> {
+    if matches!(defaults_state(sk)?, FileState::InSync) {
+        return Ok(false);
+    }
+    let target = defaults_target(sk)?;
+    let (flag, val) = match &sk.value {
+        toml::Value::Boolean(b) => ("-bool", b.to_string()),
+        toml::Value::Integer(i) => ("-int", i.to_string()),
+        toml::Value::Float(f) => ("-float", f.to_string()),
+        other => ("-string", scalar_str(other)),
+    };
+    let status = std::process::Command::new("defaults")
+        .args(["write", &target, &sk.key, flag, &val])
+        .status()
+        .context("running defaults write")?;
+    if !status.success() {
+        bail!("defaults write {target} {} failed", sk.key);
+    }
+    Ok(true)
+}
+
+// --- setkey: dconf backend (Linux) --------------------------------------------
+// Not journaled (system-side). VM-verified.
+
+fn dconf_read(key: &str) -> Option<String> {
+    let out = std::process::Command::new("dconf")
+        .args(["read", key])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !s.is_empty()).then_some(s)
+}
+
+/// Render a toml scalar as a GVariant literal for `dconf write`.
+fn gvariant(v: &toml::Value) -> String {
+    match v {
+        toml::Value::String(s) => format!("'{s}'"),
+        toml::Value::Boolean(b) => b.to_string(),
+        toml::Value::Integer(i) => i.to_string(),
+        toml::Value::Float(f) => f.to_string(),
+        toml::Value::Array(a) => {
+            let items: Vec<String> = a.iter().map(gvariant).collect();
+            format!("[{}]", items.join(", "))
+        }
+        other => format!("'{other}'"),
+    }
+}
+
+fn dconf_state(sk: &SetKey) -> Result<FileState> {
+    if which("dconf").is_none() {
+        bail!("setkey(dconf) requires Linux `dconf`");
+    }
+    let want = gvariant(&sk.value);
+    Ok(match dconf_read(&sk.key) {
+        None => FileState::Missing,
+        Some(have) if have == want => FileState::InSync,
+        Some(_) => FileState::Drifted,
+    })
+}
+
+fn dconf_apply(sk: &SetKey) -> Result<bool> {
+    if matches!(dconf_state(sk)?, FileState::InSync) {
+        return Ok(false);
+    }
+    let status = std::process::Command::new("dconf")
+        .args(["write", &sk.key, &gvariant(&sk.value)])
+        .status()
+        .context("running dconf write")?;
+    if !status.success() {
+        bail!("dconf write {} failed", sk.key);
+    }
     Ok(true)
 }
