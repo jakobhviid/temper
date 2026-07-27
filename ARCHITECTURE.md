@@ -1,4 +1,4 @@
-# fleet — Architecture
+# temper — Architecture
 
 > **Status: design, sanity-checked.** Drafted from the design conversation,
 > then checked against the **entire** ReinstallScripts repo (Mac tree, the
@@ -6,7 +6,7 @@
 > 2026-07-27. The gaps that pass surfaced are folded in below. Still design, not
 > code — but no longer un-vetted.
 
-## What fleet is
+## What temper is
 
 `temper` converges a machine to a declared spec. You describe what a machine
 should be — its packages and its configuration — in a folder of human-readable
@@ -16,7 +16,7 @@ revert what it changed.
 It is the generalization of the `ReinstallScripts` repo: ~3,900 lines of bash
 (two aligned platform trees, `just` + `lib/*.sh`) that install and configure
 Jakob's fleet of Macs and Linux boxes. That repo works, but its logic is
-fleet-private glue, duplicated byte-for-byte across platforms, and inseparable
+temper-private glue, duplicated byte-for-byte across platforms, and inseparable
 from Jakob's own machines. `temper` extracts the *engine* into one open tool and
 leaves the *data* in a private folder anyone can bring.
 
@@ -42,7 +42,7 @@ It operates on "a folder that contains a manifest." How that folder arrived —
 git clone, a continuously-synced cloud folder, a mounted USB disk, `rsync` — is
 not temper's concern. (An `exec` *step* may still shell out to `git`/`curl` for a
 specific job, e.g. cloning a tmux plugin manager — that's a step doing work, not
-fleet managing the folder.)
+temper managing the folder.)
 
 Folder discovery reuses `dotsync`'s model (`discovery.rs`): `$TEMPER_DIR` → a
 saved pointer in per-machine config → auto-scan common locations → prompt. First
@@ -109,7 +109,7 @@ app-bundles it wants. Drift at app scope is per-file / per-key / per-assertion.
 | `flatpak` | machine | converge the flatpak set (with ignore-list); `flatpak override` env/perms is a `setkey`-style op on the override store |
 | `mas` | machine | converge Mac App Store apps — **forgiving** (see below) |
 | `gext` | machine | converge GNOME extensions (install from EGO + `gext update`); distinct from *enabling* them (a dconf key) |
-| `rpm-ostree` | machine | layer an rpm that can't be image-baked (proton-vpn); emits a **reboot-required** signal fleet reports but never automates |
+| `rpm-ostree` | machine | layer an rpm that can't be image-baked (proton-vpn); emits a **reboot-required** signal temper reports but never automates |
 | `profile` | app/machine | install a macOS `.mobileconfig` — **weaker contract** (apply is a GUI `open`; drift is a plist key-subset compare; not silently undoable) |
 | `exec` | app | run a user-supplied script — the escape hatch (see "exec's contract") |
 
@@ -184,7 +184,7 @@ App-scope config sometimes patches `.desktop` files that brew records as **cask
 artifacts** (1Password, VS Code). The *next* machine-scope `brew bundle` then
 refuses to upgrade the modified artifact, so it must be reset to pristine first,
 then re-patched. This is a genuine app→machine effect-dependency that no clean
-two-phase model absorbs. fleet handles it explicitly: a cask can be **annotated
+two-phase model absorbs. temper handles it explicitly: a cask can be **annotated
 "config patches my artifacts → reset-before-converge,"** and the brew provider
 honors it. Documented as an exception rather than pretended away.
 
@@ -205,7 +205,7 @@ items:
 - **exec drift-hook** — an `exec` step may supply a companion **check** script
   that reports in/out-of-sync (exit code + message). Without it, anything pushed
   to `exec` loses drift coverage.
-- **status-only** — items fleet drift-*reports* but has no verb to repair (image
+- **status-only** — items temper drift-*reports* but has no verb to repair (image
   origin, the image-baked brave policy). Read-only.
 
 This is where a third of `just drift`'s real value lived; the model now has a
@@ -278,17 +278,17 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
 
 ---
 
-## What stays out of fleet
+## What stays out of temper
 
-- **Bootstrap** — brew + fleet onto a bare machine runs *before* the tap exists
+- **Bootstrap** — brew + temper onto a bare machine runs *before* the tap exists
   (the paradox). Stays a small shell script (`install-bazzite.sh`'s bootstrap
   tier + the `curl | sh` fallback). Phase-1 image work (cosign key, `policy.json`
   JSON-merge, signed `rpm-ostree rebase`, reboot) stays there too.
 - **Image-side system layer** — the OS image bakes browsers, CLI baseline, brave
-  policy, etc. fleet configures a machine; it does not build the image.
+  policy, etc. temper configures a machine; it does not build the image.
 - **Folder-authoring tools** — `eq-import` (clone an upstream repo *into* the
   folder) is authoring, not machine-converge; like `grove`, it's a separate
-  concern, not a fleet verb.
+  concern, not a temper verb.
 
 ---
 

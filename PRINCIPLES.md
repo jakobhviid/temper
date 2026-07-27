@@ -1,4 +1,4 @@
-# fleet — Design Principles
+# temper — Design Principles
 
 > The guardrails that keep `temper` from degenerating into a worse Ansible / a
 > private Nix. When a decision is unclear, resolve it in the direction these
@@ -46,7 +46,7 @@ the "everything is traceable" rule survives contact with a real OS baseline.
 ## 5. Gate config on reality, not intent
 
 Config steps run only when a **presence probe** passes — checking what's
-*actually on the machine*, not what fleet intended to install. This is what makes
+*actually on the machine*, not what temper intended to install. This is what makes
 image-baked (Linux Ghostty), hand-installed, and opted-out apps all behave under
 one rule.
 
@@ -58,12 +58,12 @@ converge so third-party taps are never *silently* skipped.
 
 ## 7. Nothing is enforced without a drift story
 
-If fleet applies it, `drift` can check it — including things pushed to `exec`
+If temper applies it, `drift` can check it — including things pushed to `exec`
 (via a `check` hook) and things that aren't files or keys (via `[[assert]]`:
 absent, mode, owner, contains-line, not-member, executable-resolves,
 json-semantic, shell). Enforcement that re-runs every `update` (git identity,
 default shell) uses `run = always` + a drift hook so it stays checkable.
-Items fleet can't repair are still drift-*reported* as **status-only**. This
+Items temper can't repair are still drift-*reported* as **status-only**. This
 principle is what the sanity-check added — the first draft silently dropped a
 third of `just drift`'s value.
 

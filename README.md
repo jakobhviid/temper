@@ -1,4 +1,4 @@
-# fleet
+# temper
 
 > **Early design — no code yet.** `temper` will converge a machine to a declared
 > spec kept in a folder of human-readable files (git, Nextcloud, a USB disk —
@@ -22,7 +22,7 @@
 4. ✅ **Build** the primitives + verbs (see status below). All filesystem/logic
    paths are unit- or integration-tested in sandboxes; the live package-manager
    and platform paths are built and await a VM run.
-5. ⏭️ **Migrate** ReinstallScripts onto fleet incrementally (the `armada` repo),
+5. ⏭️ **Migrate** ReinstallScripts onto temper incrementally (the `armada` repo),
    shrinking the bash as each piece lands.
 
 ## Status

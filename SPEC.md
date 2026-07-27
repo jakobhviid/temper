@@ -1,4 +1,4 @@
-# fleet — Manifest Spec
+# temper — Manifest Spec
 
 > **Status: design, sanity-checked 2026-07-27.** Field names are still
 > provisional, but the shape reflects the full ReinstallScripts gap analysis.
@@ -31,7 +31,7 @@ os   = "linux"
 role = "server"           # explicit; still cross-checked against the probe
 apps = ["base"]
 
-# Packages installed on the machine that fleet must NOT flag as extras or offer
+# Packages installed on the machine that temper must NOT flag as extras or offer
 # to prune (OS-preinstalled Bazzite flatpaks, etc.). The reconcile "ignore this"
 # disposition writes here.
 [ignore]
@@ -65,7 +65,7 @@ mode = "0600"                            # file perms (SSH refuses loose perms)
 [[step]]
 block = "assets/ssh/include-line"        # ensure a marker line is present, once
 in    = "~/.ssh/config"
-marker = "# fleet — ssh include"
+marker = "# temper — ssh include"
 
 [[step]]
 copy = "assets/zshrc-bootstrap"
