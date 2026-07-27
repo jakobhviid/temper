@@ -8,10 +8,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct FleetToml {
     #[serde(default)]
     pub machine: Vec<Machine>,
+    /// Declared template variables, referenced as `{{ var "NAME" }}`.
+    #[serde(default)]
+    pub vars: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -38,12 +41,18 @@ pub struct Step {
     pub copy: Option<String>,
     #[serde(default)]
     pub to: Option<String>,
+    /// `copy`: substitute `{{ … }}` (declared vars + apply-time probes) before deploy.
+    #[serde(default)]
+    pub template: bool,
+    /// `copy`: create-once if absent, then hands-off; excluded from drift.
+    #[serde(default)]
+    pub seed: bool,
+    /// File mode (e.g. "0600"), enforced on the deployed target.
+    #[serde(default)]
+    pub mode: Option<String>,
     /// Skip this step unless the machine's OS matches ("mac" | "linux").
     #[serde(default)]
     pub os: Option<String>,
-    /// File mode (e.g. "0600"). Stored now; enforced when `copy` grows perms.
-    #[serde(default)]
-    pub mode: Option<String>,
 }
 
 pub fn load_fleet(home: &Path) -> Result<FleetToml> {

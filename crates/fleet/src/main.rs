@@ -47,6 +47,9 @@ enum Cmd {
     Install {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
+        /// Show what would change without touching anything.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Upgrade packages + re-apply managed config; install-if-missing only for
     /// the `ensure` allowlist. Does not add newly-declared apps wholesale.
@@ -119,7 +122,7 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Man) => {
             clap_mangen::Man::new(Cli::command()).render(&mut io::stdout())?;
         }
-        Some(Cmd::Install { machine }) => cmd_install(machine, json)?,
+        Some(Cmd::Install { machine, dry_run }) => cmd_install(machine, dry_run, json)?,
         Some(Cmd::Drift { machine }) => cmd_drift(machine, json)?,
         Some(Cmd::Undo { dry_run, .. }) => cmd_undo(dry_run, json)?,
         Some(other) => {
@@ -139,21 +142,21 @@ fn run(cli: Cli) -> Result<()> {
     Ok(())
 }
 
-fn cmd_install(machine: Option<String>, json: bool) -> Result<()> {
+fn cmd_install(machine: Option<String>, dry_run: bool, json: bool) -> Result<()> {
     let home = discovery::find_home()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
-    let (changed, total) = plan::run_install(&home, &m)?;
+    let (changed, total) = plan::run_install(&home, &m, &ft.vars, dry_run)?;
     if json {
         println!(
             "{}",
-            serde_json::json!({ "machine": m.name, "changed": changed, "total": total })
+            serde_json::json!({
+                "machine": m.name, "changed": changed, "total": total, "dry_run": dry_run
+            })
         );
     } else {
-        println!(
-            "install {}: {} of {} step(s) applied",
-            m.name, changed, total
-        );
+        let verb = if dry_run { "would apply" } else { "applied" };
+        println!("install {}: {verb} {} of {} step(s)", m.name, changed, total);
     }
     Ok(())
 }
@@ -162,7 +165,7 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
     let home = discovery::find_home()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
-    let items = plan::run_drift(&home, &m)?;
+    let items = plan::run_drift(&home, &m, &ft.vars)?;
     let out_of_sync = items.iter().filter(|i| !i.state.is_ok()).count();
 
     if json {
