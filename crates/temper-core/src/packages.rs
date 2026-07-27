@@ -129,6 +129,19 @@ pub fn effective_set(home: &Path, machine: &Machine) -> Result<Vec<Pkg>> {
     }
     raw.extend(machine.packages.clone());
 
+    // A referenced Brewfile: each non-comment, non-blank line is a package token.
+    if let Some(bf) = &machine.brewfile {
+        let path = home.join(bf);
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading brewfile {}", path.display()))?;
+        for line in content.lines() {
+            let l = line.trim();
+            if !l.is_empty() && !l.starts_with('#') {
+                raw.push(l.to_string());
+            }
+        }
+    }
+
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for line in raw {

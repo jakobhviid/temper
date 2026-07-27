@@ -181,10 +181,27 @@ pub fn run_drift(
             });
         }
         for (m, name) in packages::extras(&effective, &installed, ignore) {
+            // brew-family extras are computed dependency-aware below (a naive
+            // set-diff wrongly flags every installed transitive dependency).
+            if matches!(
+                m,
+                packages::Manager::Brew | packages::Manager::Cask | packages::Manager::Tap
+            ) {
+                continue;
+            }
             findings.push(Finding {
                 app: "packages".into(),
                 kind: "package-extra",
                 target: format!("{} {}", m.as_str(), name),
+                ok: false,
+                status: "extra".into(),
+            });
+        }
+        for name in providers::brew_extras(&effective, ignore)? {
+            findings.push(Finding {
+                app: "packages".into(),
+                kind: "package-extra",
+                target: format!("brew {name}"),
                 ok: false,
                 status: "extra".into(),
             });

@@ -314,3 +314,73 @@ pub fn rpm_converge(effective: &[String], dry_run: bool) -> Result<bool> {
     let _ = cmd.status();
     Ok(true) // layered rpms require a reboot to take effect
 }
+
+// --- dependency-aware brew extras (read-only) ---------------------------------
+
+/// Formulae/casks/taps installed but not needed by the declared set, per
+/// `brew bundle cleanup` (no `--force`, so read-only). Dependency-aware: a kept
+/// package's transitive deps are NOT reported — unlike a naive set-diff. Names
+/// are returned as brew's short names; the machine's `[ignore]` is applied.
+pub fn brew_extras(effective: &[Pkg], ignore: &manifest::Ignore) -> Result<Vec<String>> {
+    if !have("brew") {
+        return Ok(Vec::new());
+    }
+    let body: String = effective
+        .iter()
+        .filter(|p| {
+            matches!(
+                p.manager,
+                Manager::Brew | Manager::Cask | Manager::Tap | Manager::Mas | Manager::Vscode
+            )
+        })
+        .map(|p| format!("{}\n", p.raw))
+        .collect();
+    if body.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tmp = std::env::temp_dir().join(format!("temper-Brewfile-drift-{}", std::process::id()));
+    fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
+    let out = Command::new("brew")
+        .args(["bundle", "cleanup", "--formula", "--cask", "--tap", "--file"])
+        .arg(&tmp)
+        .output()
+        .context("running brew bundle cleanup")?;
+    let _ = fs::remove_file(&tmp);
+
+    // Parse the "Would uninstall …" / "Would untap …" sections for bare names.
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    let ignored: HashSet<&str> = ignore
+        .brew
+        .iter()
+        .chain(&ignore.cask)
+        .chain(&ignore.tap)
+        .map(String::as_str)
+        .collect();
+
+    let mut in_section = false;
+    let mut extras = Vec::new();
+    for line in text.lines() {
+        if line.starts_with("Would uninstall") || line.starts_with("Would untap") {
+            in_section = true;
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        let first = line.chars().next();
+        let is_name = matches!(first, Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
+            && line
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '/' | '-'));
+        if is_name {
+            let name = line.rsplit('/').next().unwrap_or(line);
+            if !ignored.contains(name) && !ignored.contains(line) {
+                extras.push(name.to_string());
+            }
+        } else if matches!(first, Some(c) if c.is_ascii_uppercase()) {
+            in_section = false;
+        }
+    }
+    Ok(extras)
+}

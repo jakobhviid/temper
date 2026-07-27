@@ -52,6 +52,10 @@ pub struct Machine {
     /// Per-machine loose packages that belong to no app-bundle.
     #[serde(default)]
     pub packages: Vec<String>,
+    /// A Brewfile (relative to the temper-home) whose lines are added to this
+    /// machine's package set — the clean way to migrate an existing Brewfile.
+    #[serde(default)]
+    pub brewfile: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
