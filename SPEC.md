@@ -84,6 +84,9 @@ marker = "ssh-include"       # marker label
 [[step]]
 setkey = { backend = "json", file = "~/.claude/settings.json", key = "env.X", value = "0", append = false }
 #   backend: "json" | "toml" | "ini" | "defaults" (macOS) | "dconf" (Linux)
+#            defaults/dconf report "unavailable" in drift (skip in apply) when
+#            their CLI is absent (e.g. dconf on a Mac) — degrade, never abort.
+#            json/toml refuse a file whose root isn't an object/table.
 #   file:    file backends → the file; defaults → a domain or plist path; dconf → key is absolute
 #   key:     dotted path (json/toml) | "Section.Key" (ini) | absolute dconf path
 #   value:   scalar or array — STATIC only ({{ … }} is NOT rendered for setkey)

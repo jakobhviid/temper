@@ -35,9 +35,12 @@
 | `block` (marker region) | ✅ | ✅ sandbox + real drift |
 | `setkey` — json · toml · ini/.desktop · **defaults** | ✅ | ✅ sandbox |
 | `setkey` — **dconf** | ✅ | — (Linux/VM) |
-| `exec` (check-hook · secrets · sudo) | ✅ | ✅ sandbox |
+| `exec` (check-hook · secrets; runs as the user) | ✅ | ✅ sandbox |
 | `[[assert]]` — absent / contains-line / mode / executable-resolves / not-member / shell / json-semantic | ✅ | ✅ sandbox + real drift |
-| journal / `undo` (content-addressed, after-hash-guarded) | ✅ | ✅ sandbox |
+| journal / `undo` (named-run or newest · `--list` · after-hash-guarded, skip-and-report) | ✅ | ✅ sandbox |
+| os + role step-gating (validated; unknown os/role errors) | ✅ | ✅ sandbox |
+| host-OS guard (live `install` refuses cross-OS; drift/dry-run don't) | ✅ | ✅ sandbox |
+| presence-gating (`when`/`needs` probes) | ❌ design | — (only os/role gating today) |
 | packages: parse · effective-set · missing/extras | ✅ | ✅ unit + **real brew drift** |
 | providers: brew / cask / tap / flatpak / mas / vscode — probe | ✅ | ✅ real (drift) |
 | providers: … converge (`brew bundle` / `flatpak install`) | ✅ | ⏳ **VM** (writes) |
@@ -51,7 +54,10 @@
 `gext`/`rpm-ostree` layering. The read-only paths (all of `drift`, package
 probing, `install --dry-run`) are verified against a real machine. Known
 limitations: `setkey` toml reserializes (drops comments); `defaults`/`dconf`
-writes aren't journaled; `profile` install is manual.
+writes aren't journaled; `profile` install is manual; `run = "ensure"` currently
+behaves like `always`; presence-gating (`when`/`needs`) is unbuilt (os/role
+only); role-gating is per-step (bundles must opt in — steel guards servers by
+their app list too).
 
 `WORKFLOWS.md` (compiled into `--llm`) gets written once the VM run confirms the
 real-machine behavior.

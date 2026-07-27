@@ -113,11 +113,14 @@ app-bundles it wants. Drift at app scope is per-file / per-key / per-assertion.
 | `profile` | app/machine | install a macOS `.mobileconfig` — **weaker contract** (apply is a GUI `open`; drift is a plist key-subset compare; not silently undoable) |
 | `exec` | app | run a user-supplied script — the escape hatch (see "exec's contract") |
 
-Every non-`exec` primitive implements **plan → apply → drift → undo**
-(the `plan.rs`/`apply.rs` shape from `dotsync`, the journal from `amdl`).
-"Platform-specific" describes *where* a primitive runs, never *whether* it
-behaves — a Linux-only `setkey(dconf)` is still dry-runnable, drift-checked, and
-journaled.
+Every primitive is **planned and drift-checked**. The **file-writing** ones
+(`copy`, `block`, `setkey` json/toml/ini) are also **journaled** for `undo`
+(the `plan.rs`/`apply.rs` shape from `dotsync`, the journal from `amdl`). The
+**system-side** backends — `setkey(defaults)`, `setkey(dconf)` — and `exec` are
+**not journaled** (they mutate a domain/dconf DB/arbitrary state, not a file we
+can snapshot), so `undo` can't revert them; they degrade to `unavailable` in
+drift when their tool is absent rather than aborting. "Platform-specific"
+describes *where* a primitive runs, not whether it's evaluated.
 
 ### Dynamic (apply-time) values
 
@@ -170,7 +173,13 @@ be strict; MAS must not fail the whole run. (Note: on macOS, mas lines ride
 
 ### The gate: presence probes config
 
-Config runs in a second phase; each app's steps are **gated on a presence
+> **Status: DESIGN, not built.** The `when`/`needs` presence-probe described
+> here is the intended model but is **not implemented** — steps are currently
+> gated only by `os` and `role` (both validated; unknown values error). The
+> probe vocabulary and `when`/`needs` fields are rejected by the parser today
+> (see SPEC "Not in the schema"). The paragraph below is the target.
+
+Config runs in a second phase; each app's steps would be **gated on a presence
 probe** — "is this actually here? → run my config." The gate checks *reality,
 not intent*: on Linux, **Ghostty is baked into the image and in no Brewfile**, so
 a gate of `binary: ghostty` fires correctly however it was installed. Probe
@@ -178,6 +187,8 @@ vocabulary (declarative): `binary` / `brew` / `cask` / `flatpak` / `mas` / `gext
 / `rpm` / `path` / `exec`. Default = "the package(s) I declared are installed."
 
 **Skips must be loud** (Principle #6): `skipped 1password config: probe failed`.
+(The `binary: ghostty` case is handled today by drift's `executable_resolves`
+assertion rather than a step gate.)
 
 ### The cask-artifact exception (a named Principle-#2 violation)
 
@@ -261,21 +272,28 @@ assumed:
 All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
 `undo`:
 
-- **`install [machine]`** / **`update`** — the two lifecycle flows.
+- **`install [machine]`** / **`update`** — the two lifecycle flows. A live
+  `install` refuses to run when the machine's `os` ≠ the host os (drift and
+  `--dry-run` work from any host; only a converge is host-guarded). `manual`
+  steps are skipped by both flows.
 - **`drift [machine]`** — read-only: package set + every managed file + keys +
-  assertions + exec-hooks. Reports per-app *present & drifted* vs *absent &
-  N/A*, and *status-only* items.
+  assertions + exec-hooks. Findings are `ok` / `drifted` / `missing` /
+  **`unavailable`** (a backend whose tool is absent here, e.g. dconf on a Mac —
+  degraded, not a failure); `manual` steps and image-baked items are
+  status-only, never counted as drift.
 - **`prune`** — remove installed-but-not-declared (dependency-aware, honoring the
-  ignore/baseline list). Journaled.
-- **`backup [machine]`** — whole-dump live state into the folder (effective
-  package set, dconf snapshot through the strip filter).
-- **`adopt`** — *interactive* spec←machine capture (dotsync's verb): for each
-  drifted extra, offer **add to a bundle / add to the machine loose list / add to
-  ignore**. This is what RIS mis-named `reconcile`. (There is no separate
-  machine←spec `reconcile` verb — that *is* `install`/`update`.)
-- **`undo`** — revert the last mutating run (amdl's content-addressed journal:
-  minimal-inverse entries, after-hash-guarded reverts that skip-and-report
-  rather than clobber).
+  ignore/baseline list).
+- **`backup [machine]`** — dump live package state into the folder
+  (`brew bundle dump` → `machines/<name>/Brewfile`). *(A filtered dconf snapshot
+  is designed but not yet built — see the status table.)*
+- **`adopt`** — report installed extras not in the spec (advisory / non-mutating
+  today) so you can add each to a bundle, the machine loose list, or `[ignore]`.
+  *(Interactive spec←machine capture — dotsync's verb — is the target shape.)*
+  There is no machine←spec `reconcile` verb — that *is* `install`/`update`.
+- **`undo [run]`** — revert a run — the one named by its id, else the newest;
+  **`undo --list`** enumerates revertible runs (read-only). amdl's
+  content-addressed journal: after-hash-guarded reverts skip-and-report (a file
+  changed since, or a missing object) rather than clobber or abort mid-run.
 
 ---
 
