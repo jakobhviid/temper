@@ -29,26 +29,29 @@
 
 | Area | Built | Verified |
 |---|---|---|
-| `install` / `update` / `drift` / `prune` / `backup` / `adopt` / `undo` | ✅ | sandbox (filesystem paths) |
-| `--json`, `--dry-run`, completions, man, `--llm` | ✅ | ✅ |
+| `install` / `update` / `drift` / `prune` / `backup` / `adopt` / `undo` | ✅ | sandbox + real drift |
+| `--json`, `--dry-run`, completions, `--man`, `--llm` | ✅ | ✅ |
 | `copy` (verbatim · template · seed · mode) | ✅ | ✅ sandbox |
-| `block` (marker region) | ✅ | ✅ sandbox |
-| `setkey` — json backend | ✅ | ✅ sandbox |
-| `setkey` — toml / ini / **dconf** / **defaults** | ⏳ | — (dconf/defaults need VM) |
+| `block` (marker region) | ✅ | ✅ sandbox + real drift |
+| `setkey` — json · toml · ini/.desktop · **defaults** | ✅ | ✅ sandbox |
+| `setkey` — **dconf** | ✅ | — (Linux/VM) |
 | `exec` (check-hook · secrets · sudo) | ✅ | ✅ sandbox |
-| `[[assert]]` — absent / contains-line / mode / executable-resolves | ✅ | ✅ sandbox |
-| `[[assert]]` — not-member / shell / json-semantic | ⏳ | — |
+| `[[assert]]` — absent / contains-line / mode / executable-resolves / not-member / shell / json-semantic | ✅ | ✅ sandbox + real drift |
 | journal / `undo` (content-addressed, after-hash-guarded) | ✅ | ✅ sandbox |
-| packages: parse · effective-set · missing/extras | ✅ | ✅ unit |
-| providers: brew / cask / tap / flatpak / mas / vscode (probe + converge) | ✅ | ⏳ **VM** |
-| providers: **gext** / **rpm-ostree** | ⏳ | — (Linux/VM) |
+| packages: parse · effective-set · missing/extras | ✅ | ✅ unit + **real brew drift** |
+| providers: brew / cask / tap / flatpak / mas / vscode — probe | ✅ | ✅ real (drift) |
+| providers: … converge (`brew bundle` / `flatpak install`) | ✅ | ⏳ **VM** (writes) |
+| providers: **gext** / **rpm-ostree** | ✅ | — (Linux/VM) |
+| `profile` (macOS .mobileconfig) | ✅ | — (manual/System Settings) |
 | discovery (auto-scan cloud folders) beyond `$TEMPER_DIR` + cwd walk-up | ⏳ | — |
 
-**VM run checklist** (things only a real machine exercises): package converge
+**VM run checklist** (things only a live *write* exercises): package converge
 (`brew bundle`, `flatpak install`), `brew upgrade` on `update`, dependency-aware
-`prune`, `brew bundle dump` on `backup`, dconf/`defaults` `setkey`, and
-`gext`/`rpm-ostree`. Use `temper install --dry-run` / `temper drift` first — both
-read-only-ish — before a live converge.
+`prune`, `brew bundle dump` on `backup`, dconf/`defaults` writes, and
+`gext`/`rpm-ostree` layering. The read-only paths (all of `drift`, package
+probing, `install --dry-run`) are verified against a real machine. Known
+limitations: `setkey` toml reserializes (drops comments); `defaults`/`dconf`
+writes aren't journaled; `profile` install is manual.
 
 `WORKFLOWS.md` (compiled into `--llm`) gets written once the VM run confirms the
 real-machine behavior.
