@@ -104,7 +104,7 @@ app-bundles it wants. Drift at app scope is per-file / per-key / per-assertion.
 |---|---|---|
 | `copy` | app | deploy a file/dir → target(s). Modes: `verbatim`, `template` (variable + apply-time-probe substitution), `seed` (create-once, then hands-off, excluded from drift). Fields: `to`, `mode` (file perms), `template`. |
 | `block` | app | ensure a marker-delimited block / line is present in a user-owned file, idempotently (the grove-`setup` pattern: SSH `Include`, zshrc `source` line). |
-| `setkey` | both | set one or more keys in a structured store, preserving siblings. **Backends:** `dconf`, macOS `defaults`, `ini`/`.desktop`, `json`, `toml`. Supports **list-append** (array-union, e.g. `custom-keybindings`) and **dynamic values** (see below). This is the generalization of the old standalone `dconf`. |
+| `setkey` | both | set one or more keys in a structured store, preserving siblings. **Backends:** `dconf`, macOS `defaults`, `ini`/`.desktop`, `json`, `toml`. Supports **list-append** (array-union, e.g. `custom-keybindings`). This is the generalization of the old standalone `dconf`. |
 | `brew` | machine | converge the aggregate Brewfile (`brew bundle`); internalizes tap-trust; knows the `vscode` sub-type |
 | `flatpak` | machine | converge the flatpak set (with ignore-list); `flatpak override` env/perms is a `setkey`-style op on the override store |
 | `mas` | machine | converge Mac App Store apps — **forgiving** (see below) |
@@ -121,7 +121,8 @@ journaled.
 
 ### Dynamic (apply-time) values
 
-`template` and `setkey` values may be **resolved from live state at apply time**,
+`template` (`copy`) values may be **resolved from live state at apply time**
+(`setkey` values are static — `{{ … }}` is not rendered there),
 not just from declared vars: `{{ which "ghostty" }}` (absolute path — GNOME's
 PATH excludes the brew prefix, so keybinding commands must be resolved on the
 box), `{{ sink match "…" }}` (the speaker-eq target sink). Drift on a dynamic
@@ -197,7 +198,7 @@ declarative **assertions** and **exec drift-hooks**, and reports **status-only**
 items:
 
 - **`assert`** — checks that aren't a converge action: `absent` (must-not-exist —
-  `~/.zshrc.local`, retired PWAs), `mode`/`owner` (root:root 0755 on
+  `~/.zshrc.local`, retired PWAs), `mode` (root:root 0755 on
   `/etc/1password/…`), `contains-line` (`~/.zshrc` sources `.image`),
   `not-member` (user not in `onepassword` group), `executable-resolves` (a
   keybinding command is on PATH), `json-semantic` (order-independent

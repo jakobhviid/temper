@@ -60,7 +60,7 @@ converge so third-party taps are never *silently* skipped.
 
 If temper applies it, `drift` can check it — including things pushed to `exec`
 (via a `check` hook) and things that aren't files or keys (via `[[assert]]`:
-absent, mode, owner, contains-line, not-member, executable-resolves,
+absent, mode, contains-line, not-member, executable-resolves,
 json-semantic, shell). Enforcement that re-runs every `update` (git identity,
 default shell) uses `run = always` + a drift hook so it stays checkable.
 Items temper can't repair are still drift-*reported* as **status-only**. This

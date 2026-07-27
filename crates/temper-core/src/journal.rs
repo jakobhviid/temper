@@ -25,14 +25,14 @@ pub fn state_root() -> PathBuf {
     }
     if cfg!(target_os = "macos") {
         if let Ok(h) = std::env::var("HOME") {
-            return PathBuf::from(h).join("Library/Application Support/fleet");
+            return PathBuf::from(h).join("Library/Application Support/temper");
         }
     }
     if let Ok(d) = std::env::var("XDG_STATE_HOME") {
         return PathBuf::from(d).join("temper");
     }
     if let Ok(h) = std::env::var("HOME") {
-        return PathBuf::from(h).join(".local/state/fleet");
+        return PathBuf::from(h).join(".local/state/temper");
     }
     PathBuf::from(".temper-state")
 }

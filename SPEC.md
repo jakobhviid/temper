@@ -1,166 +1,118 @@
-# temper — Manifest Spec
+# temper — Manifest Schema (as implemented)
 
-> **Status: design, sanity-checked 2026-07-27.** Field names are still
-> provisional, but the shape reflects the full ReinstallScripts gap analysis.
-> See `ARCHITECTURE.md` for the model behind these choices.
+This documents the **actual** parsed schema (the serde structs in
+`crates/temper-core/src/manifest.rs`). Unknown fields are rejected
+(`deny_unknown_fields`), so anything not listed here is a parse error.
 
-Files in a temper-home folder:
-
-1. **`temper.toml`** — machine registration, per-machine composition, ignores.
-2. **`apps/<name>.toml`** — one app-bundle recipe each (open set).
-3. **`assets/…`** — the real, human-readable files the recipes reference.
-
----
+A temper-home folder holds `temper.toml`, `apps/<name>.toml` bundles, and the
+asset files they reference.
 
 ## `temper.toml`
 
 ```toml
-[[machine]]
-name = "chronos"          # matches hostname (or a saved marker)
-os   = "mac"              # mac | linux
-# role is DERIVED from a gnome-shell probe, not trusted from here (safety:
-# a server can't look like a desktop). Declare only to override/assert.
-apps = ["base", "ghostty", "1password", "starship"]
-packages = [             # per-machine LOOSE packages that belong to no app
-  "cask 'raycast'", "cask 'figma'",   # the ~130 hand-curated casks land here
-]
+[vars]                      # optional: template variables, used by {{ var "X" }}
+BREW_PREFIX = "/opt/homebrew"
 
-[[machine]]
-name = "eternium"
-os   = "linux"
-role = "server"           # explicit; still cross-checked against the probe
-apps = ["base"]
-
-# Packages installed on the machine that temper must NOT flag as extras or offer
-# to prune (OS-preinstalled Bazzite flatpaks, etc.). The reconcile "ignore this"
-# disposition writes here.
-[ignore]
-flatpak = ["org.gnome.Calculator", "…"]   # was bazzite-flatpak-ignore.txt
+[ignore]                    # optional: installed pkgs drift/prune must not flag
 brew    = []
+cask    = []
+flatpak = []
+mas     = []
+vscode  = []
+tap     = []
+
+[[machine]]
+name     = "chronos"        # required; resolved against `hostname -s`
+os       = "mac"            # required; "mac" | "linux"
+role     = "desktop"        # optional; "desktop" | "server"
+apps     = ["shell", "ssh"] # bundle names in apps/
+packages = ["cask \"raycast\""]  # optional loose Brewfile-grammar tokens
+brewfile = "brewfiles/chronos"   # optional; a Brewfile whose lines join the set
 ```
 
-**Effective package set for a machine** = union(composed apps' `packages`) +
-machine `packages` − `[ignore]`. One aggregate converge call per manager.
+Effective package set for a machine = union(each app's `packages`(+`_mac`/
+`_linux`), the machine `packages`, and the machine `brewfile` lines) − `[ignore]`.
 
----
-
-## `apps/<name>.toml` — an app-bundle
+## `apps/<name>.toml` (a bundle)
 
 ```toml
-packages       = ["cask 'ublue-os/tap/1password-gui-linux'"]
-packages_mac   = ["cask '1password'"]
-packages_linux = ["cask 'ublue-os/tap/1password-gui-linux'"]
+packages       = ["brew \"jq\""]     # Brewfile-grammar tokens (all-OS)
+packages_mac   = []                  # mac-only
+packages_linux = []                  # linux-only
+extensions     = ["ext@uuid"]        # GNOME extensions (gext; Linux)
+rpm            = ["proton-vpn-gnome-desktop"]  # rpm-ostree layered (Linux)
 
-when = { cask = "1password" }   # presence gate; default = "my packages installed"
+[[step]]   # ordered; each step sets EXACTLY ONE primitive
+# … see steps below …
 
-[[step]]
-copy = "assets/ghostty.config"
-to   = "~/.config/ghostty/config"        # run defaults "always" for copy
-
-[[step]]
-copy = "assets/ssh/shared.conf"
-to   = "~/.ssh/config.d/shared.conf"
-mode = "0600"                            # file perms (SSH refuses loose perms)
-
-[[step]]
-block = "assets/ssh/include-line"        # ensure a marker line is present, once
-in    = "~/.ssh/config"
-marker = "# temper — ssh include"
-
-[[step]]
-copy = "assets/zshrc-bootstrap"
-to   = "~/.zshrc"
-mode_lifecycle = "seed"                  # create-once, then hands-off, no drift
-
-[[step]]
-setkey  = { backend = "dconf", key = "/org/gnome/settings-daemon/…/command",
-            value = "{{ which \"1password\" }} --silent" }   # dynamic value
-os      = "linux"  ;  needs = "gnome-shell"
-
-[[step]]
-setkey  = { backend = "dconf", key = "…/custom-keybindings", append = true,
-            value = "/…/custom0/" }      # list-union append, preserves user entries
-os      = "linux"
-
-[[step]]
-setkey  = { backend = "defaults", domain = "com.brave.Browser",
-            key = "NSUserKeyEquivalents", dict_add = { "Close Window" = "@$w" } }
-os      = "mac"                          # the macOS dconf-twin
-
-[[step]]
-exec    = "assets/1p-nmh-setup.sh"       # the escape hatch
-check   = "assets/1p-nmh-check.sh"       # drift hook: exit 0 = in sync
-os      = "linux"  ;  run = "install"  ;  sudo = true
-secrets = ["ACOUSTID_KEY"]               # env/secret passthrough
-
-[[assert]]
-absent = "~/.zshrc.local"                # must-NOT-exist
-[[assert]]
-not_member = { group = "onepassword" }   # user must not be in group
-os = "linux"
+[[assert]] # drift-only checks; each sets EXACTLY ONE check
+# … see asserts below …
 ```
 
-### Step fields
+Package token grammar (same as a Brewfile line):
+`brew "x"` · `cask "x"` · `tap "u/r"` · `flatpak "app.id"` · `vscode "ext"` ·
+`mas "Name", id: 123`.
 
-| Field | Meaning |
-|---|---|
-| *one of* `copy` / `block` / `setkey` / `profile` / `exec` | the primitive + source |
-| `to` / `in` | target path (string, per-OS table, or **list** for multi-target — rustdesk native + flatpak) |
-| `mode` | file permission (`copy`) |
-| `template` | `copy`: substitute declared vars + `{{ … }}` apply-time probes |
-| `mode_lifecycle = "seed"` | `copy`: create-once, hands-off, excluded from drift |
-| `os` / `role` | skip on other OS / role |
-| `needs` | extra presence probe for this step (`gnome-shell`) |
-| `run` | `always` \| `install` \| `ensure` \| `manual` — lifecycle; defaults by primitive |
-| `check` | `exec`: companion drift-hook script (exit code = in/out of sync) |
-| `sudo` | `exec`/`rpm-ostree`: needs privilege; shown in plan, best-effort undo |
-| `secrets` | env vars / `secrets/` entries passed to the step |
+## Steps (`[[step]]`) — one primitive each
 
-### `setkey` backends
-
-`dconf` · `defaults` (macOS) · `ini`/`.desktop` · `json` · `toml`. Common
-options: `key`/`value`, `append` (list-union), `dict_add`, dynamic `{{ … }}`
-values. Sets the named key(s), preserves all siblings. Drift reads the key back;
-dynamic values compare semantically.
-
-### Assertions (`[[assert]]`) — drift-only, no converge
-
-`absent` · `mode`/`owner` · `contains_line` · `not_member` · `executable_resolves`
-· `json_semantic` · `shell`. Each is OS/role-gatable. These express the
-must-not-exist / property / semantic checks `just drift` does today.
-
-### Probe vocabulary (`when` / `needs`)
-
-`binary` · `brew`/`cask` · `flatpak` · `mas` · `gext` · `rpm` · `path` · `exec`.
-
-### Target shapes
+Common: `os = "mac"|"linux"` (skip on other OS); `run = "always"|"install"|
+"ensure"|"manual"` (lifecycle; default: copy/block/setkey → always, exec/seed →
+install). **Note: `run = "manual"` is not yet honored by `install` — it applies
+all steps; `ensure` currently behaves like `always`.**
 
 ```toml
-to = "~/.config/starship.toml"
-to = { mac = "~/Library/Preferences/…/RustDesk2.toml",
-       linux = ["~/.config/rustdesk/RustDesk2.toml",
-                "~/.var/app/com.rustdesk.RustDesk/config/rustdesk/RustDesk2.toml"] }
+# copy: deploy a file
+[[step]]
+copy     = "assets/x.conf"   # source, relative to the temper-home
+to       = "~/.config/x"     # target (single path; ~ expands)
+template = false             # true → substitute {{ var "X" }} / {{ which "x" }} / {{ env "X" }}
+seed     = false             # true → create-once if absent, then hands-off, excluded from drift
+mode     = "0600"            # optional octal file mode
+
+# block: ensure a marker-delimited region in a user file (idempotent)
+[[step]]
+block  = "assets/snippet"    # content to place inside the markers
+in     = "~/.ssh/config"     # the user-owned file
+marker = "ssh-include"       # marker label
+
+# setkey: set a key in a structured store, preserving siblings
+[[step]]
+setkey = { backend = "json", file = "~/.claude/settings.json", key = "env.X", value = "0", append = false }
+#   backend: "json" | "toml" | "ini" | "defaults" (macOS) | "dconf" (Linux)
+#   file:    file backends → the file; defaults → a domain or plist path; dconf → key is absolute
+#   key:     dotted path (json/toml) | "Section.Key" (ini) | absolute dconf path
+#   value:   scalar or array — STATIC only ({{ … }} is NOT rendered for setkey)
+#   append:  true → list-union into an array-valued key
+
+# exec: run a user script (the escape hatch)
+[[step]]
+exec    = "assets/setup.sh"  # runs via sh, cwd = temper-home, with TEMPER_HOME/MACHINE/OS
+check   = "assets/check.sh"  # optional drift-hook: exit 0 = in sync; gates re-run
+sudo    = false              # run under sudo
+secrets = ["ACOUSTID_KEY"]   # env vars that must be set; passed through (loud error if missing)
+# exec is NOT journaled (not reversible by undo).
+
+# profile: install a macOS .mobileconfig (opens System Settings; manual)
+[[step]]
+profile = "assets/x.mobileconfig"   # drift is status-only ("manual")
 ```
 
----
+## Assertions (`[[assert]]`) — drift-only, one check each
 
-## Resolved open questions (were flagged for sanity-check)
+```toml
+[[assert]] absent = "~/.zshrc.local"                       # must NOT exist
+[[assert]] contains_line = { file = "~/.zshrc", line = "source ~/.zshrc.image" }
+[[assert]] mode = { path = "/etc/x", mode = "0644" }       # octal file mode
+[[assert]] executable_resolves = "git"                     # on PATH
+[[assert]] not_member = { group = "onepassword" }          # user NOT in group
+[[assert]] shell = "/bin/zsh"                              # login shell equals
+[[assert]] json_semantic = { file = "~/deployed.json", against = "reference.json" }
+# each also accepts os = "mac"|"linux"
+```
 
-- **App-first** recipes (`apps/*.toml`), tiered assets, machine-scope state under
-  `machines/`. ✔
-- **Machine-scope config is its own thing** (loose `packages`, `[ignore]`, dconf
-  snapshots) — *not* forced into a synthetic `base` app. A `base` app still
-  exists for the shared CLI baseline, but the escape hatch is the loose list. ✔
-- **`update` is upgrade + `ensure`-allowlist**, not strictly upgrade-only. ✔
-- **`packages` reuse Brewfile line grammar** so `brew bundle` keeps working; the
-  effective Brewfile is a generated artifact (union + loose − ignore),
-  materializable for inspection. ✔
-- **`template` var source:** declared in `temper.toml`/bundle + `{{ … }}`
-  apply-time probes for live values (`BREW_PREFIX`, `which`, sink-match). ✔
+## Not in the schema (rejected by `deny_unknown_fields`)
 
-## Still open (decide during build)
-
-- Exact `[[assert]]` type list — start with the 8 above, grow only as RIS needs.
-- `setkey` merge semantics for deeply-nested json/toml (shallow key-set first).
-- Whether `gext`/`rpm-ostree` share the `packages` grammar or get their own
-  bundle fields.
+These appear in older design notes but are **not** implemented; using them is a
+parse error: `when` / `needs` (presence-gating), `owner` (assert), `dict_add` /
+`domain` (setkey), `mode_lifecycle`. See the README status table for the
+built-vs-designed boundary.

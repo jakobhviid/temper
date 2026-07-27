@@ -2,8 +2,8 @@
 //! `apps/<name>.toml` bundles (ordered steps + drift-only assertions). See
 //! ../../SPEC.md.
 //!
-//! Live step primitives: `copy` (verbatim/template/seed/mode), `block`,
-//! `setkey` (json backend). `[[assert]]` covers drift-only checks.
+//! Step primitives: `copy` (verbatim/template/seed/mode), `block`, `setkey`,
+//! `exec`, `profile`. `[[assert]]` covers drift-only checks.
 
 use std::path::{Path, PathBuf};
 
@@ -41,6 +41,7 @@ pub struct Ignore {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Machine {
     pub name: String,
     /// "mac" | "linux".
@@ -59,6 +60,7 @@ pub struct Machine {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Bundle {
     /// Packages this bundle needs (Brewfile line grammar), aggregated into the
     /// machine's effective set. `_mac`/`_linux` variants are OS-scoped.
@@ -83,6 +85,7 @@ pub struct Bundle {
 
 /// One primitive step. Exactly one primitive is set.
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Step {
     // --- copy ---
     #[serde(default)]
@@ -139,8 +142,9 @@ pub struct Step {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct SetKey {
-    /// "json" (live) | "toml"/"ini"/"dconf"/"defaults" (later).
+    /// json | toml | ini | defaults (macOS) | dconf (Linux).
     pub backend: String,
     /// Target file for file backends.
     #[serde(default)]
@@ -156,6 +160,7 @@ pub struct SetKey {
 
 /// A drift-only assertion. Exactly one check field is set.
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Assert {
     /// Path that must NOT exist.
     #[serde(default)]

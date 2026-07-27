@@ -6,8 +6,9 @@
 //! and renders the result as a human summary or (`--json`) a machine-readable
 //! document.
 //!
-//! Status: the `copy` vertical (install / drift / undo) is live end-to-end;
-//! update / prune / backup / adopt are stubs pending later primitives.
+//! Status: all verbs are live. Read-only paths (drift, dry-run, package probe)
+//! are verified against a real machine; the writing paths of the platform
+//! providers (dconf/defaults/gext/rpm-ostree, live package converge) await a VM.
 
 use std::io;
 use std::process::ExitCode;
@@ -51,8 +52,8 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Upgrade packages + re-apply managed config; install-if-missing only for
-    /// the `ensure` allowlist. Does not add newly-declared apps wholesale.
+    /// Re-apply the `always` config steps and upgrade declared packages
+    /// (`brew upgrade` + `flatpak update`). Does not add newly-declared apps.
     Update,
     /// Show what's out of sync (read-only): package set, managed files, keys,
     /// and assertions. Reports present-&-drifted vs absent-&-N/A.
@@ -67,14 +68,14 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Snapshot live machine state back into the folder (effective package set,
-    /// dconf snapshot through the strip filter).
+    /// Dump the machine's live package state to a Brewfile in the folder
+    /// (`brew bundle dump` → machines/<name>/Brewfile). (dconf snapshot: Linux/VM.)
     Backup {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
     },
-    /// Interactively adopt machine reality into the spec: for each drifted
-    /// extra, add it to a bundle, the machine's loose list, or `[ignore]`.
+    /// Report installed packages not in the spec (advisory) so you can add them
+    /// to a bundle, the machine's loose list, or `[ignore]`. Non-mutating.
     Adopt,
     /// Revert the last mutating run.
     Undo {
@@ -318,7 +319,7 @@ fn cmd_undo(dry_run: bool, json: bool) -> Result<()> {
 fn llm_guide() -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "temper {} — {}\n\nThe same reference as `man fleet`, laid out plainly \
+        "temper {} — {}\n\nThe same reference as `man temper`, laid out plainly \
          for LLM reading.\n\n",
         env!("CARGO_PKG_VERSION"),
         REPO_URL
@@ -335,9 +336,16 @@ fn llm_guide() -> String {
         out.push_str(&sub.render_long_help().to_string());
     }
 
-    out.push_str("\n\n=== ARCHITECTURE ===\n\n");
+    // Authoritative, matches-the-parser content first, so an agent can both
+    // OPERATE (command reference) and AUTHOR (schema) a temper folder.
+    out.push_str("\n\n=== MANIFEST SCHEMA (authoritative — matches the parser; unknown fields error) ===\n\n");
+    out.push_str(include_str!("../../../SPEC.md"));
+    out.push_str("\n\n=== IMPLEMENTATION STATUS (what is built vs designed) ===\n\n");
+    out.push_str(include_str!("../../../README.md"));
+    // The design docs describe intent; the SCHEMA + STATUS above are what's real.
+    out.push_str("\n\n=== ARCHITECTURE (design intent — trust SCHEMA + STATUS above for what's implemented) ===\n\n");
     out.push_str(include_str!("../../../ARCHITECTURE.md"));
-    out.push_str("\n\n=== PRINCIPLES ===\n\n");
+    out.push_str("\n\n=== PRINCIPLES (design intent) ===\n\n");
     out.push_str(include_str!("../../../PRINCIPLES.md"));
     out
 }
