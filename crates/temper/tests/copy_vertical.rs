@@ -16,7 +16,7 @@ fn os() -> &'static str {
     }
 }
 
-fn fleet(home: &Path, fake_home: &Path, state: &Path) -> Command {
+fn temper(home: &Path, fake_home: &Path, state: &Path) -> Command {
     let mut c = Command::cargo_bin("temper").unwrap();
     c.env("TEMPER_DIR", home)
         .env("HOME", fake_home)
@@ -48,14 +48,14 @@ fn deploy_drift_redeploy_undo() {
     let target = fake_home.path().join(".config/starship.toml");
 
     // install → deploys the file
-    fleet(h, fake_home.path(), state.path())
+    temper(h, fake_home.path(), state.path())
         .arg("install")
         .assert()
         .success();
     assert_eq!(fs::read_to_string(&target).unwrap(), "content-X\n");
 
     // drift → clean
-    fleet(h, fake_home.path(), state.path())
+    temper(h, fake_home.path(), state.path())
         .arg("drift")
         .assert()
         .success()
@@ -63,21 +63,21 @@ fn deploy_drift_redeploy_undo() {
 
     // tamper → drift detects it
     fs::write(&target, "tampered\n").unwrap();
-    fleet(h, fake_home.path(), state.path())
+    temper(h, fake_home.path(), state.path())
         .arg("drift")
         .assert()
         .success()
         .stdout(predicates::str::contains("drifted"));
 
     // install again → redeploys X (journaling the tampered bytes as the inverse)
-    fleet(h, fake_home.path(), state.path())
+    temper(h, fake_home.path(), state.path())
         .arg("install")
         .assert()
         .success();
     assert_eq!(fs::read_to_string(&target).unwrap(), "content-X\n");
 
     // undo → restores the tampered bytes (the state before the last install)
-    fleet(h, fake_home.path(), state.path())
+    temper(h, fake_home.path(), state.path())
         .arg("undo")
         .assert()
         .success();

@@ -15,7 +15,7 @@ fn os() -> &'static str {
     }
 }
 
-fn fleet(home: &Path, fake_home: &Path, state: &Path) -> Command {
+fn temper(home: &Path, fake_home: &Path, state: &Path) -> Command {
     let mut c = Command::cargo_bin("temper").unwrap();
     c.env("TEMPER_DIR", home)
         .env("HOME", fake_home)
@@ -57,7 +57,7 @@ fn template_seed_mode_and_dry_run() {
     let secret = fake_home.path().join(".secret.conf");
 
     // install → all three land
-    fleet(h, fake_home.path(), state.path()).arg("install").assert().success();
+    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
 
     // template: var substituted, {{ which }} resolved to a real path, no braces left
     let r = fs::read_to_string(&rendered).unwrap();
@@ -77,12 +77,12 @@ fn template_seed_mode_and_dry_run() {
 
     // seed is hands-off: user edits it, a re-install must NOT clobber it
     fs::write(&seeded, "user-edited\n").unwrap();
-    fleet(h, fake_home.path(), state.path()).arg("install").assert().success();
+    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
     assert_eq!(fs::read_to_string(&seeded).unwrap(), "user-edited\n");
 
     // dry-run: tamper the templated file, preview reports a change but writes nothing
     fs::write(&rendered, "tampered\n").unwrap();
-    fleet(h, fake_home.path(), state.path())
+    temper(h, fake_home.path(), state.path())
         .args(["install", "--dry-run"])
         .assert()
         .success()
@@ -90,6 +90,6 @@ fn template_seed_mode_and_dry_run() {
     assert_eq!(fs::read_to_string(&rendered).unwrap(), "tampered\n", "dry-run must not write");
 
     // real install → fixes it
-    fleet(h, fake_home.path(), state.path()).arg("install").assert().success();
+    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
     assert!(fs::read_to_string(&rendered).unwrap().contains("prefix=/opt/homebrew"));
 }

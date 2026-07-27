@@ -16,7 +16,7 @@ fn os() -> &'static str {
     }
 }
 
-fn fleet(home: &Path, fake_home: &Path, state: &Path) -> Command {
+fn temper(home: &Path, fake_home: &Path, state: &Path) -> Command {
     let mut c = Command::cargo_bin("temper").unwrap();
     c.env("TEMPER_DIR", home)
         .env("HOME", fake_home)
@@ -52,7 +52,7 @@ fn update_reapplies_always_not_install_only() {
     let once = fake_home.path().join(".config/once.conf");
 
     // install → both land
-    fleet(h, fake_home.path(), state.path()).arg("install").assert().success();
+    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
     assert_eq!(fs::read_to_string(&always).unwrap(), "managed\n");
     assert_eq!(fs::read_to_string(&once).unwrap(), "seed-default\n");
 
@@ -61,7 +61,7 @@ fn update_reapplies_always_not_install_only() {
     fs::write(&once, "user-edited\n").unwrap();
 
     // update → re-applies the always step, leaves the seed (install-only) alone
-    fleet(h, fake_home.path(), state.path())
+    temper(h, fake_home.path(), state.path())
         .arg("update")
         .assert()
         .success()

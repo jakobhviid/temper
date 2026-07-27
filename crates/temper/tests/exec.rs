@@ -15,7 +15,7 @@ fn os() -> &'static str {
     }
 }
 
-fn fleet(home: &Path, fake_home: &Path, state: &Path) -> Command {
+fn temper(home: &Path, fake_home: &Path, state: &Path) -> Command {
     let mut c = Command::cargo_bin("temper").unwrap();
     c.env("TEMPER_DIR", home)
         .env("HOME", fake_home)
@@ -50,7 +50,7 @@ fn exec_check_secret_and_failure() {
     let marker = fake_home.path().join(".exec-ran");
 
     // install → check fails (no marker), script runs with the secret
-    fleet(h, fake_home.path(), state.path())
+    temper(h, fake_home.path(), state.path())
         .env("MY_SECRET", "hunter2")
         .arg("install")
         .assert()
@@ -58,7 +58,7 @@ fn exec_check_secret_and_failure() {
     assert_eq!(fs::read_to_string(&marker).unwrap(), "hunter2\n");
 
     // drift → check passes, reported in sync
-    fleet(h, fake_home.path(), state.path())
+    temper(h, fake_home.path(), state.path())
         .env("MY_SECRET", "hunter2")
         .arg("drift")
         .assert()
@@ -68,7 +68,7 @@ fn exec_check_secret_and_failure() {
 
     // re-install with a DIFFERENT secret → check already passes, so the script
     // is skipped (idempotent); the marker keeps its original content.
-    fleet(h, fake_home.path(), state.path())
+    temper(h, fake_home.path(), state.path())
         .env("MY_SECRET", "changed")
         .arg("install")
         .assert()
@@ -78,7 +78,7 @@ fn exec_check_secret_and_failure() {
     // remove the marker (check now fails) and drop the secret → install must
     // fail loudly rather than run without the required secret.
     fs::remove_file(&marker).unwrap();
-    fleet(h, fake_home.path(), state.path())
+    temper(h, fake_home.path(), state.path())
         .env_remove("MY_SECRET")
         .arg("install")
         .assert()

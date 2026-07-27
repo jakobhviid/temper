@@ -16,7 +16,7 @@ fn os() -> &'static str {
     }
 }
 
-fn fleet(home: &Path, fake_home: &Path, state: &Path) -> Command {
+fn temper(home: &Path, fake_home: &Path, state: &Path) -> Command {
     let mut c = Command::cargo_bin("temper").unwrap();
     c.env("TEMPER_DIR", home)
         .env("HOME", fake_home)
@@ -71,7 +71,7 @@ contains_line = { file = "~/.ssh/config", line = "Include config.d/shared.conf" 
     fs::write(&settings, "{ \"other\": true }\n").unwrap();
 
     // install → block appended, setkey merged
-    fleet(h, fake_home.path(), state.path()).arg("install").assert().success();
+    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
 
     let ssh_body = fs::read_to_string(&ssh).unwrap();
     assert!(ssh_body.contains("Host example"), "user content lost: {ssh_body:?}");
@@ -83,7 +83,7 @@ contains_line = { file = "~/.ssh/config", line = "Include config.d/shared.conf" 
     assert_eq!(v["env"]["_ZO_DOCTOR"], Value::String("0".into()));
 
     // drift → everything satisfied (0 out of sync)
-    fleet(h, fake_home.path(), state.path())
+    temper(h, fake_home.path(), state.path())
         .arg("drift")
         .assert()
         .success()
@@ -92,7 +92,7 @@ contains_line = { file = "~/.ssh/config", line = "Include config.d/shared.conf" 
     // block region update: change the source; re-install replaces the region,
     // preserves the user's Host block, and drops the old line.
     fs::write(h.join("assets/ssh-include"), "Include config.d/other.conf\n").unwrap();
-    fleet(h, fake_home.path(), state.path()).arg("install").assert().success();
+    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
     let ssh_body = fs::read_to_string(&ssh).unwrap();
     assert!(ssh_body.contains("Host example"));
     assert!(ssh_body.contains("Include config.d/other.conf"));
@@ -100,7 +100,7 @@ contains_line = { file = "~/.ssh/config", line = "Include config.d/shared.conf" 
 
     // assert violation: the forbidden file appears → drift flags it
     fs::write(fake_home.path().join(".zshrc.local"), "oops\n").unwrap();
-    fleet(h, fake_home.path(), state.path())
+    temper(h, fake_home.path(), state.path())
         .arg("drift")
         .assert()
         .success()
