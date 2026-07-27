@@ -1,5 +1,5 @@
 //! Proves `block`, `setkey(json)`, and `[[assert]]` — all inside temp dirs
-//! (HOME/FLEET_DIR/state sandboxed), so the real machine is untouched.
+//! (HOME/TEMPER_DIR/state sandboxed), so the real machine is untouched.
 
 use std::fs;
 use std::path::Path;
@@ -17,10 +17,10 @@ fn os() -> &'static str {
 }
 
 fn fleet(home: &Path, fake_home: &Path, state: &Path) -> Command {
-    let mut c = Command::cargo_bin("fleet").unwrap();
-    c.env("FLEET_DIR", home)
+    let mut c = Command::cargo_bin("temper").unwrap();
+    c.env("TEMPER_DIR", home)
         .env("HOME", fake_home)
-        .env("FLEET_STATE_DIR", state);
+        .env("TEMPER_STATE_DIR", state);
     c
 }
 
@@ -35,7 +35,7 @@ fn block_setkey_assert() {
     fs::create_dir_all(h.join("assets")).unwrap();
     fs::write(h.join("assets/ssh-include"), "Include config.d/shared.conf\n").unwrap();
     fs::write(
-        h.join("fleet.toml"),
+        h.join("temper.toml"),
         format!("[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
     )
     .unwrap();
@@ -62,7 +62,7 @@ contains_line = { file = "~/.ssh/config", line = "Include config.d/shared.conf" 
     )
     .unwrap();
 
-    // Pre-seed user-owned files that fleet must NOT clobber wholesale.
+    // Pre-seed user-owned files that temper must NOT clobber wholesale.
     let ssh = fake_home.path().join(".ssh/config");
     fs::create_dir_all(ssh.parent().unwrap()).unwrap();
     fs::write(&ssh, "Host example\n  User me\n").unwrap();
@@ -75,7 +75,7 @@ contains_line = { file = "~/.ssh/config", line = "Include config.d/shared.conf" 
 
     let ssh_body = fs::read_to_string(&ssh).unwrap();
     assert!(ssh_body.contains("Host example"), "user content lost: {ssh_body:?}");
-    assert!(ssh_body.contains("# >>> fleet:ssh >>>"), "marker missing: {ssh_body:?}");
+    assert!(ssh_body.contains("# >>> temper:ssh >>>"), "marker missing: {ssh_body:?}");
     assert!(ssh_body.contains("Include config.d/shared.conf"));
 
     let v: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();

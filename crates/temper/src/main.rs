@@ -1,8 +1,8 @@
-//! fleet — converge a machine to a declared spec kept in a folder of
+//! temper — converge a machine to a declared spec kept in a folder of
 //! human-readable files.
 //!
-//! This is the thin CLI layer; all logic lives in `fleet-core`. Each command
-//! resolves the fleet-home folder + this machine's identity, calls into core,
+//! This is the thin CLI layer; all logic lives in `temper-core`. Each command
+//! resolves the temper-home folder + this machine's identity, calls into core,
 //! and renders the result as a human summary or (`--json`) a machine-readable
 //! document.
 //!
@@ -16,13 +16,13 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
-use fleet_core::{discovery, journal, machine, manifest, plan};
+use temper_core::{discovery, journal, machine, manifest, plan};
 
-const REPO_URL: &str = "https://github.com/jakobhviid/fleet";
+const REPO_URL: &str = "https://github.com/jakobhviid/temper";
 
 #[derive(Parser)]
 #[command(
-    name = "fleet",
+    name = "temper",
     version,
     about = "Converge a machine to a declared spec kept in a folder of human-readable files.",
     disable_help_subcommand = true
@@ -121,7 +121,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Some(Cmd::Completions { shell }) => {
             let mut cmd = Cli::command();
-            clap_complete::generate(shell, &mut cmd, "fleet", &mut io::stdout());
+            clap_complete::generate(shell, &mut cmd, "temper", &mut io::stdout());
         }
         Some(Cmd::Man) => {
             clap_mangen::Man::new(Cli::command()).render(&mut io::stdout())?;
@@ -282,7 +282,7 @@ fn cmd_adopt(json: bool) -> Result<()> {
         }
         println!(
             "\nAdd the ones you want to a bundle or the machine's loose `packages`, \
-             and the rest to `[ignore].{}` in fleet.toml.",
+             and the rest to `[ignore].{}` in temper.toml.",
             "<manager>"
         );
     }
@@ -308,7 +308,7 @@ fn cmd_undo(dry_run: bool, json: bool) -> Result<()> {
 fn llm_guide() -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "fleet {} — {}\n\nThe same reference as `man fleet`, laid out plainly \
+        "temper {} — {}\n\nThe same reference as `man fleet`, laid out plainly \
          for LLM reading.\n\n",
         env!("CARGO_PKG_VERSION"),
         REPO_URL
@@ -321,7 +321,7 @@ fn llm_guide() -> String {
         if sub.is_hide_set() {
             continue;
         }
-        out.push_str(&format!("\n--- fleet {} ---\n", sub.get_name()));
+        out.push_str(&format!("\n--- temper {} ---\n", sub.get_name()));
         out.push_str(&sub.render_long_help().to_string());
     }
 

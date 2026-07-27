@@ -1,15 +1,15 @@
 #!/bin/sh
-# fleet installer — no Homebrew, no compiler, no root. Downloads the prebuilt
+# temper installer — no Homebrew, no compiler, no root. Downloads the prebuilt
 # binary for your OS/arch into a bin dir on your PATH.
 #
-#   curl -fsSL https://raw.githubusercontent.com/jakobhviid/fleet/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/jakobhviid/temper/main/install.sh | sh
 #
-# Override the install dir with FLEET_BIN_DIR.
+# Override the install dir with TEMPER_BIN_DIR.
 set -eu
 
-REPO="jakobhviid/fleet"
-NAME="fleet"
-BIN_DIR="${FLEET_BIN_DIR:-$HOME/.local/bin}"
+REPO="jakobhviid/temper"
+NAME="temper"
+BIN_DIR="${TEMPER_BIN_DIR:-$HOME/.local/bin}"
 
 os="$(uname -s)"
 arch="$(uname -m)"
@@ -56,4 +56,4 @@ case ":$PATH:" in
        echo "      export PATH=\"${BIN_DIR}:\$PATH\"" ;;
 esac
 
-echo "Done. Run \`fleet --help\` (or \`fleet install\` in your fleet folder) to get started."
+echo "Done. Run \`temper --help\` (or \`temper install\` in your temper folder) to get started."

@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "1.0.0"
 edition = "2021"
 license = "MIT"
-homepage = "https://github.com/jakobhviid/fleet"
+homepage = "https://github.com/jakobhviid/temper"
 
 [profile.release]
 opt-level = 3

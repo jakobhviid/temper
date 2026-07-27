@@ -1,6 +1,6 @@
 # fleet
 
-> **Early design — no code yet.** `fleet` will converge a machine to a declared
+> **Early design — no code yet.** `temper` will converge a machine to a declared
 > spec kept in a folder of human-readable files (git, Nextcloud, a USB disk —
 > the tool doesn't care how the folder arrives). It generalizes the private
 > `ReinstallScripts` bash into one open, manifest-driven CLI, in the same
@@ -10,7 +10,7 @@
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — the model: engine-vs-data, the two
   scopes, primitives, converge+probe+gate, lifecycle, engine operations.
-- **[SPEC.md](SPEC.md)** — the concrete `fleet.toml` + app-bundle schema.
+- **[SPEC.md](SPEC.md)** — the concrete `temper.toml` + app-bundle schema.
 - **[PRINCIPLES.md](PRINCIPLES.md)** — the guardrails that keep it small.
 
 ## Build sequence
@@ -42,12 +42,12 @@
 | packages: parse · effective-set · missing/extras | ✅ | ✅ unit |
 | providers: brew / cask / tap / flatpak / mas / vscode (probe + converge) | ✅ | ⏳ **VM** |
 | providers: **gext** / **rpm-ostree** | ⏳ | — (Linux/VM) |
-| discovery (auto-scan cloud folders) beyond `$FLEET_DIR` + cwd walk-up | ⏳ | — |
+| discovery (auto-scan cloud folders) beyond `$TEMPER_DIR` + cwd walk-up | ⏳ | — |
 
 **VM run checklist** (things only a real machine exercises): package converge
 (`brew bundle`, `flatpak install`), `brew upgrade` on `update`, dependency-aware
 `prune`, `brew bundle dump` on `backup`, dconf/`defaults` `setkey`, and
-`gext`/`rpm-ostree`. Use `fleet install --dry-run` / `fleet drift` first — both
+`gext`/`rpm-ostree`. Use `temper install --dry-run` / `temper drift` first — both
 read-only-ish — before a live converge.
 
 `WORKFLOWS.md` (compiled into `--llm`) gets written once the VM run confirms the

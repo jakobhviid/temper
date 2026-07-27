@@ -1,5 +1,5 @@
 //! End-to-end proof of the `copy` vertical, entirely inside temp dirs — HOME,
-//! FLEET_DIR, and the journal state dir are all TempDirs, so this never touches
+//! TEMPER_DIR, and the journal state dir are all TempDirs, so this never touches
 //! the real machine.
 
 use std::fs;
@@ -17,16 +17,16 @@ fn os() -> &'static str {
 }
 
 fn fleet(home: &Path, fake_home: &Path, state: &Path) -> Command {
-    let mut c = Command::cargo_bin("fleet").unwrap();
-    c.env("FLEET_DIR", home)
+    let mut c = Command::cargo_bin("temper").unwrap();
+    c.env("TEMPER_DIR", home)
         .env("HOME", fake_home)
-        .env("FLEET_STATE_DIR", state);
+        .env("TEMPER_STATE_DIR", state);
     c
 }
 
 #[test]
 fn deploy_drift_redeploy_undo() {
-    let home = TempDir::new().unwrap(); // the fleet-home (config folder)
+    let home = TempDir::new().unwrap(); // the temper-home (config folder)
     let fake_home = TempDir::new().unwrap(); // stand-in $HOME (deploy target root)
     let state = TempDir::new().unwrap(); // journal state
     let h = home.path();
@@ -35,7 +35,7 @@ fn deploy_drift_redeploy_undo() {
     fs::create_dir_all(h.join("assets")).unwrap();
     fs::write(h.join("assets/starship.toml"), "content-X\n").unwrap();
     fs::write(
-        h.join("fleet.toml"),
+        h.join("temper.toml"),
         format!("[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
     )
     .unwrap();

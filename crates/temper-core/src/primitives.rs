@@ -187,8 +187,8 @@ pub(crate) fn which(name: &str) -> Option<PathBuf> {
 
 fn markers(marker: &str) -> (String, String) {
     (
-        format!("# >>> fleet:{marker} >>>"),
-        format!("# <<< fleet:{marker} <<<"),
+        format!("# >>> temper:{marker} >>>"),
+        format!("# <<< temper:{marker} <<<"),
     )
 }
 
@@ -381,9 +381,9 @@ fn exec_command(script: &Path, opts: &ExecOpts) -> Result<std::process::Command>
         c
     };
     cmd.current_dir(opts.home);
-    cmd.env("FLEET_HOME", opts.home);
-    cmd.env("FLEET_MACHINE", opts.machine);
-    cmd.env("FLEET_OS", opts.os);
+    cmd.env("TEMPER_HOME", opts.home);
+    cmd.env("TEMPER_MACHINE", opts.machine);
+    cmd.env("TEMPER_OS", opts.os);
     for s in opts.secrets {
         let v = std::env::var(s)
             .map_err(|_| anyhow!("exec: required secret env `{s}` is not set"))?;

@@ -4,15 +4,15 @@
 > provisional, but the shape reflects the full ReinstallScripts gap analysis.
 > See `ARCHITECTURE.md` for the model behind these choices.
 
-Files in a fleet-home folder:
+Files in a temper-home folder:
 
-1. **`fleet.toml`** — machine registration, per-machine composition, ignores.
+1. **`temper.toml`** — machine registration, per-machine composition, ignores.
 2. **`apps/<name>.toml`** — one app-bundle recipe each (open set).
 3. **`assets/…`** — the real, human-readable files the recipes reference.
 
 ---
 
-## `fleet.toml`
+## `temper.toml`
 
 ```toml
 [[machine]]
@@ -155,7 +155,7 @@ to = { mac = "~/Library/Preferences/…/RustDesk2.toml",
 - **`packages` reuse Brewfile line grammar** so `brew bundle` keeps working; the
   effective Brewfile is a generated artifact (union + loose − ignore),
   materializable for inspection. ✔
-- **`template` var source:** declared in `fleet.toml`/bundle + `{{ … }}`
+- **`template` var source:** declared in `temper.toml`/bundle + `{{ … }}`
   apply-time probes for live values (`BREW_PREFIX`, `which`, sink-match). ✔
 
 ## Still open (decide during build)

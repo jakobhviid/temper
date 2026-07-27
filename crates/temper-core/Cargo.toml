@@ -1,5 +1,5 @@
 [package]
-name = "fleet-core"
+name = "temper-core"
 description = "The library behind the fleet CLI: folder discovery, manifest, primitives, converge providers, drift, and a journaled undo."
 version.workspace = true
 edition.workspace = true

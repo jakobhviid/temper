@@ -99,7 +99,7 @@ pub fn converge(effective: &[Pkg], dry_run: bool) -> Result<usize> {
 
     if !brewish.is_empty() && have("brew") && !dry_run {
         let body: String = brewish.iter().map(|p| format!("{}\n", p.raw)).collect();
-        let tmp = std::env::temp_dir().join(format!("fleet-Brewfile-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("temper-Brewfile-{}", std::process::id()));
         std::fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
         let status = Command::new("brew")
             .args(["bundle", "--file"])
@@ -167,7 +167,7 @@ pub fn prune_apply(effective: &[Pkg], extras: &[(Manager, String)]) -> Result<()
             })
             .map(|p| format!("{}\n", p.raw))
             .collect();
-        let tmp = std::env::temp_dir().join(format!("fleet-Brewfile-prune-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("temper-Brewfile-prune-{}", std::process::id()));
         fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
         let status = Command::new("brew")
             .args(["bundle", "cleanup", "--force", "--file"])

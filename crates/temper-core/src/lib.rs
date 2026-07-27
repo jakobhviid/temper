@@ -1,4 +1,4 @@
-//! fleet-core — the library behind the `fleet` CLI.
+//! temper-core — the library behind the `fleet` CLI.
 //!
 //! `fleet` converges a machine to a declared spec kept in a folder of
 //! human-readable files (git / Nextcloud / USB — the tool doesn't manage the
@@ -17,8 +17,8 @@
 //! their bodies are filled in incrementally as the ReinstallScripts migration
 //! proceeds (see ../../README.md build sequence).
 
-pub mod discovery; // find the fleet-home folder across any delivery backend
-pub mod manifest; // parse fleet.toml + apps/*.toml (machines, apps, ignore)
+pub mod discovery; // find the temper-home folder across any delivery backend
+pub mod manifest; // parse temper.toml + apps/*.toml (machines, apps, ignore)
 pub mod packages; // package model: parse, effective set, drift (pure)
 pub mod machine; // machine identity (hostname) + role derivation
 pub mod primitives; // copy / block / setkey / profile / exec

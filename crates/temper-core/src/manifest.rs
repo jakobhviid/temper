@@ -1,4 +1,4 @@
-//! Parse and validate the manifest: `fleet.toml` (machines, template vars) and
+//! Parse and validate the manifest: `temper.toml` (machines, template vars) and
 //! `apps/<name>.toml` bundles (ordered steps + drift-only assertions). See
 //! ../../SPEC.md.
 //!
@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 #[derive(Debug, Default, Deserialize)]
-pub struct FleetToml {
+pub struct TemperToml {
     #[serde(default)]
     pub machine: Vec<Machine>,
     /// Declared template variables, referenced as `{{ var "NAME" }}`.
@@ -171,8 +171,8 @@ pub struct ModeCheck {
     pub mode: String,
 }
 
-pub fn load_fleet(home: &Path) -> Result<FleetToml> {
-    let p = home.join("fleet.toml");
+pub fn load_fleet(home: &Path) -> Result<TemperToml> {
+    let p = home.join("temper.toml");
     let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
     toml::from_str(&s).with_context(|| format!("parsing {}", p.display()))
 }

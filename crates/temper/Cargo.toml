@@ -1,5 +1,5 @@
 [package]
-name = "fleet"
+name = "temper"
 description = "Converge a machine to a declared spec kept in a folder of human-readable files."
 version.workspace = true
 edition.workspace = true
@@ -7,11 +7,11 @@ license.workspace = true
 homepage.workspace = true
 
 [[bin]]
-name = "fleet"
+name = "temper"
 path = "src/main.rs"
 
 [dependencies]
-fleet-core = { path = "../fleet-core" }
+temper-core = { path = "../temper-core" }
 anyhow = "1"
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }

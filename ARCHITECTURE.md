@@ -8,16 +8,16 @@
 
 ## What fleet is
 
-`fleet` converges a machine to a declared spec. You describe what a machine
+`temper` converges a machine to a declared spec. You describe what a machine
 should be — its packages and its configuration — in a folder of human-readable
-files, and `fleet` makes the machine match, reports what's out of sync, and can
+files, and `temper` makes the machine match, reports what's out of sync, and can
 revert what it changed.
 
 It is the generalization of the `ReinstallScripts` repo: ~3,900 lines of bash
 (two aligned platform trees, `just` + `lib/*.sh`) that install and configure
 Jakob's fleet of Macs and Linux boxes. That repo works, but its logic is
 fleet-private glue, duplicated byte-for-byte across platforms, and inseparable
-from Jakob's own machines. `fleet` extracts the *engine* into one open tool and
+from Jakob's own machines. `temper` extracts the *engine* into one open tool and
 leaves the *data* in a private folder anyone can bring.
 
 ### The core split: engine vs data
@@ -32,19 +32,19 @@ leaves the *data* in a private folder anyone can bring.
 
 This is the same move `dotsync` already made to `machine-sync`: take a private
 `just`+`yq` shell tool and ship it as an open, manifest-driven Rust CLI where
-the config lives in the user's own folder. `fleet` does that for provisioning
+the config lives in the user's own folder. `temper` does that for provisioning
 instead of dotfile-sync, and reuses dotsync's `adopt` verb and mode-enforcement.
 
 ### Delivery-agnostic
 
-**`fleet` does not *manage* its config folder with git (or any sync client).**
+**`temper` does not *manage* its config folder with git (or any sync client).**
 It operates on "a folder that contains a manifest." How that folder arrived —
 git clone, a continuously-synced cloud folder, a mounted USB disk, `rsync` — is
-not fleet's concern. (An `exec` *step* may still shell out to `git`/`curl` for a
+not temper's concern. (An `exec` *step* may still shell out to `git`/`curl` for a
 specific job, e.g. cloning a tmux plugin manager — that's a step doing work, not
 fleet managing the folder.)
 
-Folder discovery reuses `dotsync`'s model (`discovery.rs`): `$FLEET_DIR` → a
+Folder discovery reuses `dotsync`'s model (`discovery.rs`): `$TEMPER_DIR` → a
 saved pointer in per-machine config → auto-scan common locations → prompt. First
 run on a fresh machine offers setup automatically.
 
@@ -95,7 +95,7 @@ app-bundles it wants. Drift at app scope is per-file / per-key / per-assertion.
 2. **App-bundles — open set, user config (no code).** A named, ordered list of
    primitive steps, each OS/role-gated. Where ghostty and 1Password live. "The
    next ghostty clone" is a new *config file you write*, never a tool release.
-3. **Machine registration (`fleet.toml`).** Which machines exist (name + OS +
+3. **Machine registration (`temper.toml`).** Which machines exist (name + OS +
    role) and which bundles + loose packages + ignores each one composes.
 
 ### The primitives (closed set)
@@ -149,7 +149,7 @@ Every package manager is two operations:
 
 ### Compile-time compose, run-time aggregate (the brew rule)
 
-App-bundles declare packages as **pure data** tokens. `fleet` collects the
+App-bundles declare packages as **pure data** tokens. `temper` collects the
 **union** of a machine's composed apps' packages **+ its loose list, minus its
 ignore list**, synthesizes **one** effective Brewfile per manager, and makes
 **one** converge call. Composition happens on paper; each manager runs once.
@@ -231,9 +231,9 @@ hook, so `update` keeps re-asserting them.
 
 The two automated flows:
 
-- **`fleet install [machine]`** — full converge: add missing packages, apply
+- **`temper install [machine]`** — full converge: add missing packages, apply
   everything, run one-time setup + profiles + dconf reload.
-- **`fleet update`** — upgrade packages + re-apply `always` + honor `ensure`
+- **`temper update`** — upgrade packages + re-apply `always` + honor `ensure`
   (install-if-missing for the allowlist). Does **not** add newly-declared apps
   wholesale — adding an app is an `install`. *(Corrected from the first draft's
   "update never installs," which the repo disproved.)*
@@ -295,8 +295,8 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
 ## Folder layout (proposal)
 
 ```
-<fleet-home>/                  git for Jakob · Nextcloud for his wife · USB for a stranger
-  fleet.toml                   machines (name/os/role) + apps + loose packages + ignores
+<temper-home>/                  git for Jakob · Nextcloud for his wife · USB for a stranger
+  temper.toml                   machines (name/os/role) + apps + loose packages + ignores
   apps/
     ghostty.toml               copy config (all OS) + setkey dconf shortcut (linux)
     1password.toml             setkey keybinding + exec(sudo) NMH setup (linux)

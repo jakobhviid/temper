@@ -1,6 +1,6 @@
 # fleet — Design Principles
 
-> The guardrails that keep `fleet` from degenerating into a worse Ansible / a
+> The guardrails that keep `temper` from degenerating into a worse Ansible / a
 > private Nix. When a decision is unclear, resolve it in the direction these
 > point. Refined after the 2026-07-27 sanity-check against ReinstallScripts.
 
@@ -78,7 +78,7 @@ stderr so pipes stay clean.
 
 ## 9. The folder is human-readable; the tool doesn't manage it
 
-Real files, browsable tree, "as readable as a Brewfile." `fleet` does not manage
+Real files, browsable tree, "as readable as a Brewfile." `temper` does not manage
 its config folder with `git` or any sync client — it operates on *a folder with a
 manifest*, however that folder arrived. (An `exec` step may still shell out to
 `git`/`curl` for a specific job — that's work, not folder management.)
@@ -86,7 +86,7 @@ manifest*, however that folder arrived. (An `exec` step may still shell out to
 ## 10. Know what stays out
 
 Bootstrap (the paradox: it runs before the tap exists), the image-side system
-layer, and folder-authoring tools (`eq-import`) are **not** fleet's job.
+layer, and folder-authoring tools (`eq-import`) are **not** temper's job.
 Resisting scope creep here is a principle, not an omission. The one refinement:
 a *live* system layering that is neither image nor bootstrap (`rpm-ostree` of
 proton-vpn) *is* in scope, as a converge provider that emits a reboot signal.
@@ -102,5 +102,5 @@ proton-vpn) *is* in scope, as a converge provider that emits a reboot signal.
 - **Nix / home-manager** — the fully-declarative extreme. We keep an `exec`
   escape hatch and real, editable files.
 - **dotsync** (sibling) — continuous cloud-folder dotfile *sync*. Different
-  lifecycle; `fleet` composes alongside it and reuses its `adopt` verb, does not
+  lifecycle; `temper` composes alongside it and reuses its `adopt` verb, does not
   absorb it.

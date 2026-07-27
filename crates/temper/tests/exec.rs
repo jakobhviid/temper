@@ -16,10 +16,10 @@ fn os() -> &'static str {
 }
 
 fn fleet(home: &Path, fake_home: &Path, state: &Path) -> Command {
-    let mut c = Command::cargo_bin("fleet").unwrap();
-    c.env("FLEET_DIR", home)
+    let mut c = Command::cargo_bin("temper").unwrap();
+    c.env("TEMPER_DIR", home)
         .env("HOME", fake_home)
-        .env("FLEET_STATE_DIR", state);
+        .env("TEMPER_STATE_DIR", state);
     c
 }
 
@@ -37,7 +37,7 @@ fn exec_check_secret_and_failure() {
     // check passes once the marker file exists
     fs::write(h.join("scripts/check.sh"), "test -f \"$HOME/.exec-ran\"\n").unwrap();
     fs::write(
-        h.join("fleet.toml"),
+        h.join("temper.toml"),
         format!("[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
     )
     .unwrap();

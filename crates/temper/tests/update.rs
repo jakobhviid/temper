@@ -17,10 +17,10 @@ fn os() -> &'static str {
 }
 
 fn fleet(home: &Path, fake_home: &Path, state: &Path) -> Command {
-    let mut c = Command::cargo_bin("fleet").unwrap();
-    c.env("FLEET_DIR", home)
+    let mut c = Command::cargo_bin("temper").unwrap();
+    c.env("TEMPER_DIR", home)
         .env("HOME", fake_home)
-        .env("FLEET_STATE_DIR", state);
+        .env("TEMPER_STATE_DIR", state);
     c
 }
 
@@ -36,7 +36,7 @@ fn update_reapplies_always_not_install_only() {
     fs::write(h.join("assets/always.conf"), "managed\n").unwrap();
     fs::write(h.join("assets/once.conf"), "seed-default\n").unwrap();
     fs::write(
-        h.join("fleet.toml"),
+        h.join("temper.toml"),
         format!("[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
     )
     .unwrap();

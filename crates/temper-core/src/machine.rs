@@ -10,7 +10,7 @@
 
 use anyhow::{anyhow, bail, Result};
 
-use crate::manifest::{FleetToml, Machine};
+use crate::manifest::{TemperToml, Machine};
 
 /// This build's OS in manifest terms.
 pub fn current_os() -> &'static str {
@@ -32,9 +32,9 @@ pub fn hostname() -> Option<String> {
 
 /// Resolve which machine we are: explicit name → hostname match → the sole
 /// machine if there's only one → error listing the known names.
-pub fn resolve(ft: &FleetToml, explicit: Option<&str>) -> Result<Machine> {
+pub fn resolve(ft: &TemperToml, explicit: Option<&str>) -> Result<Machine> {
     if ft.machine.is_empty() {
-        bail!("no [[machine]] entries in fleet.toml");
+        bail!("no [[machine]] entries in temper.toml");
     }
     if let Some(name) = explicit {
         return ft
@@ -42,7 +42,7 @@ pub fn resolve(ft: &FleetToml, explicit: Option<&str>) -> Result<Machine> {
             .iter()
             .find(|m| m.name == name)
             .cloned()
-            .ok_or_else(|| anyhow!("no machine named '{name}' in fleet.toml"));
+            .ok_or_else(|| anyhow!("no machine named '{name}' in temper.toml"));
     }
     if let Some(h) = hostname() {
         if let Some(m) = ft.machine.iter().find(|m| m.name == h) {

@@ -1,6 +1,6 @@
-class Fleet < Formula
+class Temper < Formula
   desc "Converge a machine to a declared spec kept in a folder of human-readable files"
-  homepage "https://github.com/jakobhviid/fleet"
+  homepage "https://github.com/jakobhviid/temper"
   version "@VERSION@"
   license "MIT"
 
@@ -9,7 +9,7 @@ class Fleet < Formula
   # — e.g. a macOS older than the build runner, or arm64 Linux — falls back to
   # the url+install path below.
   bottle do
-    root_url "https://github.com/jakobhviid/fleet/releases/download/v@VERSION@"
+    root_url "https://github.com/jakobhviid/temper/releases/download/v@VERSION@"
     sha256 cellar: :any_skip_relocation, arm64_@MAC_CODENAME@: "@MAC_ARM_BOTTLE_SHA@"
     sha256 cellar: :any_skip_relocation, @MAC_CODENAME@: "@MAC_X86_BOTTLE_SHA@"
     sha256 cellar: :any_skip_relocation, x86_64_linux: "@BOTTLE_SHA@"
@@ -17,33 +17,33 @@ class Fleet < Formula
 
   on_macos do
     on_intel do
-      url "https://github.com/jakobhviid/fleet/releases/download/v@VERSION@/fleet-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/jakobhviid/temper/releases/download/v@VERSION@/temper-x86_64-apple-darwin.tar.gz"
       sha256 "@MAC_X86_SHA@"
     end
     on_arm do
-      url "https://github.com/jakobhviid/fleet/releases/download/v@VERSION@/fleet-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/jakobhviid/temper/releases/download/v@VERSION@/temper-aarch64-apple-darwin.tar.gz"
       sha256 "@MAC_ARM_SHA@"
     end
   end
 
   on_linux do
     on_intel do
-      url "https://github.com/jakobhviid/fleet/releases/download/v@VERSION@/fleet-x86_64-unknown-linux-musl.tar.gz"
+      url "https://github.com/jakobhviid/temper/releases/download/v@VERSION@/temper-x86_64-unknown-linux-musl.tar.gz"
       sha256 "@X86_SHA@"
     end
     on_arm do
-      url "https://github.com/jakobhviid/fleet/releases/download/v@VERSION@/fleet-aarch64-unknown-linux-musl.tar.gz"
+      url "https://github.com/jakobhviid/temper/releases/download/v@VERSION@/temper-aarch64-unknown-linux-musl.tar.gz"
       sha256 "@ARM_SHA@"
     end
   end
 
   def install
-    bin.install "fleet"
-    generate_completions_from_executable(bin/"fleet", "completions")
-    (man1/"fleet.1").write Utils.safe_popen_read(bin/"fleet", "man")
+    bin.install "temper"
+    generate_completions_from_executable(bin/"temper", "completions")
+    (man1/"temper.1").write Utils.safe_popen_read(bin/"temper", "man")
   end
 
   test do
-    assert_match "fleet", shell_output("#{bin}/fleet --help")
+    assert_match "temper", shell_output("#{bin}/temper --help")
   end
 end

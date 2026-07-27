@@ -1,5 +1,5 @@
 //! Proves `copy` template/seed/mode and `install --dry-run`, all inside temp
-//! dirs (HOME/FLEET_DIR/state sandboxed) so the real machine is untouched.
+//! dirs (HOME/TEMPER_DIR/state sandboxed) so the real machine is untouched.
 
 use std::fs;
 use std::path::Path;
@@ -16,10 +16,10 @@ fn os() -> &'static str {
 }
 
 fn fleet(home: &Path, fake_home: &Path, state: &Path) -> Command {
-    let mut c = Command::cargo_bin("fleet").unwrap();
-    c.env("FLEET_DIR", home)
+    let mut c = Command::cargo_bin("temper").unwrap();
+    c.env("TEMPER_DIR", home)
         .env("HOME", fake_home)
-        .env("FLEET_STATE_DIR", state);
+        .env("TEMPER_STATE_DIR", state);
     c
 }
 
@@ -36,7 +36,7 @@ fn template_seed_mode_and_dry_run() {
     fs::write(h.join("assets/seeded.conf"), "seed-default\n").unwrap();
     fs::write(h.join("assets/secret.conf"), "token\n").unwrap();
     fs::write(
-        h.join("fleet.toml"),
+        h.join("temper.toml"),
         format!(
             "[vars]\nBREW_PREFIX = \"/opt/homebrew\"\n\n\
              [[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n",

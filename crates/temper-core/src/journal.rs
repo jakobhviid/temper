@@ -1,12 +1,12 @@
 //! Content-addressed, after-hash-guarded undo — lifted from amdl's model.
 //!
 //! A mutating run writes `runs/<id>/manifest.json` + a content-addressed
-//! `objects/` store under the state dir (`$FLEET_STATE_DIR`, else the platform
+//! `objects/` store under the state dir (`$TEMPER_STATE_DIR`, else the platform
 //! state dir). Each entry is a minimal inverse:
-//!   - `Create`  — fleet created the file; undo deletes it if it still hashes
-//!                 to what fleet wrote.
-//!   - `Restore` — fleet overwrote an existing file; undo restores the prior
-//!                 bytes if the file still hashes to what fleet left.
+//!   - `Create`  — temper created the file; undo deletes it if it still hashes
+//!                 to what temper wrote.
+//!   - `Restore` — temper overwrote an existing file; undo restores the prior
+//!                 bytes if the file still hashes to what temper left.
 //! Every revert is guarded by an after-hash check: if the file changed since,
 //! the entry is skipped, never clobbered.
 //!
@@ -20,7 +20,7 @@ use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
 pub fn state_root() -> PathBuf {
-    if let Ok(d) = std::env::var("FLEET_STATE_DIR") {
+    if let Ok(d) = std::env::var("TEMPER_STATE_DIR") {
         return PathBuf::from(d);
     }
     if cfg!(target_os = "macos") {
@@ -29,12 +29,12 @@ pub fn state_root() -> PathBuf {
         }
     }
     if let Ok(d) = std::env::var("XDG_STATE_HOME") {
-        return PathBuf::from(d).join("fleet");
+        return PathBuf::from(d).join("temper");
     }
     if let Ok(h) = std::env::var("HOME") {
         return PathBuf::from(h).join(".local/state/fleet");
     }
-    PathBuf::from(".fleet-state")
+    PathBuf::from(".temper-state")
 }
 
 #[derive(Serialize, Deserialize)]
@@ -71,7 +71,7 @@ impl Journal {
     }
 
     /// Record that `path` is being written: `before` = its prior bytes (None if
-    /// it didn't exist), `after` = the bytes fleet is writing.
+    /// it didn't exist), `after` = the bytes temper is writing.
     pub fn record_write(&mut self, path: &Path, before: Option<&[u8]>, after: &[u8]) -> Result<()> {
         let path = path.to_string_lossy().into_owned();
         match before {
