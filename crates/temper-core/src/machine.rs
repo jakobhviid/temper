@@ -42,19 +42,42 @@ pub fn resolve(ft: &TemperToml, explicit: Option<&str>) -> Result<Machine> {
             .iter()
             .find(|m| m.name == name)
             .cloned()
-            .ok_or_else(|| anyhow!("no machine named '{name}' in temper.toml"));
+            .ok_or_else(|| anyhow!("no machine named '{name}' in temper.toml"))
+            .and_then(checked);
     }
     if let Some(h) = hostname() {
         if let Some(m) = ft.machine.iter().find(|m| m.name == h) {
-            return Ok(m.clone());
+            return checked(m.clone());
         }
     }
     if ft.machine.len() == 1 {
-        return Ok(ft.machine[0].clone());
+        return checked(ft.machine[0].clone());
     }
     let names: Vec<&str> = ft.machine.iter().map(|m| m.name.as_str()).collect();
     bail!(
         "could not resolve this machine by hostname; pass a name (known: {})",
         names.join(", ")
     )
+}
+
+/// Reject an unknown `os` (a typo like "Linux" would otherwise silently skip
+/// every os-gated step). Also validates the role if declared.
+fn checked(m: Machine) -> Result<Machine> {
+    if !matches!(m.os.as_str(), "mac" | "linux") {
+        bail!(
+            "machine '{}' has unknown os '{}' (expected \"mac\" or \"linux\")",
+            m.name,
+            m.os
+        );
+    }
+    if let Some(role) = &m.role {
+        if !matches!(role.as_str(), "desktop" | "server") {
+            bail!(
+                "machine '{}' has unknown role '{}' (expected \"desktop\" or \"server\")",
+                m.name,
+                role
+            );
+        }
+    }
+    Ok(m)
 }

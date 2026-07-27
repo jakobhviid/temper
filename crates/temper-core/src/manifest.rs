@@ -154,6 +154,9 @@ pub struct Step {
     /// Skip this step unless the machine's OS matches ("mac" | "linux").
     #[serde(default)]
     pub os: Option<String>,
+    /// Skip this step unless the machine's role matches ("desktop" | "server").
+    #[serde(default)]
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

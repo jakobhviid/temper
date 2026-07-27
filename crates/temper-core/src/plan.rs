@@ -22,6 +22,15 @@ fn os_gated(step_os: &Option<String>, machine: &Machine) -> bool {
     }
 }
 
+/// Skip a step whose declared role doesn't match the machine's role. If either
+/// side is unset, don't gate (lenient — the machine may not declare a role).
+fn role_gated(step_role: &Option<String>, machine: &Machine) -> bool {
+    match (step_role, &machine.role) {
+        (Some(r), Some(mr)) => r != mr,
+        _ => false,
+    }
+}
+
 /// Everything a machine composes, OS-gated to this host.
 pub struct Resolved {
     pub steps: Vec<(String, Step)>,     // (app, step)
@@ -34,7 +43,7 @@ pub fn resolve(home: &Path, machine: &Machine) -> Result<Resolved> {
     for app in &machine.apps {
         let bundle = manifest::load_bundle(home, app)?;
         for step in bundle.step {
-            if !os_gated(&step.os, machine) {
+            if !os_gated(&step.os, machine) && !role_gated(&step.role, machine) {
                 steps.push((app.clone(), step));
             }
         }
@@ -332,7 +341,9 @@ pub fn run_install(
     let mut journal = Journal::begin();
     let (mut changed, mut total) = (0usize, 0usize);
     for (_app, step) in &resolved.steps {
-        if !is_step(step) {
+        // `manual` steps are never run by an automated flow (e.g. speaker-eq's
+        // interactive picker) — only when explicitly invoked.
+        if !is_step(step) || lifecycle(step) == "manual" {
             continue;
         }
         total += 1;

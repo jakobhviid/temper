@@ -58,10 +58,12 @@ Package token grammar (same as a Brewfile line):
 
 ## Steps (`[[step]]`) — one primitive each
 
-Common: `os = "mac"|"linux"` (skip on other OS); `run = "always"|"install"|
-"ensure"|"manual"` (lifecycle; default: copy/block/setkey → always, exec/seed →
-install). **Note: `run = "manual"` is not yet honored by `install` — it applies
-all steps; `ensure` currently behaves like `always`.**
+Common: `os = "mac"|"linux"` and `role = "desktop"|"server"` (skip on a
+non-matching OS/role; an unknown os/role errors at load); `run = "always"|
+"install"|"ensure"|"manual"` (lifecycle; default: copy/block/setkey → always,
+exec/seed → install). `manual` steps are skipped by automated flows
+(install/update) — run them only when explicitly invoked. **Note: `ensure`
+currently behaves like `always`.**
 
 ```toml
 # copy: deploy a file
