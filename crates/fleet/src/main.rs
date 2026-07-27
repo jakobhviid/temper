@@ -6,15 +6,17 @@
 //! and renders the result as a human summary or (`--json`) a machine-readable
 //! document.
 //!
-//! Status: scaffold. The command surface, `--json`/`--llm`, completions, and
-//! the man page are wired; the verbs are stubs pending the ReinstallScripts
-//! migration (see ../../README.md).
+//! Status: the `copy` vertical (install / drift / undo) is live end-to-end;
+//! update / prune / backup / adopt are stubs pending later primitives.
 
 use std::io;
 use std::process::ExitCode;
 
+use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
+
+use fleet_core::{discovery, journal, machine, manifest, plan};
 
 const REPO_URL: &str = "https://github.com/jakobhviid/fleet";
 
@@ -103,7 +105,7 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run(cli: Cli) -> anyhow::Result<()> {
+fn run(cli: Cli) -> Result<()> {
     let json = cli.json;
     match cli.cmd {
         None => {
@@ -117,23 +119,92 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Some(Cmd::Man) => {
             clap_mangen::Man::new(Cli::command()).render(&mut io::stdout())?;
         }
+        Some(Cmd::Install { machine }) => cmd_install(machine, json)?,
+        Some(Cmd::Drift { machine }) => cmd_drift(machine, json)?,
+        Some(Cmd::Undo { dry_run, .. }) => cmd_undo(dry_run, json)?,
         Some(other) => {
             let verb = match other {
-                Cmd::Install { .. } => "install",
                 Cmd::Update => "update",
-                Cmd::Drift { .. } => "drift",
                 Cmd::Prune => "prune",
                 Cmd::Backup { .. } => "backup",
                 Cmd::Adopt => "adopt",
-                Cmd::Undo { .. } => "undo",
-                Cmd::Completions { .. } | Cmd::Man => unreachable!(),
+                _ => unreachable!(),
             };
-            let hint = if json { " (--json)" } else { "" };
             anyhow::bail!(
-                "`fleet {verb}`{hint} is scaffolded but not implemented yet — \
+                "`fleet {verb}` is scaffolded but not implemented yet — \
                  primitives land incrementally (see README.md build sequence)."
             );
         }
+    }
+    Ok(())
+}
+
+fn cmd_install(machine: Option<String>, json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    let ft = manifest::load_fleet(&home)?;
+    let m = machine::resolve(&ft, machine.as_deref())?;
+    let (changed, total) = plan::run_install(&home, &m)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "machine": m.name, "changed": changed, "total": total })
+        );
+    } else {
+        println!(
+            "install {}: {} of {} step(s) applied",
+            m.name, changed, total
+        );
+    }
+    Ok(())
+}
+
+fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    let ft = manifest::load_fleet(&home)?;
+    let m = machine::resolve(&ft, machine.as_deref())?;
+    let items = plan::run_drift(&home, &m)?;
+    let out_of_sync = items.iter().filter(|i| !i.state.is_ok()).count();
+
+    if json {
+        let arr: Vec<_> = items
+            .iter()
+            .map(|i| {
+                serde_json::json!({
+                    "app": i.app,
+                    "target": i.target,
+                    "state": i.state.label(),
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({ "machine": m.name, "out_of_sync": out_of_sync, "items": arr })
+        );
+    } else {
+        for i in &items {
+            let mark = if i.state.is_ok() { "✓" } else { "✗" };
+            println!("  {mark} {:<9} {}  ({})", i.state.label(), i.target, i.app);
+        }
+        println!(
+            "drift {}: {} in sync, {} out of sync",
+            m.name,
+            items.len() - out_of_sync,
+            out_of_sync
+        );
+    }
+    Ok(())
+}
+
+fn cmd_undo(dry_run: bool, json: bool) -> Result<()> {
+    let (reverted, skipped) = journal::undo(dry_run)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "reverted": reverted, "skipped": skipped, "dry_run": dry_run })
+        );
+    } else {
+        let suffix = if dry_run { " (dry-run)" } else { "" };
+        println!("undo: reverted {reverted}, skipped {skipped}{suffix}");
     }
     Ok(())
 }
