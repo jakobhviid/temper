@@ -127,3 +127,18 @@ pub fn converge(effective: &[Pkg], dry_run: bool) -> Result<usize> {
 
     Ok(effective.len())
 }
+
+/// Upgrade installed packages (brew + flatpak). Best-effort; VM-verified. The
+/// caller only invokes this when packages are actually declared, so a machine
+/// with an empty set never triggers a global upgrade.
+pub fn upgrade() -> Result<()> {
+    if have("brew") {
+        let _ = Command::new("brew").arg("upgrade").status();
+    }
+    if have("flatpak") {
+        let _ = Command::new("flatpak")
+            .args(["update", "-y", "--noninteractive"])
+            .status();
+    }
+    Ok(())
+}

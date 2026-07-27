@@ -123,11 +123,11 @@ fn run(cli: Cli) -> Result<()> {
             clap_mangen::Man::new(Cli::command()).render(&mut io::stdout())?;
         }
         Some(Cmd::Install { machine, dry_run }) => cmd_install(machine, dry_run, json)?,
+        Some(Cmd::Update) => cmd_update(json)?,
         Some(Cmd::Drift { machine }) => cmd_drift(machine, json)?,
         Some(Cmd::Undo { dry_run, .. }) => cmd_undo(dry_run, json)?,
         Some(other) => {
             let verb = match other {
-                Cmd::Update => "update",
                 Cmd::Prune => "prune",
                 Cmd::Backup { .. } => "backup",
                 Cmd::Adopt => "adopt",
@@ -159,6 +159,28 @@ fn cmd_install(machine: Option<String>, dry_run: bool, json: bool) -> Result<()>
         let verb = if dry_run { "would apply" } else { "applied" };
         println!(
             "install {}: {} package(s), {verb} {} of {} config step(s)",
+            m.name, r.packages, r.steps_changed, r.steps_total
+        );
+    }
+    Ok(())
+}
+
+fn cmd_update(json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    let ft = manifest::load_fleet(&home)?;
+    let m = machine::resolve(&ft, None)?;
+    let r = plan::run_update(&home, &m, &ft.vars)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "machine": m.name, "packages": r.packages,
+                "reapplied": r.steps_changed, "total": r.steps_total
+            })
+        );
+    } else {
+        println!(
+            "update {}: upgraded {} package set, re-applied {} of {} always-step(s)",
             m.name, r.packages, r.steps_changed, r.steps_total
         );
     }

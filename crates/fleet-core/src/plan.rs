@@ -211,6 +211,19 @@ fn apply_step(
     bail!("step names no known primitive (copy / block / setkey / exec)")
 }
 
+/// A step's effective lifecycle. Defaults by primitive: exec & seed are
+/// install-only; copy/setkey/block are re-applied every update ("always").
+fn lifecycle(step: &Step) -> &str {
+    if let Some(r) = &step.run {
+        return r;
+    }
+    if step.exec.is_some() || step.seed {
+        "install"
+    } else {
+        "always"
+    }
+}
+
 /// Would this step change anything? (dry-run preview — never runs an `exec`.)
 fn step_would_change(
     home: &Path,
@@ -275,6 +288,44 @@ pub fn run_install(
     }
     Ok(InstallReport {
         packages,
+        steps_changed: changed,
+        steps_total: total,
+    })
+}
+
+/// Update flow: upgrade declared packages (only if any are declared — so a
+/// machine with no packages never triggers a global `brew upgrade`), then
+/// re-apply the `always`/`ensure` config steps. Skips install-only steps
+/// (seed, one-time exec) so it stays the "safe and boring" flow.
+pub fn run_update(
+    home: &Path,
+    machine: &Machine,
+    vars: &BTreeMap<String, String>,
+) -> Result<InstallReport> {
+    let effective = packages::effective_set(home, machine)?;
+    if !effective.is_empty() {
+        providers::upgrade()?;
+    }
+
+    let resolved = resolve(home, machine)?;
+    let mut journal = Journal::begin();
+    let (mut changed, mut total) = (0usize, 0usize);
+    for (_app, step) in &resolved.steps {
+        if !is_step(step) {
+            continue;
+        }
+        let lc = lifecycle(step);
+        if lc != "always" && lc != "ensure" {
+            continue;
+        }
+        total += 1;
+        if apply_step(home, machine, step, vars, &mut journal)? {
+            changed += 1;
+        }
+    }
+    journal.commit()?;
+    Ok(InstallReport {
+        packages: effective.len(),
         steps_changed: changed,
         steps_total: total,
     })
