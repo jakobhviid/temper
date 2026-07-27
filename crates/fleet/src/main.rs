@@ -61,8 +61,12 @@ enum Cmd {
         machine: Option<String>,
     },
     /// Remove installed-but-not-declared packages (dependency-aware; honors the
-    /// machine's `[ignore]` baseline). Journaled.
-    Prune,
+    /// machine's `[ignore]` baseline).
+    Prune {
+        /// List what would be removed without removing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Snapshot live machine state back into the folder (effective package set,
     /// dconf snapshot through the strip filter).
     Backup {
@@ -126,18 +130,9 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Update) => cmd_update(json)?,
         Some(Cmd::Drift { machine }) => cmd_drift(machine, json)?,
         Some(Cmd::Undo { dry_run, .. }) => cmd_undo(dry_run, json)?,
-        Some(other) => {
-            let verb = match other {
-                Cmd::Prune => "prune",
-                Cmd::Backup { .. } => "backup",
-                Cmd::Adopt => "adopt",
-                _ => unreachable!(),
-            };
-            anyhow::bail!(
-                "`fleet {verb}` is scaffolded but not implemented yet — \
-                 primitives land incrementally (see README.md build sequence)."
-            );
-        }
+        Some(Cmd::Prune { dry_run }) => cmd_prune(dry_run, json)?,
+        Some(Cmd::Backup { machine }) => cmd_backup(machine, json)?,
+        Some(Cmd::Adopt) => cmd_adopt(json)?,
     }
     Ok(())
 }
@@ -218,6 +213,77 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
             m.name,
             items.len() - out_of_sync,
             out_of_sync
+        );
+    }
+    Ok(())
+}
+
+fn cmd_prune(dry_run: bool, json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    let ft = manifest::load_fleet(&home)?;
+    let m = machine::resolve(&ft, None)?;
+    let extras = plan::run_prune(&home, &m, &ft.ignore, dry_run)?;
+    if json {
+        let arr: Vec<_> = extras
+            .iter()
+            .map(|(mgr, name)| serde_json::json!({ "manager": mgr.as_str(), "name": name }))
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({ "machine": m.name, "extras": arr, "dry_run": dry_run })
+        );
+    } else {
+        for (mgr, name) in &extras {
+            println!("  - {} {}", mgr.as_str(), name);
+        }
+        let tail = if dry_run {
+            "(dry-run, nothing removed)"
+        } else {
+            "removed"
+        };
+        println!("prune {}: {} extra(s) {tail}", m.name, extras.len());
+    }
+    Ok(())
+}
+
+fn cmd_backup(machine: Option<String>, json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    let ft = manifest::load_fleet(&home)?;
+    let m = machine::resolve(&ft, machine.as_deref())?;
+    let path = plan::run_backup(&home, &m)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "machine": m.name, "brewfile": path.display().to_string() })
+        );
+    } else {
+        println!("backup {}: dumped package state to {}", m.name, path.display());
+    }
+    Ok(())
+}
+
+fn cmd_adopt(json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    let ft = manifest::load_fleet(&home)?;
+    let m = machine::resolve(&ft, None)?;
+    let extras = plan::run_adopt(&home, &m, &ft.ignore)?;
+    if json {
+        let arr: Vec<_> = extras
+            .iter()
+            .map(|(mgr, name)| serde_json::json!({ "manager": mgr.as_str(), "name": name }))
+            .collect();
+        println!("{}", serde_json::json!({ "machine": m.name, "adoptable": arr }));
+    } else if extras.is_empty() {
+        println!("adopt {}: nothing to adopt — machine matches its spec", m.name);
+    } else {
+        println!("adopt {}: {} installed package(s) not in the spec:", m.name, extras.len());
+        for (mgr, name) in &extras {
+            println!("  {} \"{}\"", mgr.as_str(), name);
+        }
+        println!(
+            "\nAdd the ones you want to a bundle or the machine's loose `packages`, \
+             and the rest to `[ignore].{}` in fleet.toml.",
+            "<manager>"
         );
     }
     Ok(())

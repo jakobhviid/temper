@@ -12,6 +12,8 @@
 //! they land with the Linux/VM slice.
 
 use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
@@ -141,4 +143,75 @@ pub fn upgrade() -> Result<()> {
             .status();
     }
     Ok(())
+}
+
+/// Remove installed-but-not-declared packages. brew-family goes through
+/// dependency-aware `brew bundle cleanup --force` against the effective
+/// Brewfile (so a kept package's transitive deps aren't removed); flatpak
+/// extras are uninstalled by id. VM-verified.
+pub fn prune_apply(effective: &[Pkg], extras: &[(Manager, String)]) -> Result<()> {
+    let has_brewish = effective.iter().any(|p| {
+        matches!(
+            p.manager,
+            Manager::Brew | Manager::Cask | Manager::Tap | Manager::Mas | Manager::Vscode
+        )
+    });
+    if has_brewish && have("brew") {
+        let body: String = effective
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p.manager,
+                    Manager::Brew | Manager::Cask | Manager::Tap | Manager::Mas | Manager::Vscode
+                )
+            })
+            .map(|p| format!("{}\n", p.raw))
+            .collect();
+        let tmp = std::env::temp_dir().join(format!("fleet-Brewfile-prune-{}", std::process::id()));
+        fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
+        let status = Command::new("brew")
+            .args(["bundle", "cleanup", "--force", "--file"])
+            .arg(&tmp)
+            .status()
+            .context("running brew bundle cleanup")?;
+        let _ = fs::remove_file(&tmp);
+        if !status.success() {
+            bail!("brew bundle cleanup failed");
+        }
+    }
+
+    let flatpaks: Vec<&str> = extras
+        .iter()
+        .filter(|(m, _)| *m == Manager::Flatpak)
+        .map(|(_, n)| n.as_str())
+        .collect();
+    if !flatpaks.is_empty() && have("flatpak") {
+        let mut cmd = Command::new("flatpak");
+        cmd.args(["uninstall", "-y", "--noninteractive"]);
+        for f in &flatpaks {
+            cmd.arg(f);
+        }
+        let _ = cmd.status();
+    }
+    Ok(())
+}
+
+/// Dump live package state into the folder at `machines/<name>/Brewfile` via
+/// `brew bundle dump`. Returns the written path. VM-verified.
+pub fn dump(home: &Path, machine: &str) -> Result<PathBuf> {
+    if !have("brew") {
+        bail!("brew not found — cannot dump package state");
+    }
+    let dir = home.join("machines").join(machine);
+    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let bf = dir.join("Brewfile");
+    let status = Command::new("brew")
+        .args(["bundle", "dump", "--force", "--no-vscode", "--file"])
+        .arg(&bf)
+        .status()
+        .context("running brew bundle dump")?;
+    if !status.success() {
+        bail!("brew bundle dump failed");
+    }
+    Ok(bf)
 }

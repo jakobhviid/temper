@@ -293,6 +293,49 @@ pub fn run_install(
     })
 }
 
+/// Prune installed-but-not-declared packages. Returns the extras (computed by
+/// the unit-tested set logic); with `dry_run` it only lists, otherwise it also
+/// removes them (VM-verified shell-out).
+pub fn run_prune(
+    home: &Path,
+    machine: &Machine,
+    ignore: &Ignore,
+    dry_run: bool,
+) -> Result<Vec<(packages::Manager, String)>> {
+    let effective = packages::effective_set(home, machine)?;
+    if effective.is_empty() {
+        return Ok(Vec::new());
+    }
+    let installed = providers::probe(&effective)?;
+    let extras = packages::extras(&effective, &installed, ignore);
+    if !dry_run && !extras.is_empty() {
+        providers::prune_apply(&effective, &extras)?;
+    }
+    Ok(extras)
+}
+
+/// Backup: dump live package state into `machines/<name>/Brewfile`. Returns the
+/// written path. (dconf snapshot lands with the Linux slice.)
+pub fn run_backup(home: &Path, machine: &Machine) -> Result<std::path::PathBuf> {
+    providers::dump(home, &machine.name)
+}
+
+/// Adopt (advisory v1): report the installed extras so they can be added to a
+/// bundle, the machine loose list, or `[ignore]`. Non-mutating; interactive
+/// folder-authoring is a later refinement.
+pub fn run_adopt(
+    home: &Path,
+    machine: &Machine,
+    ignore: &Ignore,
+) -> Result<Vec<(packages::Manager, String)>> {
+    let effective = packages::effective_set(home, machine)?;
+    if effective.is_empty() {
+        return Ok(Vec::new());
+    }
+    let installed = providers::probe(&effective)?;
+    Ok(packages::extras(&effective, &installed, ignore))
+}
+
 /// Update flow: upgrade declared packages (only if any are declared — so a
 /// machine with no packages never triggers a global `brew upgrade`), then
 /// re-apply the `always`/`ensure` config steps. Skips install-only steps
