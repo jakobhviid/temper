@@ -10,10 +10,10 @@ use std::path::Path;
 
 use anyhow::{bail, Result};
 
-use crate::drift;
 use crate::journal::Journal;
-use crate::manifest::{self, expand_tilde, Assert, Machine, Step};
+use crate::manifest::{self, expand_tilde, Assert, Ignore, Machine, Step};
 use crate::primitives::{self, CopyOpts, ExecOpts, FileState};
+use crate::{drift, packages, providers};
 
 fn os_gated(step_os: &Option<String>, machine: &Machine) -> bool {
     match step_os {
@@ -133,6 +133,7 @@ pub fn run_drift(
     home: &Path,
     machine: &Machine,
     vars: &BTreeMap<String, String>,
+    ignore: &Ignore,
 ) -> Result<Vec<Finding>> {
     let resolved = resolve(home, machine)?;
     let mut findings = Vec::new();
@@ -151,6 +152,31 @@ pub fn run_drift(
             status,
         });
     }
+
+    // Package drift (machine scope): inert when no packages are declared.
+    let effective = packages::effective_set(home, machine)?;
+    if !effective.is_empty() {
+        let installed = providers::probe(&effective)?;
+        for p in packages::missing(&effective, &installed) {
+            findings.push(Finding {
+                app: "packages".into(),
+                kind: "package",
+                target: format!("{} {}", p.manager.as_str(), p.name),
+                ok: false,
+                status: "missing".into(),
+            });
+        }
+        for (m, name) in packages::extras(&effective, &installed, ignore) {
+            findings.push(Finding {
+                app: "packages".into(),
+                kind: "package-extra",
+                target: format!("{} {}", m.as_str(), name),
+                ok: false,
+                status: "extra".into(),
+            });
+        }
+    }
+
     Ok(findings)
 }
 
@@ -206,14 +232,28 @@ fn step_would_change(
     Ok(step_finding(home, machine, "", step, vars)?.map_or(false, |f| !f.ok))
 }
 
-/// Apply every step (install flow). With `dry_run`, report what would change
-/// without writing, journaling, or running any `exec`. Returns (changed, total).
+/// Outcome of an install run.
+pub struct InstallReport {
+    /// Declared packages considered by the converge phase.
+    pub packages: usize,
+    pub steps_changed: usize,
+    pub steps_total: usize,
+}
+
+/// Install flow: phase 1 converges packages (whole-machine), phase 2 applies
+/// config steps. With `dry_run`, nothing is written, journaled, converged, or
+/// exec'd — it only reports what would change.
 pub fn run_install(
     home: &Path,
     machine: &Machine,
     vars: &BTreeMap<String, String>,
     dry_run: bool,
-) -> Result<(usize, usize)> {
+) -> Result<InstallReport> {
+    // Phase 1 — packages (aggregate converge; inert without declared packages).
+    let effective = packages::effective_set(home, machine)?;
+    let packages = providers::converge(&effective, dry_run)?;
+
+    // Phase 2 — config steps.
     let resolved = resolve(home, machine)?;
     let mut journal = Journal::begin();
     let (mut changed, mut total) = (0usize, 0usize);
@@ -233,5 +273,9 @@ pub fn run_install(
     if !dry_run {
         journal.commit()?;
     }
-    Ok((changed, total))
+    Ok(InstallReport {
+        packages,
+        steps_changed: changed,
+        steps_total: total,
+    })
 }

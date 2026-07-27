@@ -146,17 +146,21 @@ fn cmd_install(machine: Option<String>, dry_run: bool, json: bool) -> Result<()>
     let home = discovery::find_home()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
-    let (changed, total) = plan::run_install(&home, &m, &ft.vars, dry_run)?;
+    let r = plan::run_install(&home, &m, &ft.vars, dry_run)?;
     if json {
         println!(
             "{}",
             serde_json::json!({
-                "machine": m.name, "changed": changed, "total": total, "dry_run": dry_run
+                "machine": m.name, "packages": r.packages,
+                "changed": r.steps_changed, "total": r.steps_total, "dry_run": dry_run
             })
         );
     } else {
         let verb = if dry_run { "would apply" } else { "applied" };
-        println!("install {}: {verb} {} of {} step(s)", m.name, changed, total);
+        println!(
+            "install {}: {} package(s), {verb} {} of {} config step(s)",
+            m.name, r.packages, r.steps_changed, r.steps_total
+        );
     }
     Ok(())
 }
@@ -165,7 +169,7 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
     let home = discovery::find_home()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
-    let items = plan::run_drift(&home, &m, &ft.vars)?;
+    let items = plan::run_drift(&home, &m, &ft.vars, &ft.ignore)?;
     let out_of_sync = items.iter().filter(|f| !f.ok).count();
 
     if json {

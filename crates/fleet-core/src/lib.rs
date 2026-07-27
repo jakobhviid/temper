@@ -19,6 +19,7 @@
 
 pub mod discovery; // find the fleet-home folder across any delivery backend
 pub mod manifest; // parse fleet.toml + apps/*.toml (machines, apps, ignore)
+pub mod packages; // package model: parse, effective set, drift (pure)
 pub mod machine; // machine identity (hostname) + role derivation
 pub mod primitives; // copy / block / setkey / profile / exec
 pub mod providers; // brew / flatpak / mas / gext / rpm-ostree: converge + probe

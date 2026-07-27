@@ -17,6 +17,27 @@ pub struct FleetToml {
     /// Declared template variables, referenced as `{{ var "NAME" }}`.
     #[serde(default)]
     pub vars: std::collections::BTreeMap<String, String>,
+    /// Packages installed but not declared that drift/prune must NOT flag as
+    /// extras (OS-preinstalled baseline, e.g. Bazzite's default flatpaks).
+    #[serde(default)]
+    pub ignore: Ignore,
+}
+
+/// Per-manager ignore lists (by the same short name drift matches on).
+#[derive(Debug, Default, Deserialize)]
+pub struct Ignore {
+    #[serde(default)]
+    pub brew: Vec<String>,
+    #[serde(default)]
+    pub cask: Vec<String>,
+    #[serde(default)]
+    pub flatpak: Vec<String>,
+    #[serde(default)]
+    pub mas: Vec<String>,
+    #[serde(default)]
+    pub vscode: Vec<String>,
+    #[serde(default)]
+    pub tap: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -28,10 +49,21 @@ pub struct Machine {
     pub role: Option<String>,
     #[serde(default)]
     pub apps: Vec<String>,
+    /// Per-machine loose packages that belong to no app-bundle.
+    #[serde(default)]
+    pub packages: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 pub struct Bundle {
+    /// Packages this bundle needs (Brewfile line grammar), aggregated into the
+    /// machine's effective set. `_mac`/`_linux` variants are OS-scoped.
+    #[serde(default)]
+    pub packages: Vec<String>,
+    #[serde(default)]
+    pub packages_mac: Vec<String>,
+    #[serde(default)]
+    pub packages_linux: Vec<String>,
     #[serde(default)]
     pub step: Vec<Step>,
     /// Drift-only assertions (no converge action).
