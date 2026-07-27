@@ -21,6 +21,19 @@ pub struct TemperToml {
     /// extras (OS-preinstalled baseline, e.g. Bazzite's default flatpaks).
     #[serde(default)]
     pub ignore: Ignore,
+    /// brew-specific settings.
+    #[serde(default)]
+    pub brew: BrewConfig,
+}
+
+/// `[brew]` settings.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrewConfig {
+    /// Third-party taps to `brew trust` before any converge/upgrade (Homebrew
+    /// 5.2+ gates untrusted taps, silently skipping their formulae otherwise).
+    #[serde(default)]
+    pub trust: Vec<String>,
 }
 
 /// Per-manager ignore lists (by the same short name drift matches on).

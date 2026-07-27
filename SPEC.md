@@ -21,6 +21,8 @@ mas     = []
 vscode  = []
 tap     = []
 
+[brew]                      # optional
+trust = ["ublue-os/tap"]   # third-party taps to `brew trust` before converge/upgrade
 [[machine]]
 name     = "chronos"        # required; resolved against `hostname -s`
 os       = "mac"            # required; "mac" | "linux"

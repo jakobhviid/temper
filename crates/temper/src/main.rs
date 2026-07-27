@@ -148,7 +148,7 @@ fn cmd_install(machine: Option<String>, dry_run: bool, json: bool) -> Result<()>
     let home = discovery::find_home()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
-    let r = plan::run_install(&home, &m, &ft.vars, dry_run)?;
+    let r = plan::run_install(&home, &m, &ft.vars, &ft.brew.trust, dry_run)?;
     if json {
         println!(
             "{}",
@@ -175,7 +175,7 @@ fn cmd_update(json: bool) -> Result<()> {
     let home = discovery::find_home()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
-    let r = plan::run_update(&home, &m, &ft.vars)?;
+    let r = plan::run_update(&home, &m, &ft.vars, &ft.brew.trust)?;
     if json {
         println!(
             "{}",

@@ -131,6 +131,22 @@ pub fn converge(effective: &[Pkg], dry_run: bool) -> Result<usize> {
     Ok(effective.len())
 }
 
+/// `brew trust` third-party taps before any converge/upgrade. Homebrew 5.2+
+/// gates untrusted taps and silently skips their formulae otherwise. Best-effort
+/// (matches RIS); a no-op without brew or an empty list.
+pub fn trust_taps(taps: &[String]) -> Result<()> {
+    if taps.is_empty() || !have("brew") {
+        return Ok(());
+    }
+    let mut cmd = Command::new("brew");
+    cmd.args(["trust", "--tap"]);
+    for t in taps {
+        cmd.arg(t);
+    }
+    let _ = cmd.status();
+    Ok(())
+}
+
 /// Upgrade installed packages (brew + flatpak). Best-effort; VM-verified. The
 /// caller only invokes this when packages are actually declared, so a machine
 /// with an empty set never triggers a global upgrade.
