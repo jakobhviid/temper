@@ -137,7 +137,9 @@ pub struct Step {
     /// Companion drift-hook: exit 0 = in sync. Also gates whether `exec` re-runs.
     #[serde(default)]
     pub check: Option<String>,
-    /// Run the exec/check under `sudo`.
+    /// Deprecated no-op: temper always runs exec as the user (chezmoi model);
+    /// escalate inside the script with `sudo <cmd>` for specific ops. Kept so
+    /// existing manifests parse.
     #[serde(default)]
     pub sudo: bool,
     /// Env var names that must be present and are passed through to the script.

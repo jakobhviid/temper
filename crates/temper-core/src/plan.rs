@@ -58,7 +58,6 @@ fn copy_opts<'a>(step: &'a Step, vars: &'a BTreeMap<String, String>) -> CopyOpts
 
 fn exec_opts<'a>(home: &'a Path, machine: &'a Machine, step: &'a Step) -> ExecOpts<'a> {
     ExecOpts {
-        sudo: step.sudo,
         secrets: &step.secrets,
         home,
         machine: &machine.name,

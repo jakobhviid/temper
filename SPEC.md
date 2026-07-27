@@ -23,6 +23,7 @@ tap     = []
 
 [brew]                      # optional
 trust = ["ublue-os/tap"]   # third-party taps to `brew trust` before converge/upgrade
+
 [[machine]]
 name     = "chronos"        # required; resolved against `hostname -s`
 os       = "mac"            # required; "mac" | "linux"
@@ -90,7 +91,7 @@ setkey = { backend = "json", file = "~/.claude/settings.json", key = "env.X", va
 [[step]]
 exec    = "assets/setup.sh"  # runs via sh, cwd = temper-home, with TEMPER_HOME/MACHINE/OS
 check   = "assets/check.sh"  # optional drift-hook: exit 0 = in sync; gates re-run
-sudo    = false              # run under sudo
+sudo    = false              # deprecated no-op — escalate inside the script with sudo per-command
 secrets = ["ACOUSTID_KEY"]   # env vars that must be set; passed through (loud error if missing)
 # exec is NOT journaled (not reversible by undo).
 

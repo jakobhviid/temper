@@ -388,7 +388,6 @@ fn journaled_write(file: &Path, new: &[u8], journal: &mut Journal) -> Result<boo
 
 /// Execution context for `exec`/`check` scripts.
 pub struct ExecOpts<'a> {
-    pub sudo: bool,
     pub secrets: &'a [String],
     pub home: &'a Path,
     pub machine: &'a str,
@@ -397,15 +396,12 @@ pub struct ExecOpts<'a> {
 
 fn exec_command(script: &Path, opts: &ExecOpts) -> Result<std::process::Command> {
     use std::process::Command;
-    let mut cmd = if opts.sudo {
-        let mut c = Command::new("sudo");
-        c.arg("sh").arg(script);
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.arg(script);
-        c
-    };
+    // Always run as the invoking user — the chezmoi/Ansible model. A script that
+    // needs root for specific commands escalates INTERNALLY with `sudo <cmd>`
+    // (never the whole script, which would break user-session ops like
+    // gsettings / D-Bus / ~/ file writes by running them as root).
+    let mut cmd = Command::new("sh");
+    cmd.arg(script);
     cmd.current_dir(opts.home);
     cmd.env("TEMPER_HOME", opts.home);
     cmd.env("TEMPER_MACHINE", opts.machine);
