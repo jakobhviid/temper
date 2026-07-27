@@ -166,16 +166,15 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
     let items = plan::run_drift(&home, &m, &ft.vars)?;
-    let out_of_sync = items.iter().filter(|i| !i.state.is_ok()).count();
+    let out_of_sync = items.iter().filter(|f| !f.ok).count();
 
     if json {
         let arr: Vec<_> = items
             .iter()
-            .map(|i| {
+            .map(|f| {
                 serde_json::json!({
-                    "app": i.app,
-                    "target": i.target,
-                    "state": i.state.label(),
+                    "app": f.app, "kind": f.kind, "target": f.target,
+                    "ok": f.ok, "status": f.status,
                 })
             })
             .collect();
@@ -184,12 +183,12 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
             serde_json::json!({ "machine": m.name, "out_of_sync": out_of_sync, "items": arr })
         );
     } else {
-        for i in &items {
-            let mark = if i.state.is_ok() { "✓" } else { "✗" };
-            println!("  {mark} {:<9} {}  ({})", i.state.label(), i.target, i.app);
+        for f in &items {
+            let mark = if f.ok { "✓" } else { "✗" };
+            println!("  {mark} {:<20} {} [{}] ({})", f.status, f.target, f.kind, f.app);
         }
         println!(
-            "drift {}: {} in sync, {} out of sync",
+            "drift {}: {} ok, {} out of sync",
             m.name,
             items.len() - out_of_sync,
             out_of_sync

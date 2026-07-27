@@ -1,7 +1,9 @@
-//! Parse and validate the manifest: `fleet.toml` (machines, per-machine app
-//! composition) and `apps/<name>.toml` bundles (ordered steps). See ../../SPEC.md.
+//! Parse and validate the manifest: `fleet.toml` (machines, template vars) and
+//! `apps/<name>.toml` bundles (ordered steps + drift-only assertions). See
+//! ../../SPEC.md.
 //!
-//! Slice 1 supports the `copy` step; more fields land as primitives do.
+//! Live step primitives: `copy` (verbatim/template/seed/mode), `block`,
+//! `setkey` (json backend). `[[assert]]` covers drift-only checks.
 
 use std::path::{Path, PathBuf};
 
@@ -28,31 +30,95 @@ pub struct Machine {
     pub apps: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct Bundle {
     #[serde(default)]
     pub step: Vec<Step>,
+    /// Drift-only assertions (no converge action).
+    #[serde(default)]
+    pub assert: Vec<Assert>,
 }
 
-/// One primitive step. Exactly one primitive field is set; slice 1 = `copy`.
+/// One primitive step. Exactly one primitive is set.
 #[derive(Debug, Deserialize, Clone)]
 pub struct Step {
+    // --- copy ---
     #[serde(default)]
     pub copy: Option<String>,
     #[serde(default)]
     pub to: Option<String>,
-    /// `copy`: substitute `{{ … }}` (declared vars + apply-time probes) before deploy.
+    /// `copy`: substitute `{{ … }}` before deploy.
     #[serde(default)]
     pub template: bool,
     /// `copy`: create-once if absent, then hands-off; excluded from drift.
     #[serde(default)]
     pub seed: bool,
-    /// File mode (e.g. "0600"), enforced on the deployed target.
+    /// `copy`: octal file mode enforced on the target (e.g. "0600").
     #[serde(default)]
     pub mode: Option<String>,
+
+    // --- block: ensure a marker-delimited region is present in a user file ---
+    #[serde(default)]
+    pub block: Option<String>,
+    #[serde(default, rename = "in")]
+    pub in_file: Option<String>,
+    #[serde(default)]
+    pub marker: Option<String>,
+
+    // --- setkey: set a key in a structured file, preserving siblings ---
+    #[serde(default)]
+    pub setkey: Option<SetKey>,
+
     /// Skip this step unless the machine's OS matches ("mac" | "linux").
     #[serde(default)]
     pub os: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SetKey {
+    /// "json" (live) | "toml"/"ini"/"dconf"/"defaults" (later).
+    pub backend: String,
+    /// Target file for file backends.
+    #[serde(default)]
+    pub file: Option<String>,
+    /// Dotted key path.
+    pub key: String,
+    /// Scalar (or array) value to set.
+    pub value: toml::Value,
+    /// List-union append into an array-valued key.
+    #[serde(default)]
+    pub append: bool,
+}
+
+/// A drift-only assertion. Exactly one check field is set.
+#[derive(Debug, Deserialize, Clone)]
+pub struct Assert {
+    /// Path that must NOT exist.
+    #[serde(default)]
+    pub absent: Option<String>,
+    /// A file that must contain a given line.
+    #[serde(default)]
+    pub contains_line: Option<ContainsLine>,
+    /// A path that must have a given octal mode.
+    #[serde(default)]
+    pub mode: Option<ModeCheck>,
+    /// A command that must resolve on PATH.
+    #[serde(default)]
+    pub executable_resolves: Option<String>,
+    #[serde(default)]
+    pub os: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ContainsLine {
+    pub file: String,
+    pub line: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ModeCheck {
+    pub path: String,
+    pub mode: String,
 }
 
 pub fn load_fleet(home: &Path) -> Result<FleetToml> {
