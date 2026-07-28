@@ -514,7 +514,7 @@ pub fn run_install(
     // Phase 1 — packages (aggregate converge; inert without declared packages).
     let effective = packages::effective_set(home, machine)?;
     if !dry_run {
-        providers::trust_taps(brew_trust)?;
+        providers::trust_taps(brew_trust, verbose)?;
     }
     let packages = providers::converge(&effective, dry_run, verbose)?;
     providers::gext_converge(&providers::effective_extensions(home, machine)?, dry_run)?;
@@ -675,7 +675,7 @@ pub fn run_update(
 ) -> Result<InstallReport> {
     let effective = packages::effective_set(home, machine)?;
     if !effective.is_empty() {
-        providers::trust_taps(brew_trust)?;
+        providers::trust_taps(brew_trust, verbose)?;
         providers::upgrade(verbose)?;
     }
 

@@ -264,7 +264,12 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize
 /// `brew trust` third-party taps before any converge/upgrade. Homebrew 5.2+
 /// gates untrusted taps and silently skips their formulae otherwise. Best-effort
 /// (matches RIS); a no-op without brew or an empty list.
-pub fn trust_taps(taps: &[String]) -> Result<()> {
+///
+/// Quiet by default: `brew trust` prints `Already trusted tap: <tap>` for every
+/// tap on every run — pure "already OK" noise. We swallow those confirmations but
+/// still surface a genuinely new trust or any warning/error. `--verbose` shows
+/// brew's full output.
+pub fn trust_taps(taps: &[String], verbose: bool) -> Result<()> {
     if taps.is_empty() || !have("brew") {
         return Ok(());
     }
@@ -273,7 +278,21 @@ pub fn trust_taps(taps: &[String]) -> Result<()> {
     for t in taps {
         cmd.arg(t);
     }
-    let _ = cmd.status();
+    if verbose {
+        let _ = cmd.status();
+        return Ok(());
+    }
+    if let Ok(out) = cmd.output() {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let l = line.trim_end();
+            if !l.trim_start().starts_with("Already trusted tap:") && !l.trim().is_empty() {
+                eprintln!("{l}"); // a new trust — surface it (to stderr; keeps --json clean)
+            }
+        }
+        if !out.stderr.is_empty() {
+            eprint!("{}", String::from_utf8_lossy(&out.stderr)); // warnings/errors
+        }
+    }
     Ok(())
 }
 
