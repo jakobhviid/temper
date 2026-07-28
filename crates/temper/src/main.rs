@@ -239,9 +239,16 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
                 })
             })
             .collect();
+        let rem: Vec<_> = plan::remediations(&items, &m.name)
+            .iter()
+            .map(|r| serde_json::json!({ "label": r.label, "command": r.command }))
+            .collect();
         println!(
             "{}",
-            serde_json::json!({ "machine": m.name, "out_of_sync": out_of_sync, "items": arr })
+            serde_json::json!({
+                "machine": m.name, "out_of_sync": out_of_sync,
+                "items": arr, "remediation": rem
+            })
         );
     } else {
         render_drift(&m.name, &items);
@@ -338,6 +345,17 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
             ui::red(&format!("{out} out of sync")),
             ui::dim(&format!("{so} status-only")),
         );
+    }
+
+    // "What to run next" — both directions out of the drift, RIS-style: a cyan
+    // arrow + label with the exact command dimmed beneath it.
+    let rem = plan::remediations(items, machine);
+    if !rem.is_empty() {
+        println!("\n{}", ui::bold("Next steps"));
+        for r in &rem {
+            println!("  {} {}", ui::cyan("→"), r.label);
+            println!("    {}", ui::dim(&r.command));
+        }
     }
 }
 

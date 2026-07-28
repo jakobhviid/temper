@@ -147,6 +147,92 @@ fn step_finding(
     Ok(None)
 }
 
+/// A suggested next command to resolve drift — the "what to run next" hand-off
+/// RIS emits at the moment of detection. Each is a human label + the exact,
+/// copy-pasteable invocation.
+pub struct Remediation {
+    pub label: String,
+    pub command: String,
+}
+
+/// Both-direction remediations for a drift report (RIS's four-branch package
+/// fork + a config line). Machine→spec: `install-missing` / `prune` /
+/// re-`install`. Spec←machine: `reconcile` / `backup`. Plus `undo` to revert.
+/// Empty when nothing is out of sync.
+pub fn remediations(items: &[Finding], machine: &str) -> Vec<Remediation> {
+    let drifted = |kinds: &[&str]| {
+        items
+            .iter()
+            .any(|f| !f.ok && kinds.contains(&f.kind))
+    };
+    let missing_pkg = drifted(&["package", "extension", "rpm"]);
+    let extra_pkg = drifted(&["package-extra"]);
+    let config_drift = items
+        .iter()
+        .any(|f| !f.ok && !["package", "package-extra", "extension", "rpm"].contains(&f.kind));
+
+    let mut out = Vec::new();
+    let push = |out: &mut Vec<Remediation>, label: &str, command: String| {
+        out.push(Remediation {
+            label: label.to_string(),
+            command,
+        })
+    };
+    // Machine → spec (converge the machine toward the declared state).
+    if missing_pkg {
+        push(&mut out, "install declared packages that are missing", format!("temper install {machine} --packages-only"));
+    }
+    if extra_pkg {
+        push(&mut out, "uninstall packages not in the spec (asks first)", format!("temper prune {machine}"));
+    }
+    // Spec ← machine (absorb the machine's state into the spec).
+    if missing_pkg || extra_pkg {
+        push(&mut out, "interactively add extras / drop missing entries", format!("temper reconcile {machine}"));
+        push(&mut out, "overwrite the machine Brewfile with live state", format!("temper backup {machine}"));
+    }
+    // Config drift: re-apply, or revert the last run.
+    if config_drift {
+        push(&mut out, "re-apply configuration to fix the drift above", format!("temper install {machine}"));
+        push(&mut out, "revert the most recent run instead", "temper undo".to_string());
+    }
+    out
+}
+
+#[cfg(test)]
+mod remediation_tests {
+    use super::*;
+
+    fn f(kind: &'static str, ok: bool) -> Finding {
+        Finding { app: "a".into(), kind, target: "t".into(), ok, status: "s".into() }
+    }
+
+    #[test]
+    fn missing_and_extra_offer_both_directions() {
+        let items = vec![f("package", false), f("package-extra", false)];
+        let cmds: Vec<String> = remediations(&items, "kira").iter().map(|r| r.command.clone()).collect();
+        assert!(cmds.contains(&"temper install kira --packages-only".to_string())); // add missing
+        assert!(cmds.contains(&"temper prune kira".to_string())); // remove extras
+        assert!(cmds.contains(&"temper reconcile kira".to_string())); // absorb (surgical)
+        assert!(cmds.contains(&"temper backup kira".to_string())); // absorb (wholesale)
+    }
+
+    #[test]
+    fn config_drift_offers_reapply_and_undo() {
+        let items = vec![f("copy", false)];
+        let cmds: Vec<String> = remediations(&items, "kira").iter().map(|r| r.command.clone()).collect();
+        assert!(cmds.contains(&"temper install kira".to_string()));
+        assert!(cmds.contains(&"temper undo".to_string()));
+        // no package direction when only config drifted
+        assert!(!cmds.iter().any(|c| c.contains("prune") || c.contains("reconcile")));
+    }
+
+    #[test]
+    fn all_in_sync_yields_no_remediation() {
+        let items = vec![f("copy", true), f("package", true)];
+        assert!(remediations(&items, "kira").is_empty());
+    }
+}
+
 pub fn run_drift(
     home: &Path,
     machine: &Machine,

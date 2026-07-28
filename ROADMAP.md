@@ -61,36 +61,17 @@ for `toml_edit` so a hand-commented TOML keeps its comments on write. Both are
 
 ## Workflow & HMI parity gaps (ReinstallScripts)
 
-The features above are self-contained primitives. These are about the **loop** —
+The features above are self-contained primitives. These were about the **loop** —
 change → drift → decide direction → run the named command — that ReinstallScripts
-emits *at the moment of detection*, and that temper does not yet reproduce.
-Surfaced by comparing temper against the RIS `just` recipes and by LLM + human
-review. This is the reviewer-flagged batch: the remediation hand-off, the missing
-absorb-direction verb, and the drift display itself.
+emits *at the moment of detection*. Surfaced by comparing temper against the RIS
+`just` recipes and by LLM + human review.
 
-### Drift → remediation: "what to run next" (the headline gap)
-**Status:** not built — the largest workflow shortfall.
-RIS accumulates a `fixes=()` array *during* the drift scan — each entry a
-`"description|command"` pair — and closes with a Summary that renders each through
-`action_line` (a cyan `→` description with the exact, copy-pasteable command
-dimmed beneath it). At the package-diff point it pushes a **four-branch fork** in
-one shot (`Linux/justfile:541-544`), naming *both directions* out of the same
-difference: `install-missing` and `prune` to converge machine→spec, `reconcile`
-and `backup` to absorb spec←machine. The GNOME block forks the same way (show
-diff / `gnome-restore` / `gnome-backup`).
-**Now:** `cmd_drift` prints a flat `✓/✗` list and a single `N ok, M out of sync`
-count. `Finding` (`plan.rs`) carries `app/kind/target/ok/status` — **no
-remediation field** — and no suggested-command string exists anywhere in the
-binary. The only next-step guidance is `cmd_adopt`'s prose telling you to
-hand-edit TOML, and that covers the extras direction only. So of RIS's four
-branches, exactly one (`install`/`update`) is reachable by *running* something;
-the rest need a manual file edit.
-**Sketch:** give `Finding` a `remediation: Vec<Action>` (`{ label, command }`);
-render a Summary block after the item list (omit when all-ok). Package-drift
-findings carry the both-direction fork; config-drift findings point at
-`install` / `undo`. Depends on a mutating spec-side verb (`reconcile`, below)
-existing for the absorb-direction actions to target — the drift item type must
-carry the remediation forward *and* have a verb to point at.
+**Shipped:** the reviewer-flagged batch is now built — `drift` renders grouped,
+coloured output with a **"Next steps"** summary that names both directions out of
+the drift with exact commands (`plan::remediations`; the RIS four-branch package
+fork + a config `install`/`undo` line, also in `--json`); `reconcile` is the
+interactive spec←machine verb; `install --packages-only` is install-missing.
+What remains below is the dconf snapshot/restore pair and `eq-import`.
 
 ### Filtered dconf snapshot + targeted restore
 **Status:** snapshot designed, not built; the restore pair is absent entirely.
