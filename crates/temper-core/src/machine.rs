@@ -80,3 +80,36 @@ fn checked(m: Machine) -> Result<Machine> {
     }
     Ok(m)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn m(os: &str, role: Option<&str>) -> Machine {
+        Machine {
+            name: "x".into(),
+            os: os.into(),
+            role: role.map(String::from),
+            apps: vec![],
+            packages: vec![],
+            brewfile: None,
+            vars: Default::default(),
+            dconf: vec![],
+            git: None,
+        }
+    }
+
+    #[test]
+    fn checked_rejects_unknown_os_and_role() {
+        // Valid combinations pass through.
+        assert!(checked(m("mac", Some("desktop"))).is_ok());
+        assert!(checked(m("linux", Some("server"))).is_ok());
+        assert!(checked(m("linux", None)).is_ok());
+        // A case typo ("Linux") would otherwise silently skip EVERY os-gated
+        // step — it must error instead.
+        assert!(checked(m("Linux", None)).is_err());
+        assert!(checked(m("windows", None)).is_err());
+        // An unknown role errors too.
+        assert!(checked(m("linux", Some("laptop"))).is_err());
+    }
+}

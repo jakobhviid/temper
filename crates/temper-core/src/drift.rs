@@ -97,6 +97,14 @@ fn login_shell() -> Option<String> {
     }
 }
 
+/// The final path component of a shell path. `/bin/zsh`, `/usr/bin/zsh`
+/// (usrmerge), and a brew-installed zsh are all the same shell — only the
+/// basename matters; comparing raw paths would report perpetual drift on any
+/// machine whose login shell lives at a different (equivalent) path.
+fn shell_basename(s: &str) -> &str {
+    s.rsplit('/').next().unwrap_or(s)
+}
+
 /// Evaluate an assertion: (ok, status message). `home` resolves reference files.
 pub fn eval(home: &Path, a: &Assert) -> Result<(bool, String)> {
     if let Some(path) = &a.absent {
@@ -160,15 +168,9 @@ pub fn eval(home: &Path, a: &Assert) -> Result<(bool, String)> {
     }
 
     if let Some(want) = &a.shell {
-        // Match by shell name, not full path: `/bin/zsh`, `/usr/bin/zsh` (usrmerge),
-        // and a brew-installed zsh are all the same shell — only the final path
-        // component matters. Comparing raw paths would report perpetual drift on
-        // any machine whose login shell lives at a different (equivalent) path.
-        fn name(s: &str) -> &str {
-            s.rsplit('/').next().unwrap_or(s)
-        }
+        // Match by basename, not full path (see `shell_basename`).
         return Ok(match login_shell() {
-            Some(have) if name(&have) == name(want) => (true, have),
+            Some(have) if shell_basename(&have) == shell_basename(want) => (true, have),
             Some(have) => (false, format!("shell {have}, want {want}")),
             None => (false, "could not read login shell".into()),
         });
@@ -190,4 +192,21 @@ pub fn eval(home: &Path, a: &Assert) -> Result<(bool, String)> {
     }
 
     bail!("assertion has no recognized check field")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_matches_by_basename_across_equivalent_paths() {
+        // usrmerge / brew put the same shell at different paths — all match.
+        assert_eq!(shell_basename("/usr/bin/zsh"), shell_basename("/bin/zsh"));
+        assert_eq!(shell_basename("/opt/homebrew/bin/zsh"), shell_basename("/bin/zsh"));
+        // a bare name is its own basename
+        assert_eq!(shell_basename("zsh"), "zsh");
+        // different shells must NOT match — guards against a raw-path regression
+        // (which would report perpetual drift or match the wrong shell).
+        assert_ne!(shell_basename("/bin/bash"), shell_basename("/bin/zsh"));
+    }
 }
