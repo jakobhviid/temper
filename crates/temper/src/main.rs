@@ -148,7 +148,8 @@ fn cmd_install(machine: Option<String>, dry_run: bool, json: bool) -> Result<()>
     let home = discovery::find_home()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
-    let r = plan::run_install(&home, &m, &ft.vars, &ft.brew.trust, dry_run)?;
+    let vars = manifest::effective_vars(&ft.vars, &m);
+    let r = plan::run_install(&home, &m, &vars, &ft.brew.trust, dry_run)?;
     if json {
         println!(
             "{}",
@@ -175,7 +176,8 @@ fn cmd_update(json: bool) -> Result<()> {
     let home = discovery::find_home()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
-    let r = plan::run_update(&home, &m, &ft.vars, &ft.brew.trust)?;
+    let vars = manifest::effective_vars(&ft.vars, &m);
+    let r = plan::run_update(&home, &m, &vars, &ft.brew.trust)?;
     if json {
         println!(
             "{}",
@@ -197,7 +199,8 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
     let home = discovery::find_home()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
-    let items = plan::run_drift(&home, &m, &ft.vars, &ft.ignore)?;
+    let vars = manifest::effective_vars(&ft.vars, &m);
+    let items = plan::run_drift(&home, &m, &vars, &ft.ignore)?;
     let out_of_sync = items.iter().filter(|f| !f.ok).count();
 
     if json {

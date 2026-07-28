@@ -70,6 +70,11 @@ pub struct Machine {
     /// machine's package set — the clean way to migrate an existing Brewfile.
     #[serde(default)]
     pub brewfile: Option<String>,
+    /// Per-machine template vars, merged OVER the global `[vars]` (so a Linux
+    /// box can override a Mac-valued `BREW_PREFIX`). Referenced as
+    /// `{{ var "NAME" }}` like the globals.
+    #[serde(default)]
+    pub vars: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -257,6 +262,20 @@ pub fn load_bundle(home: &Path, name: &str) -> Result<Bundle> {
     toml::from_str(&s).with_context(|| format!("parsing {}", p.display()))
 }
 
+/// A machine's effective template vars: the global `[vars]` overlaid by the
+/// machine's own `vars` (per-machine wins). Lets a Linux box override a
+/// Mac-valued `BREW_PREFIX` without a second global table.
+pub fn effective_vars(
+    global: &std::collections::BTreeMap<String, String>,
+    machine: &Machine,
+) -> std::collections::BTreeMap<String, String> {
+    let mut merged = global.clone();
+    for (k, v) in &machine.vars {
+        merged.insert(k.clone(), v.clone());
+    }
+    merged
+}
+
 /// Expand a leading `~/` against `$HOME`. Everything else is returned as-is.
 pub fn expand_tilde(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/") {
@@ -265,4 +284,41 @@ pub fn expand_tilde(p: &str) -> PathBuf {
         }
     }
     PathBuf::from(p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn machine_with_vars(vars: &[(&str, &str)]) -> Machine {
+        Machine {
+            name: "kira".into(),
+            os: "linux".into(),
+            role: None,
+            apps: vec![],
+            packages: vec![],
+            brewfile: None,
+            vars: vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        }
+    }
+
+    #[test]
+    fn per_machine_vars_override_global() {
+        let mut global = BTreeMap::new();
+        global.insert("BREW_PREFIX".to_string(), "/opt/homebrew".to_string());
+        global.insert("SHARED".to_string(), "keep".to_string());
+        let m = machine_with_vars(&[("BREW_PREFIX", "/home/linuxbrew/.linuxbrew")]);
+        let eff = effective_vars(&global, &m);
+        assert_eq!(eff["BREW_PREFIX"], "/home/linuxbrew/.linuxbrew"); // machine wins
+        assert_eq!(eff["SHARED"], "keep"); // global survives
+    }
+
+    #[test]
+    fn no_machine_vars_leaves_global_untouched() {
+        let mut global = BTreeMap::new();
+        global.insert("A".to_string(), "1".to_string());
+        let m = machine_with_vars(&[]);
+        assert_eq!(effective_vars(&global, &m), global);
+    }
 }

@@ -10,8 +10,8 @@ asset files they reference.
 ## `temper.toml`
 
 ```toml
-[vars]                      # optional: template variables, used by {{ var "X" }}
-BREW_PREFIX = "/opt/homebrew"
+[vars]                      # optional: GLOBAL template variables, {{ var "X" }}
+EDITOR = "hx"
 
 [ignore]                    # optional: installed pkgs drift/prune must not flag
 brew    = []
@@ -31,7 +31,16 @@ role     = "desktop"        # optional; "desktop" | "server"
 apps     = ["shell", "ssh"] # bundle names in apps/
 packages = ["cask \"raycast\""]  # optional loose Brewfile-grammar tokens
 brewfile = "brewfiles/chronos"   # optional; a Brewfile whose lines join the set
+
+[machine.vars]              # optional; per-machine vars, merged OVER [vars]
+BREW_PREFIX = "/home/linuxbrew/.linuxbrew"   # e.g. override a Mac-valued global
 ```
+
+Template vars resolve as global `[vars]` overlaid by a machine's own
+`[machine.vars]` (per-machine wins). For the common Homebrew-prefix split, prefer
+the live function `{{ brew_prefix }}` (§templating) over declaring `BREW_PREFIX`
+per machine — it resolves `brew --prefix` on the box, so one template works on
+both OSes.
 
 Effective package set for a machine = union(each app's `packages`(+`_mac`/
 `_linux`), the machine `packages`, and the machine `brewfile` lines) − `[ignore]`.
@@ -72,7 +81,7 @@ when explicitly invoked; `install` runs once (on install, not update).
 [[step]]
 copy     = "assets/x.conf"   # source, relative to the temper-home
 to       = "~/.config/x"     # target (single path; ~ expands)
-template = false             # true → substitute {{ var "X" }} / {{ which "x" }} / {{ env "X" }}
+template = false             # true → substitute {{ var "X" }} / {{ which "x" }} / {{ env "X" }} / {{ brew_prefix }}
 seed     = false             # true → create-once if absent, then hands-off, excluded from drift
 mode     = "0600"            # optional octal file mode
 

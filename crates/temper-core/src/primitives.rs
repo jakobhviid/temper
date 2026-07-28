@@ -154,6 +154,15 @@ fn render(input: &str, vars: &BTreeMap<String, String>) -> Result<String> {
 }
 
 fn eval_expr(expr: &str, vars: &BTreeMap<String, String>) -> Result<String> {
+    // Argless functions resolve live state: `{{ brew_prefix }}` is the ergonomic
+    // fix for the Mac/Linux Homebrew-prefix split (a byte-different value on each
+    // OS) — no per-machine `var` needed.
+    if !expr.contains(char::is_whitespace) {
+        return match expr {
+            "brew_prefix" => brew_prefix(),
+            other => bail!("unknown template function `{other}`"),
+        };
+    }
     let (func, arg) = split_call(expr)?;
     match func {
         "which" => which(&arg)
@@ -166,6 +175,20 @@ fn eval_expr(expr: &str, vars: &BTreeMap<String, String>) -> Result<String> {
             .ok_or_else(|| anyhow!("var: `{arg}` is not declared in [vars]")),
         other => bail!("unknown template function `{other}`"),
     }
+}
+
+/// `brew --prefix` (e.g. `/opt/homebrew` on Apple Silicon,
+/// `/home/linuxbrew/.linuxbrew` on Linux). Errors loudly if brew is absent, so a
+/// template that needs it fails visibly rather than rendering an empty path.
+fn brew_prefix() -> Result<String> {
+    let out = std::process::Command::new("brew")
+        .arg("--prefix")
+        .output()
+        .map_err(|_| anyhow!("brew_prefix: `brew` not found on PATH"))?;
+    if !out.status.success() {
+        bail!("brew_prefix: `brew --prefix` failed");
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// Parse `func "arg"` into (func, arg).
@@ -186,6 +209,34 @@ pub(crate) fn which(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&path)
         .map(|dir| dir.join(name))
         .find(|cand| cand.is_file())
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+
+    #[test]
+    fn brew_prefix_renders_when_brew_present() {
+        // Live check: only meaningful where brew exists (this dev/Bazzite box).
+        if which("brew").is_none() {
+            return;
+        }
+        let out = render("prefix={{ brew_prefix }}", &BTreeMap::new()).unwrap();
+        assert!(out.starts_with("prefix=/"), "got {out:?}");
+        assert!(!out.contains("{{"), "unrendered template: {out:?}");
+    }
+
+    #[test]
+    fn unknown_argless_function_errors() {
+        assert!(render("{{ bogus_fn }}", &BTreeMap::new()).is_err());
+    }
+
+    #[test]
+    fn var_still_works_alongside_argless() {
+        let mut vars = BTreeMap::new();
+        vars.insert("NAME".to_string(), "kira".to_string());
+        assert_eq!(render("hi {{ var \"NAME\" }}", &vars).unwrap(), "hi kira");
+    }
 }
 
 // --- block: ensure a marker-delimited region is present in a user file --------
