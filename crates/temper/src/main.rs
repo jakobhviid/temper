@@ -20,7 +20,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
-use temper_core::{discovery, journal, machine, manifest, plan, reconcile, ui};
+use temper_core::{discovery, git, journal, machine, manifest, plan, reconcile, ui};
 
 const REPO_URL: &str = "https://github.com/jakobhviid/temper";
 
@@ -150,11 +150,50 @@ enum Cmd {
     /// for the `speaker-eq` step. Folder-authoring — it writes into your config
     /// folder, not a machine.
     EqImport,
+    /// Commit (and push) spec changes to the git-backed home.
+    ///
+    /// `git add -A && commit && push` in your temper-home, so the folder doesn't
+    /// drift after a `reconcile`/`backup`/`eq-import` or a hand edit. The commit
+    /// message is generated from what changed unless you pass `-m`. Pulls
+    /// `--ff-only` before pushing. A no-op if the home isn't a git repo.
+    Save {
+        /// Commit message (default: auto-generated from the changed files).
+        #[arg(short, long)]
+        message: Option<String>,
+        /// Commit but don't push.
+        #[arg(long)]
+        no_push: bool,
+    },
+    /// Show or configure git automation for the home.
+    ///
+    /// With no subcommand: show whether the home is git, its branch/ahead-behind,
+    /// and the current `[git]` settings. `enable`/`disable` write `[git]` in
+    /// temper.toml so temper can auto-commit (and optionally push/pull) around
+    /// spec-writing verbs.
+    Git {
+        #[command(subcommand)]
+        action: Option<GitAction>,
+    },
     /// Print a shell completion script.
     Completions {
         /// The shell to generate for.
         shell: Shell,
     },
+}
+
+#[derive(Subcommand)]
+enum GitAction {
+    /// Turn on auto-commit after a spec-writing verb (optionally push/pull).
+    Enable {
+        /// Also push after each auto-commit and on `save`.
+        #[arg(long)]
+        push: bool,
+        /// Also `git pull --ff-only` before a run (warns if it can't).
+        #[arg(long)]
+        pull: bool,
+    },
+    /// Turn off all git automation (back to hint-only).
+    Disable,
 }
 
 fn main() -> ExitCode {
@@ -207,12 +246,141 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Reconcile { machine }) => cmd_reconcile(machine, json)?,
         Some(Cmd::Restore { machine, yes }) => cmd_restore(machine, yes, json)?,
         Some(Cmd::EqImport) => cmd_eq_import(json)?,
+        Some(Cmd::Save { message, no_push }) => cmd_save(message, no_push, json)?,
+        Some(Cmd::Git { action }) => cmd_git(action, json)?,
         Some(Cmd::Setup { dir }) => cmd_setup(dir, json)?,
     }
     Ok(())
 }
 
 /// Save a temper-home as the default (a saved pointer discovery reads).
+/// Find the temper-home, pulling `--ff-only` first when fleet `[git].auto_pull`
+/// is on (so a run works on the latest spec). A pull failure only warns.
+fn find_home_pulling() -> Result<std::path::PathBuf> {
+    let home = discovery::find_home()?;
+    if manifest::peek_auto_pull(&home) {
+        if let git::Pull::Warn(w) = git::pull_ff(&home) {
+            eprintln!("{} couldn't pull — working on a possibly-stale spec: {w}", ui::yellow("⚠"));
+        }
+    }
+    Ok(home)
+}
+
+/// After a spec-writing verb, either auto-commit (per `[git]`) or hint. A no-op
+/// on a non-git home. All output goes to stderr so `--json` stdout stays clean.
+fn after_repo_change(home: &std::path::Path, gc: &manifest::GitConfig, auto_msg: &str) {
+    if !git::is_repo(home) {
+        return; // dormant on a non-git folder
+    }
+    if gc.auto_commit {
+        match git::save(home, auto_msg, gc.auto_push) {
+            Ok(r) => {
+                if r.committed {
+                    eprintln!("{} committed: {}", ui::green("✓"), r.message);
+                }
+                if r.pushed {
+                    eprintln!("{} pushed", ui::green("✓"));
+                }
+                if let Some(w) = r.warning {
+                    eprintln!("{} {w}", ui::yellow("⚠"));
+                }
+            }
+            Err(e) => eprintln!("{} auto-commit failed: {e:#}", ui::yellow("⚠")),
+        }
+    } else if gc.remind && git::is_dirty(home) {
+        let name = home
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| home.display().to_string());
+        eprintln!(
+            "{} {name} has uncommitted spec changes — {} to commit + push (or edit + commit yourself).",
+            ui::cyan("ⓘ"),
+            ui::bold("temper save")
+        );
+    }
+}
+
+/// Commit (and push) the home's pending spec changes.
+fn cmd_save(message: Option<String>, no_push: bool, json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    if !git::is_repo(&home) {
+        if json {
+            println!("{}", serde_json::json!({ "saved": false, "reason": "not a git repo" }));
+            return Ok(());
+        }
+        anyhow::bail!("{} is not a git repo — nothing to save", home.display());
+    }
+    let msg = message.unwrap_or_else(|| git::message_from_changes(&home));
+    let r = git::save(&home, &msg, !no_push)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "saved": r.committed, "pushed": r.pushed,
+                "message": r.message, "warning": r.warning
+            })
+        );
+    } else {
+        if r.committed {
+            println!("{} committed: {}", ui::green("✓"), r.message);
+        } else {
+            println!("nothing to commit — the folder is clean.");
+        }
+        if r.pushed {
+            println!("{} pushed", ui::green("✓"));
+        }
+        if let Some(w) = r.warning {
+            eprintln!("{} {w}", ui::yellow("⚠"));
+        }
+    }
+    Ok(())
+}
+
+/// Show or configure the home's git automation.
+fn cmd_git(action: Option<GitAction>, json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    match action {
+        None => {
+            let is_repo = git::is_repo(&home);
+            let ft = manifest::load_fleet(&home)?;
+            let gc = manifest::effective_git(&ft.git, &None);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "git_repo": is_repo,
+                        "status": is_repo.then(|| git::status_line(&home)),
+                        "remind": gc.remind, "auto_commit": gc.auto_commit,
+                        "auto_push": gc.auto_push, "auto_pull": gc.auto_pull
+                    })
+                );
+            } else if is_repo {
+                println!("{} {}", ui::bold("git:"), git::status_line(&home));
+                println!(
+                    "settings: remind={} auto_commit={} auto_push={} auto_pull={}",
+                    gc.remind, gc.auto_commit, gc.auto_push, gc.auto_pull
+                );
+            } else {
+                println!("{} not a git repo — git automation is dormant.", home.display());
+            }
+        }
+        Some(GitAction::Enable { push, pull }) => {
+            git::write_config(&home, true, true, push, pull)?;
+            println!(
+                "{} git automation enabled (auto_commit{}{})",
+                ui::green("✓"),
+                if push { " + push" } else { "" },
+                if pull { " + pull" } else { "" }
+            );
+        }
+        Some(GitAction::Disable) => {
+            git::write_config(&home, true, false, false, false)?;
+            println!("{} git automation disabled (hint-only)", ui::green("✓"));
+        }
+    }
+    Ok(())
+}
+
 fn cmd_setup(dir: Option<String>, json: bool) -> Result<()> {
     // Explicit path → save it directly (scriptable form).
     if let Some(d) = dir {
@@ -285,7 +453,7 @@ fn save_and_report(target: &std::path::Path, json: bool) -> Result<()> {
 
 /// Folder-authoring: fetch calibrated speaker profiles into the folder.
 fn cmd_eq_import(json: bool) -> Result<()> {
-    let home = discovery::find_home()?;
+    let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
     let cfg = ft.eq_import.ok_or_else(|| {
         anyhow::anyhow!(
@@ -301,11 +469,13 @@ fn cmd_eq_import(json: bool) -> Result<()> {
             println!("{} imported {}", ui::green("✓"), p);
         }
         println!(
-            "eq-import: {} profile(s) from {} → review + commit, then run the `speaker-eq` step.",
+            "eq-import: {} profile(s) from {} → review, then run the `speaker-eq` step.",
             paths.len(),
             cfg.repo
         );
     }
+    let gc = manifest::effective_git(&ft.git, &None);
+    after_repo_change(&home, &gc, &format!("eq-import: {} profile(s)", paths.len()));
     Ok(())
 }
 
@@ -316,7 +486,7 @@ fn cmd_install(
     yes: bool,
     json: bool,
 ) -> Result<()> {
-    let home = discovery::find_home()?;
+    let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
 
@@ -388,7 +558,7 @@ fn announce_skipped(skipped: &[String]) {
 }
 
 fn cmd_update(json: bool) -> Result<()> {
-    let home = discovery::find_home()?;
+    let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
     let vars = manifest::effective_vars(&ft.vars, &m);
@@ -413,7 +583,7 @@ fn cmd_update(json: bool) -> Result<()> {
 }
 
 fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
-    let home = discovery::find_home()?;
+    let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
     let vars = manifest::effective_vars(&ft.vars, &m);
@@ -560,7 +730,7 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
 }
 
 fn cmd_prune(dry_run: bool, json: bool) -> Result<()> {
-    let home = discovery::find_home()?;
+    let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
     let extras = plan::run_prune(&home, &m, &ft.ignore, dry_run)?;
@@ -588,7 +758,7 @@ fn cmd_prune(dry_run: bool, json: bool) -> Result<()> {
 }
 
 fn cmd_backup(machine: Option<String>, json: bool) -> Result<()> {
-    let home = discovery::find_home()?;
+    let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
     let r = plan::run_backup(&home, &m)?;
@@ -607,11 +777,14 @@ fn cmd_backup(machine: Option<String>, json: bool) -> Result<()> {
             println!("  dconf snapshot → {d}");
         }
     }
+    let gc = manifest::effective_git(&ft.git, &m.git);
+    let msg = format!("backup {}: Brewfile + {} dconf snapshot(s)", m.name, r.dconf.len());
+    after_repo_change(&home, &gc, &msg);
     Ok(())
 }
 
 fn cmd_adopt(json: bool) -> Result<()> {
-    let home = discovery::find_home()?;
+    let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
     let extras = plan::run_adopt(&home, &m, &ft.ignore)?;
@@ -640,7 +813,7 @@ fn cmd_adopt(json: bool) -> Result<()> {
 /// Interactive spec←machine reconcile. Under `--json` it previews the plan and
 /// prompts for nothing.
 fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
-    let home = discovery::find_home()?;
+    let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
     let plan = reconcile::plan(&home, &m, &ft.ignore)?;
@@ -751,13 +924,22 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
         chosen_drops.len(),
         chosen_ignores.len()
     );
+    let gc = manifest::effective_git(&ft.git, &m.git);
+    let msg = format!(
+        "reconcile {}: +{} -{} ~{}",
+        m.name,
+        chosen_adds.len(),
+        chosen_drops.len(),
+        chosen_ignores.len()
+    );
+    after_repo_change(&home, &gc, &msg);
     Ok(())
 }
 
 /// Load dconf snapshots back into live dconf. Confirm-gated (clobbers live
 /// desktop state); `--yes` or `--json` skips the prompt.
 fn cmd_restore(machine: Option<String>, yes: bool, json: bool) -> Result<()> {
-    let home = discovery::find_home()?;
+    let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
 

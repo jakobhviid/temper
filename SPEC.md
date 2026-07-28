@@ -28,6 +28,14 @@ trust = ["ublue-os/tap"]   # third-party taps to `brew trust` before converge/up
 repo = "https://github.com/…/pipewire-speaker-profiles"
 dest = "assets/speaker-eq"  # default; each <x>.calibrated.conf lands as <x>.conf
 
+[git]                       # optional; convenience for a GIT-backed home (no-op
+                            #   on a non-git folder). Toggle via `temper git enable/disable`.
+remind      = true          # hint after a repo-writing verb leaves the folder dirty
+auto_commit = false         # commit right after reconcile/backup/eq-import (auto message)
+auto_push   = false         # …and push
+auto_pull   = true          # `git pull --ff-only` before a run; warn (never abort) if it can't
+                            # A `[machine.git]` block wholly overrides this for that machine.
+
 [[machine]]
 name     = "chronos"        # required; resolved against `hostname -s`
 os       = "mac"            # required; "mac" | "linux"

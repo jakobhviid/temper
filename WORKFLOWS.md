@@ -177,6 +177,28 @@ This is folder-authoring: it writes *into* the folder, then you review + commit.
 
 ---
 
+## Save spec changes to git (so the folder doesn't drift)
+
+`reconcile`, `backup`, and `eq-import` — and any hand edit — change the
+temper-home *folder*, not a machine. If that folder is a git repo, temper helps
+you persist those changes so it doesn't silently drift:
+
+- After a repo-writing verb it **hints**:
+  `ⓘ steel has uncommitted spec changes — temper save …`.
+- **`temper save`** = `pull --ff-only → add -A → commit → push`, with an
+  auto-generated message (`reconcile chronos-redux: +2 -1 ~0`) unless you pass
+  `-m "…"`. `--no-push` to hold. Works after hand edits too (message from the
+  changed paths).
+- Prefer hands-off? **`temper git enable [--push] [--pull]`** writes `[git]` in
+  temper.toml so temper auto-commits (and optionally pushes, and pulls before a
+  run). `temper git` shows the current state; `temper git disable` reverts to
+  hint-only.
+- On a **non-git** folder (Nextcloud / USB / plain dir) all of this is a silent
+  no-op — syncing that folder is git/Nextcloud's job, not temper's (Principle #9).
+
+`auto_pull` (and `save`'s pre-push pull) keep you from committing onto a stale
+spec; if it can't pull (offline, diverged) it warns and continues — never blocks.
+
 ## Fleet: author once, run per-machine
 
 temper acts on the **machine it runs on**. The machine *argument* selects which

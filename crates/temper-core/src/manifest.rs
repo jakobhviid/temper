@@ -28,6 +28,10 @@ pub struct TemperToml {
     /// from and land them in the folder (RIS's `eq-import`).
     #[serde(default)]
     pub eq_import: Option<EqImport>,
+    /// Optional fleet-wide git convenience settings (persist temper's own writes
+    /// to a git home). A `[machine.git]` overrides this per machine.
+    #[serde(default)]
+    pub git: Option<GitConfig>,
 }
 
 /// `[eq_import]` — fetch calibrated speaker profiles into the folder (authoring,
@@ -45,6 +49,36 @@ pub struct EqImport {
 
 fn default_eq_dest() -> String {
     "assets/speaker-eq".to_string()
+}
+
+/// `[git]` settings — the optional convenience layer for persisting temper's own
+/// writes to a git-backed home. Everything here is a no-op on a non-git folder.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct GitConfig {
+    /// Hint (to stderr) after a repo-writing verb leaves the folder dirty.
+    #[serde(default = "default_true")]
+    pub remind: bool,
+    /// Commit automatically after a repo-writing verb (with an auto message).
+    #[serde(default)]
+    pub auto_commit: bool,
+    /// Also push after an auto-commit / on `save`.
+    #[serde(default)]
+    pub auto_push: bool,
+    /// `git pull --ff-only` the folder before a run (warn, never abort, if it
+    /// can't) so you work on the latest spec.
+    #[serde(default)]
+    pub auto_pull: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for GitConfig {
+    fn default() -> Self {
+        Self { remind: true, auto_commit: false, auto_push: false, auto_pull: false }
+    }
 }
 
 /// `[brew]` settings.
@@ -101,6 +135,10 @@ pub struct Machine {
     /// machine-scope GNOME/Ptyxis state RIS captured with gnome-backup/restore.
     #[serde(default)]
     pub dconf: Vec<DconfSnapshot>,
+    /// Per-machine git-convenience override (wholesale replaces the fleet
+    /// `[git]` for this machine — e.g. auto-push only from your main box).
+    #[serde(default)]
+    pub git: Option<GitConfig>,
 }
 
 /// One whole-subtree dconf snapshot (e.g. `/org/gnome/shell/`).
@@ -372,6 +410,27 @@ pub fn load_bundle(home: &Path, name: &str) -> Result<Bundle> {
     toml::from_str(&s).with_context(|| format!("parsing {}", p.display()))
 }
 
+/// A machine's effective git settings: a `[machine.git]` wholly overrides the
+/// fleet `[git]`; otherwise the fleet setting; otherwise defaults (remind on).
+pub fn effective_git(fleet: &Option<GitConfig>, machine: &Option<GitConfig>) -> GitConfig {
+    machine.clone().or_else(|| fleet.clone()).unwrap_or_default()
+}
+
+/// Cheap pre-load peek at fleet `[git].auto_pull` — read before the full,
+/// validated load so a pull can happen *before* any spec file is read. Any
+/// parse trouble → false (pull is opt-in; never let a peek error block a run).
+pub fn peek_auto_pull(home: &Path) -> bool {
+    std::fs::read_to_string(home.join("temper.toml"))
+        .ok()
+        .and_then(|s| s.parse::<toml::Value>().ok())
+        .and_then(|v| {
+            v.get("git")
+                .and_then(|g| g.get("auto_pull"))
+                .and_then(|b| b.as_bool())
+        })
+        .unwrap_or(false)
+}
+
 /// Whether an os/role-gated item should be **skipped** for this machine. A
 /// declared `os` that differs from the machine's os skips; a declared `role`
 /// that differs from the machine's declared role skips. An unset side never
@@ -422,6 +481,7 @@ mod tests {
             brewfile: None,
             vars: vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             dconf: vec![],
+            git: None,
         }
     }
 
@@ -454,6 +514,7 @@ mod tests {
             brewfile: None,
             vars: Default::default(),
             dconf: vec![],
+            git: None,
         }
     }
 

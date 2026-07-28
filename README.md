@@ -29,6 +29,9 @@ temper undo        # revert the last run
   machine's live state back into the spec (`temper reconcile`).
 - **Reversible.** Every file write (and every dconf key) is journaled; `temper
   undo` rolls back the last run, guarded so it never clobbers a since-changed file.
+- **Keeps the spec in git (if it is git).** Spec-side writes can auto-commit +
+  push a git-backed folder (`temper save`, or `temper git enable`), so it never
+  drifts — and it's a silent no-op on a Nextcloud/USB/plain folder.
 - **Gates on reality.** A config step runs only where its app is actually present
   (a presence probe), so one machine's app list can be generous without config
   landing where it shouldn't.

@@ -425,6 +425,7 @@ mod gating_tests {
             brewfile: None,
             vars: Default::default(),
             dconf: vec![],
+            git: None,
         }
     }
 
