@@ -7,7 +7,7 @@ parked, the current mitigation, and enough of a sketch to act on cold.
 
 This is planning — it is **not** embedded in `--llm`. *Current behavior*,
 including the limitations that are simply how temper works today
-(non-journaled `exec`/`setkey(defaults)`/`setkey(dconf)`, `profile` being a
+(non-journaled `exec`/`setkey(defaults)`/`sysfile`, `profile` being a
 manual install, `run = "ensure"` on a checkless `exec` being skipped), is
 documented as **behavior** in `SPEC.md` / `ARCHITECTURE.md` / the README status
 table — which *do* ride `--llm`. This file is only the "what's coming" ledger.
@@ -18,12 +18,15 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 
 ## Deferred features (buildable — just not built yet)
 
-### Journaled system-side `setkey` (maybe)
-Low-value polish, only if the need shows up: snapshot the prior `defaults read` /
-`dconf read` value so those `setkey` backends become undoable. (The
-comment-preserving toml half of this item is **done** — `setkey(toml)` now edits
-via `toml_edit`, keeping hand comments/formatting.) System-side `setkey` journaling
-is still "current behavior," not a bug.
+*(none open — the deferred batch has shipped: per-machine vars + `{{ brew_prefix }}`,
+bundle os/role gating, presence-gating `when`/`needs`, forgiving `mas`, the
+`sysfile` primitive, comment-preserving `setkey(toml)`, journaled+undoable
+`setkey(dconf)`, and discovery auto-scan + `temper use`.)*
+
+**Deliberately not journaled** (a decision, not a gap): `setkey(defaults)` —
+`defaults read` loses the value's type, so an undo couldn't rewrite it faithfully
+— and `sysfile`/`exec`, which mutate root-owned/arbitrary state. `setkey(dconf)`
+*is* journaled (values round-trip cleanly).
 
 ---
 

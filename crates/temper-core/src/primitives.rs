@@ -537,7 +537,7 @@ pub fn setkey_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
         "toml" => toml_apply(sk, journal),
         "ini" | "desktop" => ini_apply(sk, journal),
         "defaults" => defaults_apply(sk),
-        "dconf" => dconf_apply(sk),
+        "dconf" => dconf_apply(sk, journal),
         other => bail!("setkey backend `{other}` is not recognized"),
     }
 }
@@ -944,17 +944,23 @@ fn dconf_state(sk: &SetKey) -> Result<FileState> {
     })
 }
 
-fn dconf_apply(sk: &SetKey) -> Result<bool> {
+fn dconf_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
     if matches!(dconf_state(sk)?, FileState::InSync | FileState::Unavailable) {
         return Ok(false);
     }
+    // Snapshot the prior value BEFORE writing, so `undo` can restore it (or
+    // reset the key when it was previously unset). dconf values round-trip
+    // cleanly, unlike `defaults`, so this backend is journaled.
+    let before = dconf_read(&sk.key);
+    let after = gvariant(&sk.value);
     let status = std::process::Command::new("dconf")
-        .args(["write", &sk.key, &gvariant(&sk.value)])
+        .args(["write", &sk.key, &after])
         .status()
         .context("running dconf write")?;
     if !status.success() {
         bail!("dconf write {} failed", sk.key);
     }
+    journal.record_dconf(&sk.key, before, after);
     Ok(true)
 }
 

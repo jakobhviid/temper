@@ -126,13 +126,15 @@ app-bundles it wants. Drift at app scope is per-file / per-key / per-assertion.
 | `exec` | app | run a user-supplied script — the escape hatch (see "exec's contract") |
 
 Every primitive is **planned and drift-checked**. The **file-writing** ones
-(`copy`, `block`, `setkey` json/toml/ini) are also **journaled** for `undo`
-(the `plan.rs`/`apply.rs` shape from `dotsync`, the journal from `amdl`). The
-**system-side** backends — `setkey(defaults)`, `setkey(dconf)` — and `exec` are
-**not journaled** (they mutate a domain/dconf DB/arbitrary state, not a file we
-can snapshot), so `undo` can't revert them; they degrade to `unavailable` in
-drift when their tool is absent rather than aborting. "Platform-specific"
-describes *where* a primitive runs, not whether it's evaluated.
+(`copy`, `block`, `setkey` json/toml/ini) are **journaled** for `undo` (the
+`plan.rs`/`apply.rs` shape from `dotsync`, the journal from `amdl`), and so is
+**`setkey(dconf)`** — dconf values round-trip cleanly, so undo snapshots the
+prior value and restores it (or resets a previously-unset key). **`setkey
+(defaults)`**, `sysfile`, and `exec` stay **not journaled**: `defaults read`
+loses the value's type (an undo couldn't rewrite it faithfully), and `sysfile`/
+`exec` mutate root-owned/arbitrary state — so `undo` can't revert them. All the
+system-side backends degrade to `unavailable` in drift when their tool is absent
+rather than aborting.
 
 ### Dynamic (apply-time) values
 

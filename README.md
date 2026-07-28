@@ -65,8 +65,9 @@ dconf/`defaults` writes, and `gext`/`rpm-ostree` layering. The read-only paths
 (all of `drift`, package probing, `install --dry-run`) are verified against a
 real machine. Known
 limitations: `setkey` toml now preserves comments/formatting (toml_edit) —
-except the *changed* key's own inline comment; `defaults`/`dconf`
-writes aren't journaled; `profile` install is manual; presence-gating
+except the *changed* key's own inline comment; `setkey(dconf)` writes are now
+journaled/undoable, but `setkey(defaults)` isn't (type loss on read); `profile`
+install is manual; presence-gating
 (`when`/`needs`) is unbuilt (os/role gating only). Steps, asserts, **and
 bundle-level `extensions`/`rpm`** now os/role-gate (a server can't layer a
 desktop bundle's extensions/rpm even if it composes it).

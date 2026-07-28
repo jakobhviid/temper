@@ -42,6 +42,36 @@ pub fn state_root() -> PathBuf {
 enum Entry {
     Create { path: String, hash: String },
     Restore { path: String, before: String, after: String },
+    /// A `setkey(dconf)` write. `before` = prior `dconf read` (None if the key
+    /// was unset), `after` = the value temper wrote (the revert guard). Undo
+    /// re-writes `before`, or resets the key when it was previously unset.
+    DconfKey {
+        key: String,
+        before: Option<String>,
+        after: String,
+    },
+}
+
+fn dconf_read(key: &str) -> Option<String> {
+    let out = std::process::Command::new("dconf").args(["read", key]).output().ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !s.is_empty()).then_some(s)
+}
+
+fn dconf_write(key: &str, value: &str) -> bool {
+    std::process::Command::new("dconf")
+        .args(["write", key, value])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn dconf_reset(key: &str) -> bool {
+    std::process::Command::new("dconf")
+        .args(["reset", key])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -89,6 +119,15 @@ impl Journal {
             }
         }
         Ok(())
+    }
+
+    /// Record a `setkey(dconf)` write for undo (`before` = prior value or None).
+    pub fn record_dconf(&mut self, key: &str, before: Option<String>, after: String) {
+        self.entries.push(Entry::DconfKey {
+            key: key.to_string(),
+            before,
+            after,
+        });
     }
 
     fn store_object(&self, bytes: &[u8]) -> Result<String> {
@@ -182,9 +221,32 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
 
     let (mut reverted, mut skipped) = (0usize, 0usize);
     for entry in rf.entries.iter().rev() {
+        // dconf key entries guard on the live value, not a file hash.
+        if let Entry::DconfKey { key, before, after } = entry {
+            if dconf_read(key).as_deref() != Some(after.as_str()) {
+                skipped += 1; // changed since temper wrote it → don't clobber
+                continue;
+            }
+            if dry_run {
+                reverted += 1;
+                continue;
+            }
+            let done = match before {
+                Some(v) => dconf_write(key, v),
+                None => dconf_reset(key),
+            };
+            if done {
+                reverted += 1;
+            } else {
+                skipped += 1;
+            }
+            continue;
+        }
+
         let (path, expect_after) = match entry {
             Entry::Create { path, hash } => (path, hash),
             Entry::Restore { path, after, .. } => (path, after),
+            Entry::DconfKey { .. } => unreachable!(),
         };
         let p = PathBuf::from(path);
         let current = if p.is_file() { fs::read(&p).ok() } else { None };
@@ -206,6 +268,7 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
                     Err(_) => false,
                 }
             }
+            Entry::DconfKey { .. } => unreachable!(),
         };
         if done {
             reverted += 1;
