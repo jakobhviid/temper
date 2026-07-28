@@ -192,6 +192,22 @@ pub fn save(home: &Path, message: &str, push: bool) -> Result<SaveReport> {
     Ok(SaveReport { committed, pushed, message: message.to_string(), warning })
 }
 
+/// Build a commit message from the changed paths (for a `save` with no verb
+/// context / after hand edits): `spec update: a, b, c (+N more)`.
+pub fn message_from_changes(home: &Path) -> String {
+    let paths = changed_paths(home);
+    if paths.is_empty() {
+        return "temper: save spec".into();
+    }
+    let shown: Vec<&str> = paths.iter().take(3).map(String::as_str).collect();
+    let more = paths.len().saturating_sub(shown.len());
+    if more > 0 {
+        format!("spec update: {} (+{more} more)", shown.join(", "))
+    } else {
+        format!("spec update: {}", shown.join(", "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,21 +225,5 @@ mod tests {
         assert!(!is_repo(dir.path())); // a plain dir isn't a git repo
         assert!(!is_dirty(dir.path()));
         assert!(save(dir.path(), "x", false).is_err());
-    }
-}
-
-/// Build a commit message from the changed paths (for a `save` with no verb
-/// context / after hand edits): `spec update: a, b, c (+N more)`.
-pub fn message_from_changes(home: &Path) -> String {
-    let paths = changed_paths(home);
-    if paths.is_empty() {
-        return "temper: save spec".into();
-    }
-    let shown: Vec<&str> = paths.iter().take(3).map(String::as_str).collect();
-    let more = paths.len().saturating_sub(shown.len());
-    if more > 0 {
-        format!("spec update: {} (+{more} more)", shown.join(", "))
-    } else {
-        format!("spec update: {}", shown.join(", "))
     }
 }

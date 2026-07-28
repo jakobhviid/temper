@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TemperToml {
     #[serde(default)]
     pub machine: Vec<Machine>,
@@ -93,6 +94,7 @@ pub struct BrewConfig {
 
 /// Per-manager ignore lists (by the same short name drift matches on).
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Ignore {
     #[serde(default)]
     pub brew: Vec<String>,
@@ -364,23 +366,27 @@ pub struct Assert {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ContainsLine {
     pub file: String,
     pub line: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ModeCheck {
     pub path: String,
     pub mode: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct GroupCheck {
     pub group: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct JsonSemantic {
     /// The deployed file to check (on the machine).
     pub file: String,
@@ -535,5 +541,17 @@ mod tests {
         assert!(!gated(&None, &None, &server));
         // A role gate is lenient when the machine declares no role.
         assert!(!gated(&None, &role_d, &machine("linux", None)));
+    }
+
+    #[test]
+    fn unknown_fields_are_rejected() {
+        // The SPEC's headline guarantee: a typo names itself, never silently
+        // drops. Covers the root table, [ignore], and an assert sub-check.
+        assert!(toml::from_str::<TemperToml>("[ignore]\nflatpak = []\n").is_ok());
+        assert!(toml::from_str::<TemperToml>("bogus_table = 1\n").is_err());
+        assert!(toml::from_str::<Ignore>("flatpaks = []\n").is_err()); // typo'd sub-key
+        assert!(toml::from_str::<Ignore>("flatpak = []\n").is_ok());
+        assert!(toml::from_str::<ContainsLine>("file = \"x\"\nlyne = \"y\"\n").is_err());
+        assert!(toml::from_str::<ContainsLine>("file = \"x\"\nline = \"y\"\n").is_ok());
     }
 }

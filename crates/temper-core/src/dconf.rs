@@ -150,7 +150,7 @@ panel-1='x'
 clock-format='24h'
 ";
         // Strip the bookkeeping key and the whole per-monitor section.
-        let out = strip_dump(&dump.to_string(), &["last-selected".into(), "monitors/".into()]);
+        let out = strip_dump(dump, &["last-selected".into(), "monitors/".into()]);
         assert!(out.contains("enabled-extensions"), "kept real key: {out}");
         assert!(out.contains("clock-format"));
         assert!(!out.contains("last-selected"), "stripped bookkeeping: {out}");
@@ -162,7 +162,7 @@ clock-format='24h'
     #[test]
     fn no_strip_is_identity_ish() {
         let dump = "[/]\nkey='v'\n";
-        let out = strip_dump(&dump.to_string(), &[]);
+        let out = strip_dump(dump, &[]);
         assert!(out.contains("[/]") && out.contains("key='v'"));
     }
 }

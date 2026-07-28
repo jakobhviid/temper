@@ -74,7 +74,7 @@ or syncs it; that's git/Nextcloud/rsync's job.)
 The folder is a browsable tree of **real files** — a real Brewfile, a real
 `starship.toml`, a real dconf dump — plus one manifest that ties them together.
 The bar is "as readable as a Brewfile." The CLI carries the `amdl` house style:
-`--json` on every command, an `--llm` guide, `indicatif` progress bars,
+`--json` on every command, an `--llm` guide, a global `-v/--verbose`,
 journaled `undo`, human output to stdout / progress + errors to stderr.
 
 ---
@@ -152,7 +152,7 @@ rather than aborting.
 (`setkey` values are static — `{{ … }}` is not rendered there),
 not just from declared vars: `{{ which "ghostty" }}` (absolute path — GNOME's
 PATH excludes the brew prefix, so keybinding commands must be resolved on the
-box), `{{ sink match "…" }}` (the speaker-eq target sink). Drift on a dynamic
+box), plus `{{ env "…" }}`, `{{ var "…" }}`, and `{{ brew_prefix }}`. Drift on a dynamic
 value compares **semantically** (does the current value equal the re-resolved
 probe?), never byte-for-byte — a byte compare would report permanent false drift.
 

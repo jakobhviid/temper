@@ -64,7 +64,10 @@ per machine — it resolves `brew --prefix` on the box, so one template works on
 both OSes.
 
 Effective package set for a machine = union(each app's `packages`(+`_mac`/
-`_linux`), the machine `packages`, and the machine `brewfile` lines) − `[ignore]`.
+`_linux`), the machine `packages`, and the machine `brewfile` lines). `[ignore]`
+is **not** subtracted here — it only stops installed-but-undeclared packages from
+being flagged as extras by `drift`/`prune`. A package that is both declared and
+ignored is still installed (declaration wins).
 
 ## `apps/<name>.toml` (a bundle)
 
@@ -192,7 +195,7 @@ group   = "root"                              # drift compares content+mode+owne
 [[assert]] not_member = { group = "onepassword" }          # user NOT in group
 [[assert]] shell = "/bin/zsh"                              # login shell name (matches by basename: /usr/bin/zsh ok)
 [[assert]] json_semantic = { file = "~/deployed.json", against = "reference.json" }  # against: relative to the temper-home
-# each also accepts os = "mac"|"linux"
+# each also accepts os = "mac"|"linux" and role = "desktop"|"server" (skip on mismatch)
 ```
 
 ## Not in the schema (rejected by `deny_unknown_fields`)

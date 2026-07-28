@@ -1,10 +1,10 @@
-//! temper-core — the library behind the `fleet` CLI.
+//! temper-core — the library behind the `temper` CLI.
 //!
-//! `fleet` converges a machine to a declared spec kept in a folder of
+//! `temper` converges a machine to a declared spec kept in a folder of
 //! human-readable files (git / Nextcloud / USB — the tool doesn't manage the
 //! folder, only reads it). Every capability lives here as a reusable, typed
-//! function; the CLI is a thin `--json`-emitting layer with progress bars and
-//! an interactive plan/confirm gate on top.
+//! function; the CLI is a thin `--json`-emitting layer with an interactive
+//! plan/confirm gate on top.
 //!
 //! Design rules that hold across the crate (see ../../PRINCIPLES.md):
 //! - Closed primitive set; open app library. New primitive = big deal.
@@ -13,9 +13,8 @@
 //! - Gate config on reality (a presence probe), not intent.
 //! - Nothing is enforced without a drift story.
 //!
-//! Status: scaffold. Modules are declared to fix the architecture in code;
-//! their bodies are filled in incrementally as the ReinstallScripts migration
-//! proceeds (see ../../README.md build sequence).
+//! The ReinstallScripts migration this crate grew out of is complete: every
+//! module below is implemented and exercised end-to-end (see ../../README.md).
 
 pub mod discovery; // find the temper-home folder across any delivery backend
 pub mod manifest; // parse temper.toml + apps/*.toml (machines, apps, ignore)

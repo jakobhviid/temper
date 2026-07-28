@@ -92,6 +92,9 @@ enum Cmd {
         /// List what would be removed without removing anything.
         #[arg(long)]
         dry_run: bool,
+        /// Skip the confirmation prompt (removal is destructive; default asks).
+        #[arg(long)]
+        yes: bool,
     },
     /// Dump live package state (+ dconf snapshots) into the folder.
     ///
@@ -247,7 +250,7 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Update) => cmd_update(json, verbose)?,
         Some(Cmd::Drift { machine }) => cmd_drift(machine, json)?,
         Some(Cmd::Undo { run, list, dry_run }) => cmd_undo(run, list, dry_run, json)?,
-        Some(Cmd::Prune { dry_run }) => cmd_prune(dry_run, json)?,
+        Some(Cmd::Prune { dry_run, yes }) => cmd_prune(dry_run, yes, json)?,
         Some(Cmd::Backup { machine }) => cmd_backup(machine, json)?,
         Some(Cmd::Adopt) => cmd_adopt(json)?,
         Some(Cmd::Reconcile { machine }) => cmd_reconcile(machine, json)?,
@@ -737,31 +740,54 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
     }
 }
 
-fn cmd_prune(dry_run: bool, json: bool) -> Result<()> {
+fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
     let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
-    let extras = plan::run_prune(&home, &m, &ft.ignore, dry_run)?;
+    // Compute the plan WITHOUT removing anything, so we can preview + confirm.
+    let extras = plan::run_prune(&home, &m, &ft.ignore)?;
+
     if json {
+        // No tty to confirm on: JSON is a preview unless `--yes` explicitly opts
+        // into the (destructive) removal.
+        let removed = yes && !dry_run && !extras.is_empty();
+        if removed {
+            plan::commit_prune(&home, &m, &extras)?;
+        }
         let arr: Vec<_> = extras
             .iter()
             .map(|(mgr, name)| serde_json::json!({ "manager": mgr.as_str(), "name": name }))
             .collect();
         println!(
             "{}",
-            serde_json::json!({ "machine": m.name, "extras": arr, "dry_run": dry_run })
+            serde_json::json!({ "machine": m.name, "extras": arr, "removed": removed })
         );
-    } else {
-        for (mgr, name) in &extras {
-            println!("  - {} {}", mgr.as_str(), name);
-        }
-        let tail = if dry_run {
-            "(dry-run, nothing removed)"
-        } else {
-            "removed"
-        };
-        println!("prune {}: {} extra(s) {tail}", m.name, extras.len());
+        return Ok(());
     }
+
+    for (mgr, name) in &extras {
+        println!("  - {} {}", mgr.as_str(), name);
+    }
+    if extras.is_empty() {
+        println!("prune {}: nothing to remove.", m.name);
+        return Ok(());
+    }
+    if dry_run {
+        println!("prune {}: {} extra(s) (dry-run, nothing removed)", m.name, extras.len());
+        return Ok(());
+    }
+    // Removal is destructive (dependency-aware uninstall) — confirm first.
+    if !yes
+        && !prompt_no(&format!(
+            "remove {} extra(s) listed above? this uninstalls them",
+            extras.len()
+        ))
+    {
+        println!("aborted — nothing removed.");
+        return Ok(());
+    }
+    plan::commit_prune(&home, &m, &extras)?;
+    println!("prune {}: {} extra(s) removed", m.name, extras.len());
     Ok(())
 }
 

@@ -38,10 +38,11 @@ merges) so `exec`'s volume stays honest.
 
 Package drift is a **dependency-closure** computation, not set subtraction.
 Packages **compose at declaration time** (union of a machine's apps **+ its loose
-list − its ignore list**) but **converge at run time as one aggregate call** per
-manager. Nothing installed outside this model — except what the machine's
-**`[ignore]`** list explicitly exempts (OS-preinstalled flatpaks), which is how
-the "everything is traceable" rule survives contact with a real OS baseline.
+list**) but **converge at run time as one aggregate call** per manager. `[ignore]`
+is **not** subtracted from that set — a declared package is always installed; the
+list only stops installed-but-undeclared packages (the OS-preinstalled flatpak
+baseline) from being flagged as extras by `drift`/`prune`, which is how the
+"everything is traceable" rule survives contact with a real OS baseline.
 
 ## 5. Gate config on reality, not intent
 

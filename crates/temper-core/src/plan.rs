@@ -243,44 +243,6 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
     out
 }
 
-#[cfg(test)]
-mod remediation_tests {
-    use super::*;
-
-    fn f(kind: &'static str, ok: bool) -> Finding {
-        Finding { app: "a".into(), kind, target: "t".into(), ok, status: "s".into() }
-    }
-
-    #[test]
-    fn missing_and_extra_offer_both_directions() {
-        let items = vec![f("package", false), f("package-extra", false)];
-        let cmds: Vec<String> = remediations(&items).iter().map(|r| r.command.clone()).collect();
-        // Bare commands — no machine name (default resolves this host).
-        assert!(cmds.contains(&"temper install --packages-only".to_string())); // add missing
-        assert!(cmds.contains(&"temper prune".to_string())); // remove extras
-        assert!(cmds.contains(&"temper reconcile".to_string())); // absorb (surgical)
-        assert!(cmds.contains(&"temper backup".to_string())); // absorb (wholesale)
-        // never a machine name baked into a suggested command
-        assert!(!cmds.iter().any(|c| c.split_whitespace().count() > 3 && !c.contains("--")));
-    }
-
-    #[test]
-    fn config_drift_offers_reapply_and_undo() {
-        let items = vec![f("copy", false)];
-        let cmds: Vec<String> = remediations(&items).iter().map(|r| r.command.clone()).collect();
-        assert!(cmds.contains(&"temper install".to_string()));
-        assert!(cmds.contains(&"temper undo".to_string()));
-        // no package direction when only config drifted
-        assert!(!cmds.iter().any(|c| c.contains("prune") || c.contains("reconcile")));
-    }
-
-    #[test]
-    fn all_in_sync_yields_no_remediation() {
-        let items = vec![f("copy", true), f("package", true)];
-        assert!(remediations(&items).is_empty());
-    }
-}
-
 pub fn run_drift(
     home: &Path,
     machine: &Machine,
@@ -579,18 +541,29 @@ pub fn run_prune(
     home: &Path,
     machine: &Machine,
     ignore: &Ignore,
-    dry_run: bool,
 ) -> Result<Vec<(packages::Manager, String)>> {
     let effective = packages::effective_set(home, machine)?;
     if effective.is_empty() {
         return Ok(Vec::new());
     }
     let installed = providers::probe(&effective)?;
-    let extras = packages::extras(&effective, &installed, ignore);
-    if !dry_run && !extras.is_empty() {
-        providers::prune_apply(&effective, &extras)?;
+    Ok(packages::extras(&effective, &installed, ignore))
+}
+
+/// Apply a prune: uninstall `extras`. Destructive — the caller previews and
+/// confirms first (`run_prune` computes the plan without touching anything).
+/// Recomputes the effective set so `brew bundle cleanup` keeps a declared
+/// package's transitive deps. A no-op when `extras` is empty.
+pub fn commit_prune(
+    home: &Path,
+    machine: &Machine,
+    extras: &[(packages::Manager, String)],
+) -> Result<()> {
+    if extras.is_empty() {
+        return Ok(());
     }
-    Ok(extras)
+    let effective = packages::effective_set(home, machine)?;
+    providers::prune_apply(&effective, extras)
 }
 
 /// What a `backup` wrote: the dumped Brewfile + any filtered dconf snapshots.
@@ -718,4 +691,42 @@ pub fn run_update(
         reboot: false,
         skipped,
     })
+}
+
+#[cfg(test)]
+mod remediation_tests {
+    use super::*;
+
+    fn f(kind: &'static str, ok: bool) -> Finding {
+        Finding { app: "a".into(), kind, target: "t".into(), ok, status: "s".into() }
+    }
+
+    #[test]
+    fn missing_and_extra_offer_both_directions() {
+        let items = vec![f("package", false), f("package-extra", false)];
+        let cmds: Vec<String> = remediations(&items).iter().map(|r| r.command.clone()).collect();
+        // Bare commands — no machine name (default resolves this host).
+        assert!(cmds.contains(&"temper install --packages-only".to_string())); // add missing
+        assert!(cmds.contains(&"temper prune".to_string())); // remove extras
+        assert!(cmds.contains(&"temper reconcile".to_string())); // absorb (surgical)
+        assert!(cmds.contains(&"temper backup".to_string())); // absorb (wholesale)
+        // never a machine name baked into a suggested command
+        assert!(!cmds.iter().any(|c| c.split_whitespace().count() > 3 && !c.contains("--")));
+    }
+
+    #[test]
+    fn config_drift_offers_reapply_and_undo() {
+        let items = vec![f("copy", false)];
+        let cmds: Vec<String> = remediations(&items).iter().map(|r| r.command.clone()).collect();
+        assert!(cmds.contains(&"temper install".to_string()));
+        assert!(cmds.contains(&"temper undo".to_string()));
+        // no package direction when only config drifted
+        assert!(!cmds.iter().any(|c| c.contains("prune") || c.contains("reconcile")));
+    }
+
+    #[test]
+    fn all_in_sync_yields_no_remediation() {
+        let items = vec![f("copy", true), f("package", true)];
+        assert!(remediations(&items).is_empty());
+    }
 }

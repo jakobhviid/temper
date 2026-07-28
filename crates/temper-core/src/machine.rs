@@ -4,9 +4,8 @@
 //! `current_machine_name`: `hostname`, lowercased, domain suffix stripped),
 //! with an explicit override and a single-machine fallback.
 //!
-//! Role (desktop | server) will be DERIVED from a `gnome-shell` probe rather
-//! than trusted from the manifest (a server can't look like a desktop, so the
-//! misdetection failure mode is safe). Not needed for the copy vertical.
+//! Role (desktop | server) is read from the manifest and validated at load; it
+//! gates OS/role-scoped bundles and steps.
 
 use anyhow::{anyhow, bail, Result};
 

@@ -1,6 +1,7 @@
 //! The closed set of config primitives (app-scope). Each implements the shared
-//! plan → apply → drift → undo contract. Live now: `copy` (verbatim, template,
-//! seed, mode). Next: `block`, `setkey`, `profile`, `exec`.
+//! plan → apply → drift → undo contract: `copy` (verbatim, template, seed,
+//! mode), `block`, `setkey` (json/toml/ini/defaults/dconf), `exec`, `profile`,
+//! and `sysfile`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -418,7 +419,21 @@ fn json_set(root: &mut Json, parts: &[&str], value: Json, append: bool) -> Resul
     json_set(child, &parts[1..], value, append)
 }
 
+/// `append` (array-union) is implemented only for the structured json/toml
+/// backends. On ini/defaults/dconf it would be a silent no-op, so reject it
+/// loudly instead (Principle #6 — no silent skips).
+fn ensure_append_supported(sk: &SetKey) -> Result<()> {
+    if sk.append && !matches!(sk.backend.as_str(), "json" | "toml") {
+        bail!(
+            "setkey `append = true` is only supported on the json/toml backends, not `{}`",
+            sk.backend
+        );
+    }
+    Ok(())
+}
+
 pub fn setkey_state(sk: &SetKey) -> Result<FileState> {
+    ensure_append_supported(sk)?;
     match sk.backend.as_str() {
         "json" => json_state(sk),
         "toml" => toml_state(sk),
@@ -549,6 +564,7 @@ pub fn exec_state(check: Option<&Path>, opts: &ExecOpts) -> Result<(bool, String
 }
 
 pub fn setkey_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
+    ensure_append_supported(sk)?;
     match sk.backend.as_str() {
         "json" => json_apply(sk, journal),
         "toml" => toml_apply(sk, journal),
@@ -1209,5 +1225,33 @@ mod profile_tests {
         // Content changed → needs re-apply.
         fs::write(&prof, b"<plist>v2</plist>").unwrap();
         assert!(profile_needs_apply(&state, &prof).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod append_guard_tests {
+    use super::*;
+
+    fn sk(backend: &str, append: bool) -> SetKey {
+        SetKey {
+            backend: backend.into(),
+            file: Some("/tmp/x".into()),
+            key: "a.b".into(),
+            value: toml::Value::String("v".into()),
+            append,
+        }
+    }
+
+    #[test]
+    fn append_only_allowed_on_json_and_toml() {
+        // Supported backends accept it …
+        assert!(ensure_append_supported(&sk("json", true)).is_ok());
+        assert!(ensure_append_supported(&sk("toml", true)).is_ok());
+        // … the others reject it loudly rather than silently ignoring it.
+        assert!(ensure_append_supported(&sk("ini", true)).is_err());
+        assert!(ensure_append_supported(&sk("defaults", true)).is_err());
+        assert!(ensure_append_supported(&sk("dconf", true)).is_err());
+        // append = false is fine everywhere.
+        assert!(ensure_append_supported(&sk("dconf", false)).is_ok());
     }
 }
