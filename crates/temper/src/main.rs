@@ -633,24 +633,32 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Write the Brewfile (drops first, then adds).
+    // Write the Brewfile + [ignore] edits THROUGH the journal, so `temper undo`
+    // can revert a reconcile (it edits real folder files, so it's journalable).
+    let mut jrnl = journal::Journal::begin();
     let new_bf = reconcile::brewfile_with_adds(
         &reconcile::brewfile_without(&original, &chosen_drops),
         &chosen_adds,
     );
     if new_bf != original {
+        jrnl.record_write(&bf_path, Some(original.as_bytes()), new_bf.as_bytes())?;
         std::fs::write(&bf_path, &new_bf)
             .map_err(|e| anyhow::anyhow!("writing {}: {e}", bf_path.display()))?;
     }
-    // Write [ignore] additions (comment-preserving).
+    // [ignore] additions (comment-preserving).
     if !chosen_ignores.is_empty() {
         let tt_path = home.join("temper.toml");
-        let mut tt = std::fs::read_to_string(&tt_path)?;
+        let before_tt = std::fs::read_to_string(&tt_path)?;
+        let mut tt = before_tt.clone();
         for name in &chosen_ignores {
             tt = reconcile::append_ignore(&tt, "flatpak", name)?;
         }
-        std::fs::write(&tt_path, tt)?;
+        if tt != before_tt {
+            jrnl.record_write(&tt_path, Some(before_tt.as_bytes()), tt.as_bytes())?;
+            std::fs::write(&tt_path, tt)?;
+        }
     }
+    jrnl.commit()?;
     println!(
         "{} reconcile {}: {} added, {} dropped, {} ignored.",
         ui::green("✓"),
