@@ -123,7 +123,7 @@ setkey = { backend = "json", file = "~/.claude/settings.json", key = "env.X", va
 
 # exec: run a user script (the escape hatch)
 [[step]]
-exec    = "assets/setup.sh"  # runs via sh, cwd = temper-home, with TEMPER_HOME/MACHINE/OS
+exec    = "assets/setup.sh"  # runs via sh AS YOU (not root); cwd = temper-home; env TEMPER_HOME/MACHINE/OS
 check   = "assets/check.sh"  # optional drift-hook: exit 0 = in sync; gates re-run
 sudo    = false              # deprecated no-op — escalate inside the script with sudo per-command
 secrets = ["ACOUSTID_KEY"]   # env vars that must be set; passed through (loud error if missing)
