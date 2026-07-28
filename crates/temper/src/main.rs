@@ -90,8 +90,9 @@ enum Cmd {
     },
     /// Dump live package state (+ dconf snapshots) into the folder.
     ///
-    /// `brew bundle dump` → machines/<name>/Brewfile, plus each declared
-    /// `[[machine.dconf]]` snapshot (filtered). Spec←machine, wholesale.
+    /// `brew bundle dump` → the machine's own `brewfile` (the file it reads;
+    /// falls back to machines/<name>/Brewfile if none), plus each declared
+    /// `[[machine.dconf]]` snapshot (filtered). Spec←machine, wholesale, journaled.
     Backup {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,

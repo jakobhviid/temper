@@ -15,6 +15,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 
+use crate::journal::Journal;
 use crate::manifest::Machine;
 use crate::primitives::which;
 
@@ -69,9 +70,10 @@ pub fn strip_dump(dump: &str, strip: &[String]) -> String {
     out
 }
 
-/// Dump each of the machine's dconf snapshots (filtered) to its file. Returns
-/// the written paths. No-op (empty) where `dconf` is absent.
-pub fn backup(home: &Path, machine: &Machine) -> Result<Vec<PathBuf>> {
+/// Dump each of the machine's dconf snapshots (filtered) to its file, journaled
+/// so `undo` reverts them. Returns the written paths. No-op where `dconf` is
+/// absent.
+pub fn backup(home: &Path, machine: &Machine, journal: &mut Journal) -> Result<Vec<PathBuf>> {
     if machine.dconf.is_empty() || which("dconf").is_none() {
         return Ok(Vec::new());
     }
@@ -89,7 +91,9 @@ pub fn backup(home: &Path, machine: &Machine) -> Result<Vec<PathBuf>> {
         if let Some(p) = dest.parent() {
             fs::create_dir_all(p).with_context(|| format!("creating {}", p.display()))?;
         }
-        fs::write(&dest, filtered).with_context(|| format!("writing {}", dest.display()))?;
+        let before = fs::read(&dest).ok();
+        fs::write(&dest, &filtered).with_context(|| format!("writing {}", dest.display()))?;
+        journal.record_write(&dest, before.as_deref(), filtered.as_bytes())?;
         written.push(dest);
     }
     Ok(written)

@@ -602,9 +602,25 @@ pub struct BackupReport {
 /// declared dconf snapshot (filtered) into its file. dconf is a no-op where the
 /// tool is absent (a Mac) or the machine declares none.
 pub fn run_backup(home: &Path, machine: &Machine) -> Result<BackupReport> {
-    let brewfile = providers::dump(home, &machine.name)?;
-    let dconf = crate::dconf::backup(home, machine)?;
-    Ok(BackupReport { brewfile, dconf })
+    // Dump into the machine's OWN brewfile (the file it actually reads), so a
+    // backup feeds back into the spec; fall back to machines/<name>/Brewfile if
+    // the machine declares no brewfile.
+    let bf_rel = machine
+        .brewfile
+        .clone()
+        .unwrap_or_else(|| format!("machines/{}/Brewfile", machine.name));
+    let dest = home.join(&bf_rel);
+    let before = std::fs::read(&dest).ok();
+    providers::dump_to(&dest)?;
+    let after = std::fs::read(&dest)
+        .map_err(|e| anyhow::anyhow!("reading dumped {}: {e}", dest.display()))?;
+
+    // Journal the writes so `undo` reverts a backup.
+    let mut journal = Journal::begin();
+    journal.record_write(&dest, before.as_deref(), &after)?;
+    let dconf = crate::dconf::backup(home, machine, &mut journal)?;
+    journal.commit()?;
+    Ok(BackupReport { brewfile: dest, dconf })
 }
 
 /// Restore: load each declared dconf snapshot back into live dconf. The CLI

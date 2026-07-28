@@ -13,7 +13,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
@@ -113,6 +113,44 @@ pub fn mas_names() -> std::collections::BTreeMap<String, String> {
         }
     }
     out
+}
+
+/// Resolve a brew short name to its `(manager, fully-qualified token name)` via
+/// `brew info`. A **tap** formula/cask resolves to its `user/tap/name` — crucial
+/// for `reconcile`: a bare short token (e.g. `brew "sesh"`) may not match the
+/// installed tap formula in `brew bundle cleanup`, so it stays "undeclared" and
+/// is re-offered forever. `None` if brew can't resolve it (fall back to short).
+pub fn brew_identity(name: &str) -> Option<(Manager, String)> {
+    if !have("brew") {
+        return None;
+    }
+    let out = Command::new("brew")
+        .args(["info", "--json=v2", name])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    if let Some(t) = v
+        .get("casks")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|c| c.get("full_token"))
+        .and_then(|t| t.as_str())
+    {
+        return Some((Manager::Cask, t.to_string()));
+    }
+    if let Some(t) = v
+        .get("formulae")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|f| f.get("full_name"))
+        .and_then(|t| t.as_str())
+    {
+        return Some((Manager::Brew, t.to_string()));
+    }
+    None
 }
 
 /// Converge the effective set (install-missing; never removes). brew-family
@@ -274,22 +312,25 @@ pub fn prune_apply(effective: &[Pkg], extras: &[(Manager, String)]) -> Result<()
 
 /// Dump live package state into the folder at `machines/<name>/Brewfile` via
 /// `brew bundle dump`. Returns the written path. VM-verified.
-pub fn dump(home: &Path, machine: &str) -> Result<PathBuf> {
+/// `brew bundle dump --force` to `dest` (creating parent dirs). The caller
+/// picks `dest` — for `backup` that's the machine's own `brewfile` so the dump
+/// lands in the file the machine actually reads.
+pub fn dump_to(dest: &Path) -> Result<()> {
     if !have("brew") {
         bail!("brew not found — cannot dump package state");
     }
-    let dir = home.join("machines").join(machine);
-    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let bf = dir.join("Brewfile");
+    if let Some(p) = dest.parent() {
+        fs::create_dir_all(p).with_context(|| format!("creating {}", p.display()))?;
+    }
     let status = Command::new("brew")
         .args(["bundle", "dump", "--force", "--no-vscode", "--file"])
-        .arg(&bf)
+        .arg(dest)
         .status()
         .context("running brew bundle dump")?;
     if !status.success() {
         bail!("brew bundle dump failed");
     }
-    Ok(bf)
+    Ok(())
 }
 
 // --- gext: GNOME extensions (Linux desktop) -----------------------------------

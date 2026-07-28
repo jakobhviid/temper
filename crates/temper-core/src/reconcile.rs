@@ -102,12 +102,16 @@ pub fn plan(home: &Path, machine: &Machine, ignore: &manifest::Ignore) -> Result
         }
     }
     for name in providers::brew_extras(&effective, ignore)? {
-        let m = classify_brew(&name, &installed);
+        // Resolve the FULLY-QUALIFIED token (tap formulae → user/tap/name) so the
+        // add round-trips; a bare short token can be re-offered forever. Fall back
+        // to a classified short name if brew can't resolve it.
+        let (m, full) = providers::brew_identity(&name)
+            .unwrap_or_else(|| (classify_brew(&name, &installed), name.clone()));
         adds.push(AddItem {
             manager: m,
-            token: token_for(m, &name),
+            token: token_for(m, &full),
             is_flatpak: false,
-            name,
+            name: full,
         });
     }
     adds.sort_by(|a, b| a.token.cmp(&b.token));

@@ -307,7 +307,8 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
 - **`prune`** — remove installed-but-not-declared (dependency-aware, honoring the
   ignore/baseline list).
 - **`backup [machine]`** — dump live package state into the folder
-  (`brew bundle dump` → `machines/<name>/Brewfile`), plus each declared
+  (`brew bundle dump` → the machine's own `brewfile`, the file it reads; else
+  `machines/<name>/Brewfile`), plus each declared
   `[[machine.dconf]]` snapshot dumped through its strip-keys filter to its file.
 - **`restore [machine]`** — load the machine's dconf snapshot(s) back into live
   dconf (confirm-gated, `--yes` to skip). Clobbers live desktop tweaks, so it is
@@ -372,7 +373,7 @@ The recommended shape (app-first recipes, real files under `assets/`):
     starship.toml  ghostty.config  gnome/shell.<machine>.dconf  …
   brewfiles/             optional per-machine Brewfiles (a machine's `brewfile = "brewfiles/<name>"`)
     <machine>
-  machines/              `temper backup` writes machines/<name>/Brewfile here
+  machines/              `temper backup` fallback dump dir (when a machine has no `brewfile`)
   secrets/               git-ignored; consumed by exec/setkey steps that declare them
 ```
 
