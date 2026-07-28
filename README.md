@@ -1,10 +1,14 @@
 # temper
 
-> **Early design — no code yet.** `temper` will converge a machine to a declared
-> spec kept in a folder of human-readable files (git, Nextcloud, a USB disk —
-> the tool doesn't care how the folder arrives). It generalizes the private
-> `ReinstallScripts` bash into one open, manifest-driven CLI, in the same
-> Rust-on-a-shared-tap pattern as [`grove`], [`amdl`], and [`dotsync`].
+> **Built and released** — every verb is live (on `jakobhviid/homebrew-tap`,
+> beside [`grove`], [`amdl`], [`dotsync`]). `temper` converges a machine to a
+> declared spec kept in a folder of human-readable files (git, Nextcloud, a USB
+> disk — the tool doesn't care how the folder arrives). It generalizes the
+> private `ReinstallScripts` bash into one open, manifest-driven CLI. Read-only
+> paths (drift, dry-run, package probing) are verified against a real machine;
+> the live-write platform paths still await a VM run and the ReinstallScripts
+> migration hasn't started — see **Status** below, and `ROADMAP.md` for the
+> workflow/HMI parity gaps still open against RIS.
 
 ## Where the design lives
 

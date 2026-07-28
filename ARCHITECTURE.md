@@ -20,6 +20,16 @@ temper-private glue, duplicated byte-for-byte across platforms, and inseparable
 from Jakob's own machines. `temper` extracts the *engine* into one open tool and
 leaves the *data* in a private folder anyone can bring.
 
+> **ReinstallScripts is the acceptance spec.** It is proven on Jakob's live
+> fleet, so *it* — not this document — is the authority on **what temper must
+> do**. Every RIS recipe must have a temper equivalent: a binary verb, or, only
+> where a genuine constraint forbids a verb (the bootstrap paradox), a companion
+> script that delivers the same result. Where these docs describe behavior that
+> disagrees with a working RIS recipe, treat the **doc as the bug** — correct the
+> doc (or temper) to match RIS, never dismiss the RIS behavior. "temper does it
+> differently on purpose" is only legitimate once the difference is proven at
+> least as good on a real machine; until then, RIS wins.
+
 ### The core split: engine vs data
 
 - **The engine is the tool.** Public, on the Homebrew tap
@@ -289,8 +299,10 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
   is designed but not yet built — see the status table.)*
 - **`adopt`** — report installed extras not in the spec (advisory / non-mutating
   today) so you can add each to a bundle, the machine loose list, or `[ignore]`.
-  *(Interactive spec←machine capture — dotsync's verb — is the target shape.)*
-  There is no machine←spec `reconcile` verb — that *is* `install`/`update`.
+  *(Interactive spec←machine capture — dotsync's verb, and exactly what
+  ReinstallScripts' `reconcile` does — is the target shape; see ROADMAP.md.)*
+  Converging the other way, machine←spec, *is* `install`/`update` — that's why
+  no separate verb is needed for it.
 - **`undo [run]`** — revert a run — the one named by its id, else the newest;
   **`undo --list`** enumerates revertible runs (read-only). amdl's
   content-addressed journal: after-hash-guarded reverts skip-and-report (a file
@@ -298,17 +310,29 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
 
 ---
 
-## What stays out of temper
+## Delivered outside the temper *binary* (still replicated — not refused)
 
-- **Bootstrap** — brew + temper onto a bare machine runs *before* the tap exists
-  (the paradox). Stays a small shell script (`install-bazzite.sh`'s bootstrap
-  tier + the `curl | sh` fallback). Phase-1 image work (cosign key, `policy.json`
-  JSON-merge, signed `rpm-ostree rebase`, reboot) stays there too.
+RIS-parity is the goal, so nothing RIS does is dropped. A few RIS jobs are
+delivered by something other than a temper *verb* — because of a genuine
+constraint, not a scope preference. RIS itself delivers these outside its `just`
+recipes too (a `bootstrap.sh`, an image tier), so this is parity, not a gap.
+
+- **Bootstrap** — getting brew + temper onto a bare machine runs *before* the tap
+  (and thus temper) exists — the paradox. It stays a small companion shell script
+  (`install-bazzite.sh`'s bootstrap tier + the `curl | sh` fallback), exactly as
+  RIS bootstraps with `bootstrap.sh`. Phase-1 image work (cosign key,
+  `policy.json` JSON-merge, signed `rpm-ostree rebase`, reboot) rides there too.
 - **Image-side system layer** — the OS image bakes browsers, CLI baseline, brave
-  policy, etc. temper configures a machine; it does not build the image.
-- **Folder-authoring tools** — `eq-import` (clone an upstream repo *into* the
-  folder) is authoring, not machine-converge; like `grove`, it's a separate
-  concern, not a temper verb.
+  policy, etc. Building the image is a different *artifact* (the Stacks repo), the
+  same split RIS draws with `install-bazzite.sh`. temper *configures* a machine on
+  top of that image; drift still reports image-baked items status-only.
+- **`eq-import` — folder-authoring, but still replicated.** RIS's `eq-import`
+  clones the public speaker-profile repo *into* the folder. That writes to the
+  config folder (authoring) rather than converging a machine, which brushes
+  Principle #9 — so the open question is its **shape** (a clearly-labelled
+  authoring verb, or a companion helper), **not whether temper delivers it**. It
+  is a working RIS recipe, so it is on the roadmap to replicate (see ROADMAP.md),
+  not carved out.
 
 ---
 

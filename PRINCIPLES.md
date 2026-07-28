@@ -83,13 +83,25 @@ its config folder with `git` or any sync client — it operates on *a folder wit
 manifest*, however that folder arrived. (An `exec` step may still shell out to
 `git`/`curl` for a specific job — that's work, not folder management.)
 
-## 10. Know what stays out
+## 10. Replicate all of ReinstallScripts; know the two things that are genuinely elsewhere
 
-Bootstrap (the paradox: it runs before the tap exists), the image-side system
-layer, and folder-authoring tools (`eq-import`) are **not** temper's job.
-Resisting scope creep here is a principle, not an omission. The one refinement:
-a *live* system layering that is neither image nor bootstrap (`rpm-ostree` of
-proton-vpn) *is* in scope, as a converge provider that emits a reboot signal.
+ReinstallScripts is the proven acceptance spec — **every RIS recipe gets a temper
+equivalent**, and "temper does it differently on purpose" is only legitimate once
+the difference is proven at least as good on a real machine. Exactly two RIS jobs
+live *outside* the temper binary, for a real reason, not a scope preference — and
+both are still delivered:
+
+- **Bootstrap** — runs *before* the tap (and temper) exists (the paradox), so it
+  stays a companion script, exactly as RIS uses `bootstrap.sh`.
+- **Building the host image** — a different *artifact*, being spun out to its own
+  repo (Stacks). temper *configures* a machine on top of that image; it never
+  builds one. A *live* layering that is neither image nor bootstrap (`rpm-ostree`
+  of proton-vpn) *is* in scope, as a converge provider that emits a reboot signal.
+
+Everything else RIS does is temper's job — including `eq-import`. It writes *into*
+the folder (authoring, brushing #9), so the open question is its **shape** (an
+authoring verb or a companion helper), not *whether* temper delivers it. Scope
+discipline means not growing *past* RIS, never dropping a proven RIS recipe.
 
 ---
 
