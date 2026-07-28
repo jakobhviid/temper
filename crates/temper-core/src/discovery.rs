@@ -39,14 +39,28 @@ pub fn find_home() -> Result<PathBuf> {
             return Ok(p);
         }
     }
-    // 4. Auto-scan common locations (git checkout / cloud folder / USB).
-    if let Some(p) = auto_scan() {
-        return Ok(p);
+    // 4. Auto-scan common locations (git checkout / cloud folder / USB). One
+    //    match → use it; several → refuse and let the user choose (a fleet may
+    //    have more than one library — never silently guess).
+    let candidates = scan_candidates();
+    match candidates.len() {
+        0 => bail!(
+            "no temper.toml found — run `temper setup`, set TEMPER_DIR, or run \
+             inside your temper folder"
+        ),
+        1 => Ok(candidates.into_iter().next().expect("len==1")),
+        _ => {
+            let list = candidates
+                .iter()
+                .map(|p| format!("  {}", p.display()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            bail!(
+                "found several temper-homes — run `temper setup` to choose one \
+                 (or set TEMPER_DIR):\n{list}"
+            )
+        }
     }
-    bail!(
-        "no temper.toml found — set TEMPER_DIR, run inside your temper folder, \
-         or `temper use <dir>` to save its location"
-    )
 }
 
 /// The saved-pointer file (`$XDG_CONFIG_HOME/temper/home`, else `~/.config/…`).
@@ -78,10 +92,14 @@ pub fn save_pointer(dir: &Path) -> Result<PathBuf> {
     Ok(p)
 }
 
-/// First common location that contains a `temper.toml`. Covers a git checkout, a
-/// synced cloud folder, or a mounted disk — the ways a folder tends to arrive.
-fn auto_scan() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+/// Every common location that contains a `temper.toml` (a git checkout, a synced
+/// cloud folder, a mounted disk — the ways a folder tends to arrive), in a stable
+/// order and de-duplicated. `setup` builds its picker from this; `find_home` uses
+/// it to auto-resolve a lone match and refuse an ambiguous several.
+pub fn scan_candidates() -> Vec<PathBuf> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
     let names = ["steel", "temper-home", ".temper"];
     let roots = [
         home.clone(),
@@ -92,15 +110,16 @@ fn auto_scan() -> Option<PathBuf> {
         PathBuf::from("/media"),
         PathBuf::from("/run/media").join(std::env::var("USER").unwrap_or_default()),
     ];
+    let mut out = Vec::new();
     for root in roots {
         for name in names {
             let cand = root.join(name);
-            if has_manifest(&cand) {
-                return Some(cand);
+            if has_manifest(&cand) && !out.contains(&cand) {
+                out.push(cand);
             }
         }
     }
-    None
+    out
 }
 
 #[cfg(test)]

@@ -13,6 +13,7 @@
 //! converge await a Mac / a fuller run.
 
 use std::io;
+use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use anyhow::Result;
@@ -118,10 +119,13 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Save a temper-home location as your default (a pointer in
-    /// `$XDG_CONFIG_HOME/temper/home`), so `temper` finds it from anywhere.
-    Use {
-        /// The folder to remember (default: the current directory).
+    /// Provision this machine's temper-home: pick from discovered libraries (or
+    /// paste a path) and save it as the default pointer
+    /// (`$XDG_CONFIG_HOME/temper/home`), so temper finds it from anywhere. Omit
+    /// the dir to choose interactively.
+    #[command(alias = "use")]
+    Setup {
+        /// The temper-home to use. Omit to auto-discover and pick.
         dir: Option<String>,
     },
     /// Pull calibrated speaker profiles from the configured repo into the folder
@@ -185,18 +189,71 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Reconcile { machine }) => cmd_reconcile(machine, json)?,
         Some(Cmd::Restore { machine, yes }) => cmd_restore(machine, yes, json)?,
         Some(Cmd::EqImport) => cmd_eq_import(json)?,
-        Some(Cmd::Use { dir }) => cmd_use(dir, json)?,
+        Some(Cmd::Setup { dir }) => cmd_setup(dir, json)?,
     }
     Ok(())
 }
 
 /// Save a temper-home as the default (a saved pointer discovery reads).
-fn cmd_use(dir: Option<String>, json: bool) -> Result<()> {
-    let target = match dir {
-        Some(d) => std::path::PathBuf::from(d),
-        None => std::env::current_dir()?,
+fn cmd_setup(dir: Option<String>, json: bool) -> Result<()> {
+    // Explicit path → save it directly (scriptable form).
+    if let Some(d) = dir {
+        return save_and_report(&manifest::expand_tilde(&d), json);
+    }
+
+    let candidates = discovery::scan_candidates();
+
+    // Non-interactive (piped/`--json`) can't prompt: report candidates for `--json`,
+    // otherwise tell the user to pass a path.
+    if json {
+        let arr: Vec<_> = candidates.iter().map(|p| p.display().to_string()).collect();
+        println!("{}", serde_json::json!({ "candidates": arr }));
+        return Ok(());
+    }
+    if !io::stdin().is_terminal() {
+        let found = if candidates.is_empty() {
+            "none discovered".to_string()
+        } else {
+            candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+        };
+        anyhow::bail!("not a terminal — run `temper setup <dir>` with an explicit path ({found})");
+    }
+
+    // Interactive picker.
+    println!("{}", ui::bold("Set up temper — choose your temper-home:"));
+    for (i, c) in candidates.iter().enumerate() {
+        println!("  {}) {}", ui::cyan(&format!("{}", i + 1)), c.display());
+    }
+    println!("  {}) paste a path", ui::cyan("p"));
+    println!("  {}) cancel", ui::cyan("q"));
+    print!("> ");
+    let reply = read_reply();
+
+    let chosen = if reply.is_empty() || reply == "q" {
+        println!("cancelled — nothing changed.");
+        return Ok(());
+    } else if reply == "p" {
+        print!("path> ");
+        let p = read_line_raw();
+        if p.is_empty() {
+            println!("cancelled — nothing changed.");
+            return Ok(());
+        }
+        manifest::expand_tilde(&p)
+    } else if let Ok(n) = reply.parse::<usize>() {
+        match candidates.get(n.wrapping_sub(1)) {
+            Some(p) => p.clone(),
+            None => anyhow::bail!("no candidate {n} (pick 1..{})", candidates.len()),
+        }
+    } else {
+        anyhow::bail!("unrecognized choice `{reply}` — pick a number, `p`, or `q`");
     };
-    let pointer = discovery::save_pointer(&target)?;
+    save_and_report(&chosen, json)
+}
+
+/// Save the chosen temper-home as the pointer and report it.
+fn save_and_report(target: &std::path::Path, json: bool) -> Result<()> {
+    let pointer = discovery::save_pointer(target)?;
     if json {
         println!(
             "{}",
@@ -730,6 +787,16 @@ fn read_reply() -> String {
     let mut s = String::new();
     let _ = io::stdin().read_line(&mut s);
     s.trim().to_lowercase()
+}
+
+/// Like `read_reply` but case-preserving — for pasted paths, which are
+/// case-sensitive and must not be lowercased.
+fn read_line_raw() -> String {
+    use std::io::Write;
+    let _ = io::stdout().flush();
+    let mut s = String::new();
+    let _ = io::stdin().read_line(&mut s);
+    s.trim().to_string()
 }
 
 /// `[Y/n]` — default yes.

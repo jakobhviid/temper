@@ -21,7 +21,7 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 *(none open — the deferred batch has shipped: per-machine vars + `{{ brew_prefix }}`,
 bundle os/role gating, presence-gating `when`/`needs`, forgiving `mas`, the
 `sysfile` primitive, comment-preserving `setkey(toml)`, journaled+undoable
-`setkey(dconf)`, and discovery auto-scan + `temper use`.)*
+`setkey(dconf)`, and discovery auto-scan + `temper setup`.)*
 
 **Deliberately not journaled** (a decision, not a gap): `setkey(defaults)` —
 `defaults read` loses the value's type, so an undo couldn't rewrite it faithfully

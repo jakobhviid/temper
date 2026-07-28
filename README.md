@@ -72,7 +72,7 @@ copy = "assets/starship.toml"
 to   = "~/.config/starship.toml"
 ```
 
-Then, from inside the folder (or after `temper use <dir>` records where it lives):
+Then, from inside the folder (or after `temper setup <dir>` records where it lives):
 
 ```sh
 temper drift              # what's out of sync — reads only

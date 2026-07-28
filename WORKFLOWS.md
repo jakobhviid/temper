@@ -33,7 +33,7 @@ what `drift`'s Next steps print.
 (bootstrap is out of scope — a separate script).
 
 ```sh
-temper use ~/steel   # once: record where the folder is (optional)
+temper setup ~/steel   # once: record where the folder is (optional)
 temper install       # full converge: packages + all config + one-time setup
 temper restore       # Linux desktop only: load the dconf snapshot back
 ```
@@ -46,14 +46,17 @@ live tweaks). *(RIS: `bootstrap.sh` → `just install` → `just gnome-restore`.
 
 **How temper finds the folder (why it "just knows where steel is").** temper
 resolves its home in this order, first hit wins: `$TEMPER_DIR` → walk up from the
-cwd → a saved pointer (`temper use <dir>`) → **auto-scan** a folder named
+cwd → a saved pointer (`temper setup <dir>`) → **auto-scan** a folder named
 `steel`/`temper-home`/`.temper` under `~`, `~/Developer`, `~/Nextcloud`,
 `~/Dropbox`, `~/Library/CloudStorage`, `/media`, or `/run/media/$USER`. So on a
 fresh box you have three no-fuss options: clone/sync your folder to one of those
 locations (e.g. `~/Developer/steel`) and it's found automatically; or run
-`temper use ~/path/to/steel` once to record a pointer; or export `TEMPER_DIR`.
-temper only *locates* the folder — getting it onto the box (git clone, a synced
-cloud folder, a USB copy) is not temper's job.
+`temper setup` — with no argument it lists the discovered libraries and lets you
+pick one (or paste a path), saving the pointer; `temper setup <dir>` sets one
+directly. Or export `TEMPER_DIR`. If several libraries are found and none is
+pinned, temper refuses to guess and tells you to run `temper setup`. temper only
+*locates* the folder — getting it onto the box (git clone, a synced cloud folder,
+a USB copy) is not temper's job.
 
 ## 2. Stay current (routine maintenance)
 
@@ -180,7 +183,7 @@ temper acts on the **machine it runs on**. The machine *argument* selects which
 **spec** to read; execution is always local. So the fleet model is:
 
 - **Author centrally.** Edit this one folder; it travels to each machine by
-  git/Nextcloud/USB. On each box, `temper use <dir>` records where it lives.
+  git/Nextcloud/USB. On each box, `temper setup <dir>` records where it lives.
 - **Run per-machine, no argument.** On a machine, `temper install` / `update` /
   `drift` with **no machine name** resolves *this* machine by hostname. Drive
   remotes over ssh — `ssh atlas 'cd ~/steel && temper drift'` — so atlas resolves

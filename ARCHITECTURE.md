@@ -58,14 +58,14 @@ Folder discovery (built, `discovery.rs`) — first hit wins:
 
 1. **`$TEMPER_DIR`** — explicit override.
 2. **Walk up from the cwd** — you're inside the folder (or a subdir of it).
-3. **A saved pointer** — `temper use <dir>` writes `$XDG_CONFIG_HOME/temper/home`.
+3. **A saved pointer** — `temper setup <dir>` writes `$XDG_CONFIG_HOME/temper/home`.
 4. **Auto-scan** — a directory named `steel`, `temper-home`, or `.temper` under
    any of: `~`, `~/Developer`, `~/Nextcloud`, `~/Dropbox`,
    `~/Library/CloudStorage`, `/media`, `/run/media/$USER`.
 
 So a folder cloned/synced to e.g. `~/steel` or `~/Developer/steel` is found with
 **no configuration** — that's why machines "just know where steel is." A fresh
-box with none of these errors with a message telling you to `temper use <dir>`
+box with none of these errors with a message telling you to `temper setup <dir>`
 or set `$TEMPER_DIR`. (Discovery only *locates* the folder — temper never clones
 or syncs it; that's git/Nextcloud/rsync's job.)
 
@@ -378,5 +378,5 @@ The recommended shape (app-first recipes, real files under `assets/`):
 
 Get the folder onto a box however you like, then let temper find it (§discovery:
 drop it at a scanned location like `~/steel` or `~/Developer/steel`, or run
-`temper use <dir>`). See `SPEC.md` for the schema of each file, `WORKFLOWS.md`
+`temper setup <dir>`). See `SPEC.md` for the schema of each file, `WORKFLOWS.md`
 for the day-to-day loops, and `PRINCIPLES.md` for the guardrails.
