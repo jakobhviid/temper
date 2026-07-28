@@ -4,15 +4,21 @@ The day-to-day loops, not the schema. `SPEC.md` is *what you write*; this is
 *what you run* and when. Compiled into `--llm` so an agent can operate a temper
 folder, not just author one.
 
-> **Status: inferred from ReinstallScripts + the verb set, pending Jakob's
-> confirmation of his actual habits.** RIS is the proven workflow source; each
-> loop below maps a RIS recipe (or pair) onto temper's verbs. Where a cadence is
-> a guess it says so — treat those as proposals.
+> **Status: confirmed against Jakob's habits** (cadence, absorb-direction, fleet
+> model, restore) and grounded in ReinstallScripts. Each loop maps a RIS recipe
+> onto temper's verbs.
 
 The mental model: a machine has a **declared spec** (the folder) and a **live
 state**. Every loop either converges the machine toward the spec
 (**machine→spec**) or absorbs the machine's reality into the spec
 (**spec←machine**). `drift` shows the gap and names both directions.
+
+**How Jakob works it (the short version):** `drift` is the hub — run it, read the
+**Next steps**, run the command it names. Absorbing an ad-hoc change goes through
+`reconcile` (per-item), not a wholesale `backup`. The fleet is **authored in one
+place** (this folder, in git) and **run per-machine** (locally, or over ssh — see
+§Fleet). `restore` is used both when bringing a desktop back up *and* mid-life to
+snap GNOME/Ptyxis back to the known-good snapshot.
 
 ---
 
@@ -89,24 +95,27 @@ temper install [machine] --packages-only
 ## 5. Absorb ad-hoc changes back into the spec
 
 **When:** you installed/changed something directly on the machine and want the
-spec to reflect it (spec←machine).
+spec to reflect it (spec←machine). **The default habit is `reconcile`** — it's
+per-item and surgical, so nothing lands in the spec without you saying so.
 
 ```sh
-temper adopt                 # advisory: list installed-but-undeclared extras
-temper reconcile [machine]   # interactive: add extras / drop missing entries /
-                             #   route a flatpak extra to [ignore]
-temper backup [machine]      # or wholesale: dump live package state → Brewfile
+temper reconcile [machine]   # the go-to: interactively add extras / drop missing
+                             #   entries / route a flatpak extra to [ignore]
+temper adopt                 # optional first look: just list the extras, mutate nothing
+temper backup [machine]      # rarely: wholesale dump of live state → Brewfile
 ```
 
-`adopt` only reports; `reconcile` is the surgical, per-item capture (missing
-entries default to keep, extras default to skip; flatpak extras also offer
-"ignore"); `backup` overwrites. `reconcile` edits only the machine's **own**
-Brewfile, never a shared bundle.
+`reconcile` prompts per item (missing entries default to keep, extras default to
+skip; flatpak extras also offer "ignore") and edits only the machine's **own**
+Brewfile, never a shared bundle — so it's safe to run often. `adopt` is the
+read-only preview; `backup` is the blunt "just capture everything" fallback when
+you'd rather diff-then-trim than answer prompts.
 
 ## 6. Capture / restore desktop (GNOME + Ptyxis) state
 
 **When:** you tuned the desktop and want it in the spec, or you're resetting a
-machine to the snapshot.
+machine to the snapshot — both on a fresh bring-up **and** mid-life when live
+GNOME/Ptyxis state has drifted and you want it back to known-good.
 
 ```sh
 temper backup [machine]      # also writes each [[machine.dconf]] snapshot (filtered)
@@ -115,7 +124,9 @@ temper restore [machine]     # load the snapshot(s) back into live dconf (confir
 
 `backup`'s dconf dump runs through the `strip` filter (bookkeeping + per-monitor
 keys that would corrupt a round-trip). `restore` is confirm-gated and never part
-of `update`. *(RIS: `gnome-backup`/`gnome-restore`, `ptyxis-backup`/`-restore`.)*
+of `update` (so a routine `update` never clobbers live tweaks) — it's a
+deliberate, on-demand reset. *(RIS: `gnome-backup`/`gnome-restore`,
+`ptyxis-backup`/`-restore`.)*
 
 ## 7. Undo a run
 
@@ -146,6 +157,24 @@ This is folder-authoring: it writes *into* the folder, then you review + commit.
 *(RIS: `just eq-import`.)*
 
 ---
+
+## Fleet: author once, run per-machine
+
+temper acts on the **machine it runs on**. The machine *argument* selects which
+**spec** to read; execution is always local. So the fleet model is:
+
+- **Author centrally.** Edit this one folder; it travels to each machine by
+  git/Nextcloud/USB. On each box, `temper use <dir>` records where it lives.
+- **Run per-machine, no argument.** On a machine, `temper install` / `update` /
+  `drift` with **no machine name** resolves *this* machine by hostname. Drive
+  remotes over ssh — `ssh atlas 'cd ~/steel && temper drift'` — so atlas resolves
+  and converges *itself*.
+- **The machine argument is for preview from elsewhere, not remote converge.**
+  `temper drift atlas` on another box checks *this* box's live state against
+  *atlas's* spec (useful while authoring). But a live `temper install atlas` run
+  somewhere else either refuses (OS differs) or would apply atlas's spec to the
+  **current** machine (same OS) — so never converge a remote by name; ssh in and
+  run it there.
 
 ## Presence-gating in practice (why config "just works" per machine)
 
