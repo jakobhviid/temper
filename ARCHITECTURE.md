@@ -333,13 +333,12 @@ recipes too (a `bootstrap.sh`, an image tier), so this is parity, not a gap.
   policy, etc. Building the image is a different *artifact* (the Stacks repo), the
   same split RIS draws with `install-bazzite.sh`. temper *configures* a machine on
   top of that image; drift still reports image-baked items status-only.
-- **`eq-import` — folder-authoring, but still replicated.** RIS's `eq-import`
-  clones the public speaker-profile repo *into* the folder. That writes to the
-  config folder (authoring) rather than converging a machine, which brushes
-  Principle #9 — so the open question is its **shape** (a clearly-labelled
-  authoring verb, or a companion helper), **not whether temper delivers it**. It
-  is a working RIS recipe, so it is on the roadmap to replicate (see ROADMAP.md),
-  not carved out.
+- **`eq-import` — folder-authoring, and built.** The `eq-import` verb shallow-
+  clones the configured `[eq_import].repo` and lands each `<x>.calibrated.conf`
+  as `<dest>/<x>.conf`. It writes *into* the config folder (authoring) rather
+  than converging a machine — the one clearly-labelled Principle-#9 exception —
+  so it lives as its own verb, not a converge step. Was a working RIS recipe;
+  now replicated, not carved out.
 
 ---
 

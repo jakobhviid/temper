@@ -28,5 +28,6 @@ pub mod plan; // build a plan, then apply it (dry-run first)
 pub mod reconcile; // interactive spec←machine capture (adds/drops to the Brewfile)
 pub mod dconf; // whole-desktop dconf snapshots: backup (filtered) + restore
 pub mod probe; // presence probes for when/needs step gating
+pub mod eq_import; // folder-authoring: pull calibrated speaker profiles into the folder
 pub mod journal; // content-addressed, after-hash-guarded undo (amdl model)
 pub mod ui; // stdout/stderr discipline + progress bars

@@ -110,6 +110,10 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Pull calibrated speaker profiles from the configured repo into the folder
+    /// (`[eq_import]` in temper.toml), ready for the `speaker-eq` step. This is
+    /// folder-authoring — it writes into your config folder, not a machine.
+    EqImport,
     /// Print a shell completion script.
     Completions {
         /// The shell to generate for.
@@ -166,6 +170,33 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Adopt) => cmd_adopt(json)?,
         Some(Cmd::Reconcile { machine }) => cmd_reconcile(machine, json)?,
         Some(Cmd::Restore { machine, yes }) => cmd_restore(machine, yes, json)?,
+        Some(Cmd::EqImport) => cmd_eq_import(json)?,
+    }
+    Ok(())
+}
+
+/// Folder-authoring: fetch calibrated speaker profiles into the folder.
+fn cmd_eq_import(json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    let ft = manifest::load_fleet(&home)?;
+    let cfg = ft.eq_import.ok_or_else(|| {
+        anyhow::anyhow!(
+            "no [eq_import] in temper.toml — add `repo = \"...\"` (and optional `dest`) to import"
+        )
+    })?;
+    let written = temper_core::eq_import::run(&home, &cfg)?;
+    let paths: Vec<String> = written.iter().map(|p| p.display().to_string()).collect();
+    if json {
+        println!("{}", serde_json::json!({ "repo": cfg.repo, "imported": paths }));
+    } else {
+        for p in &paths {
+            println!("{} imported {}", ui::green("✓"), p);
+        }
+        println!(
+            "eq-import: {} profile(s) from {} → review + commit, then run the `speaker-eq` step.",
+            paths.len(),
+            cfg.repo
+        );
     }
     Ok(())
 }

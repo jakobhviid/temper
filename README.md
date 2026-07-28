@@ -51,6 +51,7 @@
 | `install --packages-only` (additive "install-missing" — packages, no config) | ✅ | ✅ live (brew) |
 | `reconcile` (interactive spec←machine: add/drop Brewfile entries, flatpak→[ignore]) | ✅ | ✅ live drop + `--json` preview |
 | dconf snapshot `backup` (filtered) + `restore` (confirm-gated) | ✅ | ✅ **live round-trip on Bazzite** |
+| `eq-import` (fetch calibrated speaker profiles into the folder) | ✅ | ✅ live clone/scan/cleanup |
 | providers: **gext** / **rpm-ostree** | ✅ | — (Linux/VM) |
 | `profile` (macOS .mobileconfig) | ✅ | — (manual/System Settings) |
 | discovery (auto-scan cloud folders) beyond `$TEMPER_DIR` + cwd walk-up | ⏳ | — |

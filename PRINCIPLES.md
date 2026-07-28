@@ -98,10 +98,10 @@ both are still delivered:
   builds one. A *live* layering that is neither image nor bootstrap (`rpm-ostree`
   of proton-vpn) *is* in scope, as a converge provider that emits a reboot signal.
 
-Everything else RIS does is temper's job — including `eq-import`. It writes *into*
-the folder (authoring, brushing #9), so the open question is its **shape** (an
-authoring verb or a companion helper), not *whether* temper delivers it. Scope
-discipline means not growing *past* RIS, never dropping a proven RIS recipe.
+Everything else RIS does is temper's job — including `eq-import`, now built as
+its own verb (it writes *into* the folder — authoring, the one labelled #9
+exception). Scope discipline means not growing *past* RIS, never dropping a
+proven RIS recipe.
 
 ---
 

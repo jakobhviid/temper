@@ -47,27 +47,14 @@ change → drift → decide direction → run the named command — that Reinsta
 emits *at the moment of detection*. Surfaced by comparing temper against the RIS
 `just` recipes and by LLM + human review.
 
-**Shipped:** the reviewer-flagged batch is now built — `drift` renders grouped,
+**All shipped.** The reviewer-flagged batch is built — `drift` renders grouped,
 coloured output with a **"Next steps"** summary that names both directions out of
 the drift with exact commands (`plan::remediations`; the RIS four-branch package
 fork + a config `install`/`undo` line, also in `--json`); `reconcile` is the
-interactive spec←machine verb; `install --packages-only` is install-missing.
-What remains below is the dconf snapshot/restore pair and `eq-import`.
-
-### `eq-import` — pull calibrated profiles into the folder
-**Status:** deferred, **to replicate** (it's a working RIS recipe, so it's in).
-RIS `eq-import` (`Linux/justfile:1091-1110`) clones-or-`git pull --ff-only`s the
-public `pipewire-speaker-profiles` repo and copies each `*.calibrated.conf` into
-`assets/speaker-eq/<base>.conf`, ready for the `speaker-eq` step to apply.
-**Now:** no equivalent — the profiles must be fetched and copied by hand.
-**Wrinkle (its shape, not whether):** unlike every other verb it writes *into* the
-config folder (authoring) rather than converging a machine, brushing Principle #9.
-That decides whether it's a clearly-labelled authoring verb or a companion helper
-— it does **not** make it out of scope (that framing was wrong and is corrected in
-ARCHITECTURE/PRINCIPLES).
-**Sketch:** an `import` (or `eq-import`) verb/helper that `--ff-only`-fetches the
-upstream repo, lands the `*.calibrated.conf` files under `assets/speaker-eq/`,
-reports each file, and points at the `speaker-eq` step to apply them.
+interactive spec←machine verb; `install --packages-only` is install-missing; the
+filtered dconf snapshot `backup` + confirm-gated `restore` pair is built; and
+`eq-import` pulls calibrated speaker profiles into the folder (folder-authoring,
+the labelled Principle-#9 exception).
 
 ---
 

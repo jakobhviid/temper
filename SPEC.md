@@ -24,6 +24,10 @@ tap     = []
 [brew]                      # optional
 trust = ["ublue-os/tap"]   # third-party taps to `brew trust` before converge/upgrade
 
+[eq_import]                 # optional; `temper eq-import` fetches speaker profiles
+repo = "https://github.com/…/pipewire-speaker-profiles"
+dest = "assets/speaker-eq"  # default; each <x>.calibrated.conf lands as <x>.conf
+
 [[machine]]
 name     = "chronos"        # required; resolved against `hostname -s`
 os       = "mac"            # required; "mac" | "linux"

@@ -24,6 +24,27 @@ pub struct TemperToml {
     /// brew-specific settings.
     #[serde(default)]
     pub brew: BrewConfig,
+    /// Optional `eq-import` config: where to pull calibrated speaker profiles
+    /// from and land them in the folder (RIS's `eq-import`).
+    #[serde(default)]
+    pub eq_import: Option<EqImport>,
+}
+
+/// `[eq_import]` — fetch calibrated speaker profiles into the folder (authoring,
+/// not machine-converge; see ROADMAP/PRINCIPLES).
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct EqImport {
+    /// Upstream git repo of `*.calibrated.conf` profiles (shallow-cloned).
+    pub repo: String,
+    /// Destination dir in the folder (relative); each `<x>.calibrated.conf`
+    /// lands as `<x>.conf`. Defaults to `assets/speaker-eq`.
+    #[serde(default = "default_eq_dest")]
+    pub dest: String,
+}
+
+fn default_eq_dest() -> String {
+    "assets/speaker-eq".to_string()
 }
 
 /// `[brew]` settings.
