@@ -138,6 +138,8 @@ setkey = { backend = "ini",      file = "~/.local/share/x.desktop",  key = "Desk
 setkey = { backend = "defaults", file = "com.apple.dock",            key = "autohide",           value = true }        # macOS
 [[step]]
 setkey = { backend = "dconf",    key = "/org/gnome/desktop/interface/color-scheme", value = "prefer-dark" }             # Linux; NO file
+[[step]]  # template = true → render {{ … }} in the value at apply time (any backend)
+setkey = { backend = "json", file = "~/.config/x.json", key = "bin", value = "{{ which \"ghostty\" }}", template = true }
 #
 #   backend: "json" | "toml" | "ini" (a.k.a. ".desktop") | "defaults" (macOS) | "dconf" (Linux)
 #   file:    REQUIRED for json/toml/ini (target file) and defaults (a domain like
