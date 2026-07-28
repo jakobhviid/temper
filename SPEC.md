@@ -144,13 +144,21 @@ setkey = { backend = "dconf",    key = "/org/gnome/desktop/interface/color-schem
 #            "com.apple.dock", or a plist path). OMIT for dconf — the key is the path.
 #   key:     json/toml → dotted path ("ui.theme"); ini → "Section.Key"; defaults →
 #            the key name; dconf → the ABSOLUTE dconf path ("/org/.../color-scheme").
-#   value:   STATIC scalar/array — {{ … }} is NOT rendered here. Write a NATIVE TOML
+#   value:   scalar/array (a table too, on json/toml). {{ … }} is literal here
+#            unless `template = true` (below). Write a NATIVE TOML
 #            value (string/int/bool/array); temper renders it for the backend. For
 #            dconf, DO NOT pre-quote: value = "prefer-dark" becomes GVariant
 #            'prefer-dark'; value = true → true; value = 42 → 42; value = ["a","b"]
 #            → ['a','b']. (GVariant types beyond scalar/string-array — uint32,
 #            tuples — aren't rendered; use `exec` for those.)
 #   append:  true → list-union into an array-valued key (json/toml only).
+#   template: true → render {{ which "x" }} / {{ brew_prefix }} / {{ env "X" }} /
+#            {{ var "X" }} in the value's string leaves at apply time (like copy's
+#            `template`; works on ALL backends). Default false. Drift re-renders +
+#            compares, so a resolved path is not permanent false drift. Render
+#            errors if a probe can't resolve — pair with a `when` gate when the
+#            target may be absent. Use for a value temper must resolve per-machine,
+#            e.g. a dconf keybinding command = "{{ which \"1password\" }}".
 #
 #   File backends CREATE the file + parent dirs if absent (drift shows `missing`
 #   until first apply); json/toml refuse a file whose root isn't an object/table.

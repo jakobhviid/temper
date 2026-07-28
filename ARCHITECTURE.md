@@ -148,13 +148,15 @@ rather than aborting.
 
 ### Dynamic (apply-time) values
 
-`template` (`copy`) values may be **resolved from live state at apply time**
-(`setkey` values are static — `{{ … }}` is not rendered there),
-not just from declared vars: `{{ which "ghostty" }}` (absolute path — GNOME's
-PATH excludes the brew prefix, so keybinding commands must be resolved on the
-box), plus `{{ env "…" }}`, `{{ var "…" }}`, and `{{ brew_prefix }}`. Drift on a dynamic
-value compares **semantically** (does the current value equal the re-resolved
-probe?), never byte-for-byte — a byte compare would report permanent false drift.
+`template` (`copy`) and `setkey` (opt-in `template = true`) values may be
+**resolved from live state at apply time**, not just from declared vars:
+`{{ which "ghostty" }}` (absolute path — GNOME's PATH excludes the brew prefix,
+so keybinding commands must be resolved on the box), plus `{{ env "…" }}`,
+`{{ var "…" }}`, and `{{ brew_prefix }}`. `setkey` is literal by default (static
+drift = trivial equality); `template = true` opts a value in and renders its
+string leaves on every backend. Drift on a dynamic value compares
+**semantically** (does the current value equal the re-resolved probe?), never
+byte-for-byte — a byte compare would report permanent false drift.
 
 ### Composition modes live in providers, not the schema
 

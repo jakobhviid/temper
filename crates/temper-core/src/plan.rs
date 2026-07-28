@@ -154,7 +154,7 @@ fn step_finding(
         return Ok(Some(Finding::state(app, "block", in_file.clone(), state)));
     }
     if let Some(sk) = &step.setkey {
-        let state = primitives::setkey_state(sk)?;
+        let state = primitives::setkey_state(sk, vars)?;
         let target = format!("{}:{}", sk.file.as_deref().unwrap_or(&sk.backend), sk.key);
         return Ok(Some(Finding::state(app, "setkey", target, state)));
     }
@@ -383,7 +383,7 @@ fn apply_step(
         return primitives::block_apply(&home.join(block), &expand_tilde(in_file), marker, journal);
     }
     if let Some(sk) = &step.setkey {
-        return primitives::setkey_apply(sk, journal);
+        return primitives::setkey_apply(sk, vars, journal);
     }
     if let Some(exec) = &step.exec {
         let opts = exec_opts(home, machine, step);

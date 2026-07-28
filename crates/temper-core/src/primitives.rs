@@ -401,8 +401,44 @@ fn ensure_append_supported(sk: &SetKey) -> Result<()> {
     Ok(())
 }
 
-pub fn setkey_state(sk: &SetKey) -> Result<FileState> {
+/// Render `{{ … }}` in every string leaf of a toml value (recursing arrays and
+/// tables); non-string leaves pass through. Backs a templated `setkey`.
+fn render_toml_value(v: &toml::Value, vars: &BTreeMap<String, String>) -> Result<toml::Value> {
+    use toml::Value;
+    Ok(match v {
+        Value::String(s) => Value::String(render(s, vars)?),
+        Value::Array(a) => {
+            Value::Array(a.iter().map(|x| render_toml_value(x, vars)).collect::<Result<_>>()?)
+        }
+        Value::Table(t) => {
+            let mut out = toml::Table::new();
+            for (k, x) in t {
+                out.insert(k.clone(), render_toml_value(x, vars)?);
+            }
+            Value::Table(out)
+        }
+        other => other.clone(),
+    })
+}
+
+/// A `SetKey` with its `value` rendered when `template = true`, else the input
+/// unchanged. A `Cow`, so the common (literal) path clones nothing.
+fn resolve_setkey<'a>(
+    sk: &'a SetKey,
+    vars: &BTreeMap<String, String>,
+) -> Result<std::borrow::Cow<'a, SetKey>> {
+    if !sk.template {
+        return Ok(std::borrow::Cow::Borrowed(sk));
+    }
+    let mut r = sk.clone();
+    r.value = render_toml_value(&sk.value, vars)?;
+    Ok(std::borrow::Cow::Owned(r))
+}
+
+pub fn setkey_state(sk: &SetKey, vars: &BTreeMap<String, String>) -> Result<FileState> {
     ensure_append_supported(sk)?;
+    let resolved = resolve_setkey(sk, vars)?;
+    let sk = resolved.as_ref();
     match sk.backend.as_str() {
         "json" => json_state(sk),
         "toml" => toml_state(sk),
@@ -532,8 +568,10 @@ pub fn exec_state(check: Option<&Path>, opts: &ExecOpts) -> Result<(bool, String
     }
 }
 
-pub fn setkey_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
+pub fn setkey_apply(sk: &SetKey, vars: &BTreeMap<String, String>, journal: &mut Journal) -> Result<bool> {
     ensure_append_supported(sk)?;
+    let resolved = resolve_setkey(sk, vars)?;
+    let sk = resolved.as_ref();
     match sk.backend.as_str() {
         "json" => json_apply(sk, journal),
         "toml" => toml_apply(sk, journal),
@@ -1203,7 +1241,7 @@ mod profile_tests {
 }
 
 #[cfg(test)]
-mod append_guard_tests {
+mod setkey_tests {
     use super::*;
 
     fn sk(backend: &str, append: bool) -> SetKey {
@@ -1213,6 +1251,7 @@ mod append_guard_tests {
             key: "a.b".into(),
             value: toml::Value::String("v".into()),
             append,
+            template: false,
         }
     }
 
@@ -1227,5 +1266,36 @@ mod append_guard_tests {
         assert!(ensure_append_supported(&sk("dconf", true)).is_err());
         // append = false is fine everywhere.
         assert!(ensure_append_supported(&sk("dconf", false)).is_ok());
+    }
+
+    #[test]
+    fn template_renders_string_leaves_only() {
+        let mut vars = BTreeMap::new();
+        vars.insert("APP".to_string(), "opencode".to_string());
+
+        // scalar string
+        let s = render_toml_value(&toml::Value::String("x/{{ var \"APP\" }}".into()), &vars).unwrap();
+        assert_eq!(s.as_str(), Some("x/opencode"));
+
+        // array: each string element renders; a literal stays literal
+        let arr = toml::Value::Array(vec![
+            toml::Value::String("{{ var \"APP\" }}".into()),
+            toml::Value::String("literal".into()),
+        ]);
+        let r = render_toml_value(&arr, &vars).unwrap();
+        let els = r.as_array().unwrap();
+        assert_eq!(els[0].as_str(), Some("opencode"));
+        assert_eq!(els[1].as_str(), Some("literal"));
+
+        // table leaves render; non-string leaves pass through untouched
+        let mut t = toml::Table::new();
+        t.insert("cmd".into(), toml::Value::String("{{ var \"APP\" }}".into()));
+        t.insert("n".into(), toml::Value::Integer(42));
+        let rt = render_toml_value(&toml::Value::Table(t), &vars).unwrap();
+        assert_eq!(rt["cmd"].as_str(), Some("opencode"));
+        assert_eq!(rt["n"].as_integer(), Some(42));
+
+        // an unknown var errors (like copy) rather than rendering empty
+        assert!(render_toml_value(&toml::Value::String("{{ var \"NOPE\" }}".into()), &vars).is_err());
     }
 }

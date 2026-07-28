@@ -73,6 +73,44 @@ setkey = { backend = "ini", file = "~/.local/share/applications/x.desktop", key 
         .stdout(predicates::str::contains("0 out of sync"));
 }
 
+#[test]
+fn setkey_template_renders_a_var_and_stays_in_sync() {
+    let home = TempDir::new().unwrap();
+    let fake_home = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    let h = home.path();
+    fs::create_dir_all(h.join("apps")).unwrap();
+    fs::write(
+        h.join("temper.toml"),
+        format!(
+            "[vars]\nBIN = \"/opt/x/bin/app\"\n\n[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"demo\"]\n",
+            os()
+        ),
+    )
+    .unwrap();
+    // template = true → the {{ var }} is rendered at apply time (a literal {{ }}
+    // in a value would otherwise stay literal).
+    fs::write(
+        h.join("apps/demo.toml"),
+        "[[step]]\nsetkey = { backend = \"json\", file = \"~/.config/x.json\", key = \"command\", value = \"{{ var \\\"BIN\\\" }}\", template = true }\n",
+    )
+    .unwrap();
+
+    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
+
+    let cfg = fs::read_to_string(fake_home.path().join(".config/x.json")).unwrap();
+    assert!(cfg.contains("/opt/x/bin/app"), "template not rendered: {cfg}");
+    assert!(!cfg.contains("{{"), "unrendered template leaked into the file: {cfg}");
+
+    // Second run: the value re-renders to the same path and matches the file, so
+    // a dynamic value doesn't report permanent false drift.
+    temper(h, fake_home.path(), state.path())
+        .arg("drift")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("0 out of sync"));
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn setkey_defaults_against_temp_plist() {

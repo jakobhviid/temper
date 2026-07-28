@@ -331,6 +331,11 @@ pub struct SetKey {
     /// List-union append into an array-valued key.
     #[serde(default)]
     pub append: bool,
+    /// Render `{{ … }}` in the string leaves of `value` at apply time
+    /// (`which`/`env`/`var`/`brew_prefix`), like `copy`'s `template`. Default
+    /// false — a value is literal unless opted in. Works on every backend.
+    #[serde(default)]
+    pub template: bool,
 }
 
 /// A drift-only assertion. Exactly one check field is set.
