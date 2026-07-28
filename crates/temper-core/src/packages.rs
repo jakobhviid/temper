@@ -151,7 +151,9 @@ pub fn effective_set(home: &Path, machine: &Machine) -> Result<Vec<Pkg>> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for line in raw {
-        let pkg = parse(&line)?;
+        // Name the offending token so a malformed line (e.g. a bare
+        // `mas "12345"` with no `id:`) is findable, not an opaque global error.
+        let pkg = parse(&line).with_context(|| format!("in package token `{line}`"))?;
         if seen.insert(pkg.dedup_key()) {
             out.push(pkg);
         }

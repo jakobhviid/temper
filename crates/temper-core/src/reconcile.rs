@@ -75,14 +75,30 @@ pub fn plan(home: &Path, machine: &Machine, ignore: &manifest::Ignore) -> Result
     // ADD candidates. flatpak/vscode/mas use exact naive extras; brew-family
     // uses the dependency-aware cleanup so transitive deps aren't offered.
     let mut adds = Vec::new();
+    // mas extras come back as numeric ids; resolve them to app names so the
+    // prompt is legible and the written token is well-formed grammar.
+    let mas_names = providers::mas_names();
     for (m, name) in packages::extras(&effective, &installed, ignore) {
-        if matches!(m, Manager::Flatpak | Manager::Vscode | Manager::Mas) {
-            adds.push(AddItem {
-                manager: m,
-                token: token_for(m, &name),
-                is_flatpak: m == Manager::Flatpak,
-                name,
-            });
+        match m {
+            Manager::Mas => {
+                let app = mas_names.get(&name).cloned().unwrap_or_else(|| name.clone());
+                adds.push(AddItem {
+                    manager: m,
+                    // `mas "App Name", id: 12345` — the Brewfile grammar mas needs.
+                    token: format!("mas \"{app}\", id: {name}"),
+                    is_flatpak: false,
+                    name: app,
+                });
+            }
+            Manager::Flatpak | Manager::Vscode => {
+                adds.push(AddItem {
+                    manager: m,
+                    token: token_for(m, &name),
+                    is_flatpak: m == Manager::Flatpak,
+                    name,
+                });
+            }
+            _ => {} // brew-family handled dependency-aware below
         }
     }
     for name in providers::brew_extras(&effective, ignore)? {
@@ -219,6 +235,20 @@ mod tests {
         // idempotent
         let again = append_ignore(&out, "flatpak", "org.new").unwrap();
         assert_eq!(again.matches("org.new").count(), 1);
+    }
+
+    #[test]
+    fn mas_add_token_is_well_formed_grammar() {
+        // The token plan() builds for a mas extra must re-parse (carry an id),
+        // else it bricks the brewfile with "mas entry needs id" on next read.
+        let token = format!("mas \"{}\", id: {}", "Xcode", "497799835");
+        let pkg = crate::packages::parse(&token).unwrap();
+        assert_eq!(pkg.manager, Manager::Mas);
+        assert_eq!(pkg.match_name(), "497799835");
+        // even the name-lookup-failed fallback (name == id) is valid grammar
+        assert!(crate::packages::parse("mas \"497799835\", id: 497799835").is_ok());
+        // the OLD bare form is (correctly) rejected — what we no longer emit
+        assert!(crate::packages::parse("mas \"497799835\"").is_err());
     }
 
     #[test]

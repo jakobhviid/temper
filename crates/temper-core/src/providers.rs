@@ -83,6 +83,38 @@ pub fn probe(effective: &[Pkg]) -> Result<Installed> {
     Ok(inst)
 }
 
+/// Parse a `mas list` row (`"497799835  Xcode (14.0)"`) into `(id, app-name)`,
+/// stripping the trailing ` (version)`. Pure — the testable heart of name lookup.
+fn parse_mas_line(line: &str) -> Option<(String, String)> {
+    let (id, rest) = line.trim().split_once(char::is_whitespace)?;
+    let name = rest.trim();
+    // Drop a trailing " (version)" if present.
+    let name = match name.rfind(" (") {
+        Some(i) if name.ends_with(')') => name[..i].trim(),
+        _ => name,
+    };
+    if id.is_empty() || name.is_empty() {
+        return None;
+    }
+    Some((id.to_string(), name.to_string()))
+}
+
+/// Map of installed Mac App Store id → human app name (from `mas list`). Empty
+/// where `mas` is absent. Used by `reconcile` so a mas extra shows/writes its
+/// name (`mas "Xcode", id: 497799835`), not a bare numeric id.
+pub fn mas_names() -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    if !have("mas") {
+        return out;
+    }
+    for line in run_lines("mas", &["list"]).unwrap_or_default() {
+        if let Some((id, name)) = parse_mas_line(&line) {
+            out.insert(id, name);
+        }
+    }
+    out
+}
+
 /// Converge the effective set (install-missing; never removes). brew-family
 /// packages go through one materialized Brewfile + `brew bundle`; flatpaks are
 /// installed by id. `dry_run` performs no mutation. Returns the number of
@@ -354,6 +386,28 @@ pub fn rpm_missing(effective: &[String]) -> Vec<String> {
         })
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod mas_tests {
+    use super::*;
+
+    #[test]
+    fn parse_mas_rows() {
+        assert_eq!(
+            parse_mas_line("497799835  Xcode (14.0)"),
+            Some(("497799835".into(), "Xcode".into()))
+        );
+        // multi-word name, version stripped
+        assert_eq!(
+            parse_mas_line("1234  The Unarchiver (4.3.9)"),
+            Some(("1234".into(), "The Unarchiver".into()))
+        );
+        // no trailing version
+        assert_eq!(parse_mas_line("55  Bear"), Some(("55".into(), "Bear".into())));
+        assert_eq!(parse_mas_line(""), None);
+        assert_eq!(parse_mas_line("justoneword"), None);
+    }
 }
 
 #[cfg(test)]
