@@ -46,8 +46,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Converge a machine to its spec — full: add missing packages, apply
-    /// everything, run one-time setup. Defaults to this machine.
+    /// Converge a machine to its spec (add packages + apply all config).
+    ///
+    /// Full converge: add missing packages, apply everything, run one-time
+    /// setup. Defaults to this machine (resolved by hostname).
     Install {
         /// Machine name (default: resolved from hostname). Passing a name that
         /// isn't this host is allowed, but a live install asks to confirm first
@@ -64,42 +66,54 @@ enum Cmd {
         #[arg(long)]
         yes: bool,
     },
+    /// Upgrade packages + re-apply `always` config (adds no new apps).
+    ///
     /// Re-apply the `always` config steps and upgrade declared packages
     /// (`brew upgrade` + `flatpak update`). Does not add newly-declared apps.
     Update,
-    /// Show what's out of sync (read-only): package set, managed files, keys,
-    /// and assertions. Reports present-&-drifted vs absent-&-N/A.
+    /// Show what's out of sync (read-only), with the commands to fix it.
+    ///
+    /// Read-only: package set, managed files, keys, and assertions. Ends with a
+    /// "Next steps" summary — the exact command for each way out of the drift.
     Drift {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
     },
-    /// Remove installed-but-not-declared packages (dependency-aware; honors the
-    /// machine's `[ignore]` baseline).
+    /// Remove installed-but-undeclared packages (dependency-aware).
+    ///
+    /// Honors the machine's `[ignore]` baseline; a kept package's transitive
+    /// dependencies are not flagged as extras.
     Prune {
         /// List what would be removed without removing anything.
         #[arg(long)]
         dry_run: bool,
     },
-    /// Dump the machine's live package state to a Brewfile in the folder
-    /// (`brew bundle dump` → machines/<name>/Brewfile), plus each declared
+    /// Dump live package state (+ dconf snapshots) into the folder.
+    ///
+    /// `brew bundle dump` → machines/<name>/Brewfile, plus each declared
     /// `[[machine.dconf]]` snapshot (filtered). Spec←machine, wholesale.
     Backup {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
     },
-    /// Report installed packages not in the spec (advisory) so you can add them
-    /// to a bundle, the machine's loose list, or `[ignore]`. Non-mutating.
+    /// List installed packages not in the spec (advisory, non-mutating).
+    ///
+    /// Report installed extras so you can add them to a bundle, the machine's
+    /// loose list, or `[ignore]` — or run `reconcile` to act on them per-item.
     Adopt,
-    /// Interactively reconcile the machine's Brewfile with reality (spec←machine):
-    /// absorb installed-but-undeclared extras, drop declared-but-absent entries,
-    /// or route a flatpak extra to `[ignore]`. Edits only the machine's own
-    /// Brewfile. `--json` previews the plan without prompting.
+    /// Interactively absorb extras / drop missing entries (spec←machine).
+    ///
+    /// Reconcile the machine's Brewfile with reality: add installed-but-
+    /// undeclared extras, drop declared-but-absent entries, or route a flatpak
+    /// extra to `[ignore]`. Edits only the machine's own Brewfile; `--json`
+    /// previews the plan without prompting.
     Reconcile {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
     },
-    /// Load this machine's dconf snapshot(s) back into live dconf (spec→machine).
-    /// Confirm-gated — it clobbers live desktop tweaks, so it is never part of
+    /// Load dconf snapshot(s) back into live dconf (confirm-gated).
+    ///
+    /// spec→machine. Clobbers live desktop tweaks, so it is never part of
     /// `update`. Use after a reinstall, or to reset the desktop to the snapshot.
     Restore {
         /// Machine name (default: resolved from hostname).
@@ -119,6 +133,8 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Pick or record which temper-home folder to use.
+    ///
     /// Provision this machine's temper-home: pick from discovered libraries (or
     /// paste a path) and save it as the default pointer
     /// (`$XDG_CONFIG_HOME/temper/home`), so temper finds it from anywhere. Omit
@@ -128,9 +144,11 @@ enum Cmd {
         /// The temper-home to use. Omit to auto-discover and pick.
         dir: Option<String>,
     },
-    /// Pull calibrated speaker profiles from the configured repo into the folder
-    /// (`[eq_import]` in temper.toml), ready for the `speaker-eq` step. This is
-    /// folder-authoring — it writes into your config folder, not a machine.
+    /// Fetch calibrated speaker profiles into the folder.
+    ///
+    /// Pull them from the configured repo (`[eq_import]` in temper.toml), ready
+    /// for the `speaker-eq` step. Folder-authoring — it writes into your config
+    /// folder, not a machine.
     EqImport,
     /// Print a shell completion script.
     Completions {
