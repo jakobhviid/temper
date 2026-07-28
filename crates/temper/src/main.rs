@@ -40,6 +40,11 @@ struct Cli {
     #[arg(long, global = true)]
     llm: bool,
 
+    /// Show the underlying tools' full output (brew/mas/…). Runs are quiet by
+    /// default — only real installs, changes, warnings, and errors are shown.
+    #[arg(short = 'v', long, global = true)]
+    verbose: bool,
+
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -226,6 +231,7 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<()> {
     let json = cli.json;
+    let verbose = cli.verbose;
     match cli.cmd {
         None => {
             Cli::command().print_help()?;
@@ -236,9 +242,9 @@ fn run(cli: Cli) -> Result<()> {
             clap_complete::generate(shell, &mut cmd, "temper", &mut io::stdout());
         }
         Some(Cmd::Install { machine, dry_run, packages_only, yes }) => {
-            cmd_install(machine, dry_run, packages_only, yes, json)?
+            cmd_install(machine, dry_run, packages_only, yes, json, verbose)?
         }
-        Some(Cmd::Update) => cmd_update(json)?,
+        Some(Cmd::Update) => cmd_update(json, verbose)?,
         Some(Cmd::Drift { machine }) => cmd_drift(machine, json)?,
         Some(Cmd::Undo { run, list, dry_run }) => cmd_undo(run, list, dry_run, json)?,
         Some(Cmd::Prune { dry_run }) => cmd_prune(dry_run, json)?,
@@ -486,6 +492,7 @@ fn cmd_install(
     packages_only: bool,
     yes: bool,
     json: bool,
+    verbose: bool,
 ) -> Result<()> {
     let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
@@ -520,7 +527,7 @@ fn cmd_install(
     }
 
     let vars = manifest::effective_vars(&ft.vars, &m);
-    let r = plan::run_install(&home, &m, &vars, &ft.brew.trust, dry_run, packages_only)?;
+    let r = plan::run_install(&home, &m, &vars, &ft.brew.trust, dry_run, packages_only, verbose)?;
     if json {
         println!(
             "{}",
@@ -558,12 +565,12 @@ fn announce_skipped(skipped: &[String]) {
     }
 }
 
-fn cmd_update(json: bool) -> Result<()> {
+fn cmd_update(json: bool, verbose: bool) -> Result<()> {
     let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
     let vars = manifest::effective_vars(&ft.vars, &m);
-    let r = plan::run_update(&home, &m, &vars, &ft.brew.trust)?;
+    let r = plan::run_update(&home, &m, &vars, &ft.brew.trust, verbose)?;
     if json {
         println!(
             "{}",

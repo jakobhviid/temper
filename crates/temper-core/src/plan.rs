@@ -497,6 +497,7 @@ pub fn run_install(
     brew_trust: &[String],
     dry_run: bool,
     packages_only: bool,
+    verbose: bool,
 ) -> Result<InstallReport> {
     // Never apply one machine's config to a different-OS host (drift/dry-run
     // from anywhere is fine — only a live converge is refused).
@@ -515,7 +516,7 @@ pub fn run_install(
     if !dry_run {
         providers::trust_taps(brew_trust)?;
     }
-    let packages = providers::converge(&effective, dry_run)?;
+    let packages = providers::converge(&effective, dry_run, verbose)?;
     providers::gext_converge(&providers::effective_extensions(home, machine)?, dry_run)?;
     let reboot = providers::rpm_converge(&providers::effective_rpm(home, machine)?, dry_run)?;
 
@@ -670,11 +671,12 @@ pub fn run_update(
     machine: &Machine,
     vars: &BTreeMap<String, String>,
     brew_trust: &[String],
+    verbose: bool,
 ) -> Result<InstallReport> {
     let effective = packages::effective_set(home, machine)?;
     if !effective.is_empty() {
         providers::trust_taps(brew_trust)?;
-        providers::upgrade()?;
+        providers::upgrade(verbose)?;
     }
 
     let resolved = resolve(home, machine)?;

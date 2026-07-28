@@ -157,7 +157,7 @@ pub fn brew_identity(name: &str) -> Option<(Manager, String)> {
 /// packages go through one materialized Brewfile + `brew bundle`; flatpaks are
 /// installed by id. `dry_run` performs no mutation. Returns the number of
 /// declared packages considered.
-pub fn converge(effective: &[Pkg], dry_run: bool) -> Result<usize> {
+pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize> {
     // mas is converged SEPARATELY (below), not via the aggregate brew bundle:
     // it is the flakiest provider (no App Store sign-in, an app not tied to the
     // Apple ID), and riding brew bundle means one mas failure aborts the whole
@@ -176,10 +176,16 @@ pub fn converge(effective: &[Pkg], dry_run: bool) -> Result<usize> {
         let body: String = brewish.iter().map(|p| format!("{}\n", p.raw)).collect();
         let tmp = std::env::temp_dir().join(format!("temper-Brewfile-{}", std::process::id()));
         std::fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
-        let status = Command::new("brew")
-            // `--quiet` drops the per-package "Using <formula>" line printed for
-            // every already-installed dep — real warnings/errors still surface.
-            .args(["bundle", "--quiet", "--file"])
+        let mut cmd = Command::new("brew");
+        cmd.arg("bundle");
+        // Quiet by default: `--quiet` drops the per-package "Using <formula>" line
+        // printed for every already-installed dep. `--verbose` keeps brew's full
+        // output. Real warnings/errors surface either way.
+        if !verbose {
+            cmd.arg("--quiet");
+        }
+        let status = cmd
+            .arg("--file")
             .arg(&tmp)
             .status()
             .context("running brew bundle")?;
@@ -231,9 +237,13 @@ pub fn converge(effective: &[Pkg], dry_run: bool) -> Result<usize> {
         }
         for p in todo {
             let id = p.id.as_deref().unwrap_or(&p.name);
-            let ok = Command::new("mas")
-                // Silence mas's post-install "not indexed in Spotlight" warnings.
-                .env("MAS_NO_AUTO_INDEX", "1")
+            let mut cmd = Command::new("mas");
+            // Quiet by default: mute mas's post-install "not indexed in Spotlight"
+            // warnings. `--verbose` lets them through.
+            if !verbose {
+                cmd.env("MAS_NO_AUTO_INDEX", "1");
+            }
+            let ok = cmd
                 .args(["install", id])
                 .status()
                 .map(|s| s.success())
@@ -270,9 +280,16 @@ pub fn trust_taps(taps: &[String]) -> Result<()> {
 /// Upgrade installed packages (brew + flatpak). Best-effort; VM-verified. The
 /// caller only invokes this when packages are actually declared, so a machine
 /// with an empty set never triggers a global upgrade.
-pub fn upgrade() -> Result<()> {
+pub fn upgrade(verbose: bool) -> Result<()> {
     if have("brew") {
-        let _ = Command::new("brew").arg("upgrade").status();
+        let mut cmd = Command::new("brew");
+        cmd.arg("upgrade");
+        // Quiet by default: suppress the per-formula progress spam (an up-to-date
+        // machine should be near-silent). `--verbose` keeps brew's full output.
+        if !verbose {
+            cmd.arg("--quiet");
+        }
+        let _ = cmd.status();
     }
     if have("flatpak") {
         let _ = Command::new("flatpak")

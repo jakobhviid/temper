@@ -44,6 +44,12 @@ skipped — run them by hand. On a fresh desktop, `restore` reloads GNOME/Ptyxis
 state from the snapshot (it's a separate, confirm-gated verb because it clobbers
 live tweaks). *(RIS: `bootstrap.sh` → `just install` → `just gnome-restore`.)*
 
+`install`/`update` are **quiet by default** — the underlying tools are hushed
+(`brew bundle`/`brew upgrade` `--quiet`, mas's Spotlight-reindex noise muted, and
+already-installed App Store apps skipped) so you see installs, changes, warnings,
+and errors, not a wall of "already OK". Pass **`-v`/`--verbose`** (a global flag,
+like `--json`) to see every tool's full output when debugging.
+
 **How temper finds the folder (why it "just knows where steel is").** temper
 resolves its home in this order, first hit wins: `$TEMPER_DIR` → walk up from the
 cwd → a saved pointer (`temper setup <dir>`) → **auto-scan** a folder named
