@@ -240,7 +240,13 @@ pub fn effective_extensions(home: &Path, machine: &Machine) -> Result<Vec<String
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for app in &machine.apps {
-        for uuid in manifest::load_bundle(home, app)?.extensions {
+        let bundle = manifest::load_bundle(home, app)?;
+        // Bundle-level os/role gate: a server (or a Mac) never layers a
+        // desktop-Linux bundle's GNOME extensions, even if it composes it.
+        if manifest::gated(&bundle.os, &bundle.role, machine) {
+            continue;
+        }
+        for uuid in bundle.extensions {
             if seen.insert(uuid.clone()) {
                 out.push(uuid);
             }
@@ -288,7 +294,13 @@ pub fn effective_rpm(home: &Path, machine: &Machine) -> Result<Vec<String>> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for app in &machine.apps {
-        for pkg in manifest::load_bundle(home, app)?.rpm {
+        let bundle = manifest::load_bundle(home, app)?;
+        // Bundle-level os/role gate: a server never rpm-ostree-layers a
+        // desktop bundle's packages (the proton-vpn footgun in the ROADMAP).
+        if manifest::gated(&bundle.os, &bundle.role, machine) {
+            continue;
+        }
+        for pkg in bundle.rpm {
             if seen.insert(pkg.clone()) {
                 out.push(pkg);
             }
@@ -305,14 +317,55 @@ pub fn rpm_missing(effective: &[String]) -> Vec<String> {
     effective
         .iter()
         .filter(|p| {
+            // `.output()`, not `.status()`: `rpm -q` prints the NVRA to stdout,
+            // which `.status()` would inherit and leak ahead of `--json` output.
             !Command::new("rpm")
                 .args(["-q", p])
-                .status()
-                .map(|s| s.success())
+                .output()
+                .map(|o| o.status.success())
                 .unwrap_or(false)
         })
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod gating_tests {
+    use super::*;
+    use crate::manifest::Machine;
+
+    fn machine(name: &str, os: &str, role: &str, apps: &[&str]) -> Machine {
+        Machine {
+            name: name.into(),
+            os: os.into(),
+            role: Some(role.into()),
+            apps: apps.iter().map(|s| s.to_string()).collect(),
+            packages: vec![],
+            brewfile: None,
+            vars: Default::default(),
+        }
+    }
+
+    #[test]
+    fn desktop_bundle_gated_off_for_server() {
+        let home = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(home.path().join("apps")).unwrap();
+        fs::write(
+            home.path().join("apps/gnome.toml"),
+            "os = \"linux\"\nrole = \"desktop\"\nextensions = [\"a@x\", \"b@y\"]\nrpm = [\"proton-vpn\"]\n",
+        )
+        .unwrap();
+
+        // Desktop composes it → extensions + rpm are aggregated.
+        let desktop = machine("d", "linux", "desktop", &["gnome"]);
+        assert_eq!(effective_extensions(home.path(), &desktop).unwrap(), vec!["a@x", "b@y"]);
+        assert_eq!(effective_rpm(home.path(), &desktop).unwrap(), vec!["proton-vpn"]);
+
+        // Server composes the SAME bundle → gated off (empty), the ROADMAP footgun.
+        let server = machine("s", "linux", "server", &["gnome"]);
+        assert!(effective_extensions(home.path(), &server).unwrap().is_empty());
+        assert!(effective_rpm(home.path(), &server).unwrap().is_empty());
+    }
 }
 
 /// Layer missing rpms via `rpm-ostree install --idempotent`. Returns whether a

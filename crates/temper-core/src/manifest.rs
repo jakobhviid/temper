@@ -80,6 +80,16 @@ pub struct Machine {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bundle {
+    /// Optional bundle-level gate: skip this bundle's machine-scope lists
+    /// (`extensions`/`rpm`) unless the machine's os matches ("mac" | "linux").
+    /// Makes "GNOME extensions are Linux-desktop only" enforced, not convention.
+    #[serde(default)]
+    pub os: Option<String>,
+    /// Optional bundle-level gate: skip `extensions`/`rpm` unless the machine's
+    /// role matches ("desktop" | "server") — so a server that mistakenly composes
+    /// a desktop bundle never layers its extensions/rpms.
+    #[serde(default)]
+    pub role: Option<String>,
     /// Packages this bundle needs (Brewfile line grammar), aggregated into the
     /// machine's effective set. `_mac`/`_linux` variants are OS-scoped.
     #[serde(default)]
@@ -262,6 +272,17 @@ pub fn load_bundle(home: &Path, name: &str) -> Result<Bundle> {
     toml::from_str(&s).with_context(|| format!("parsing {}", p.display()))
 }
 
+/// Whether an os/role-gated item should be **skipped** for this machine. A
+/// declared `os` that differs from the machine's os skips; a declared `role`
+/// that differs from the machine's declared role skips. An unset side never
+/// gates (lenient — the machine may not declare a role). Shared by step,
+/// assert, and bundle gating so they can't drift apart.
+pub fn gated(os: &Option<String>, role: &Option<String>, machine: &Machine) -> bool {
+    let os_skip = matches!(os, Some(o) if o != &machine.os);
+    let role_skip = matches!((role, &machine.role), (Some(r), Some(mr)) if r != mr);
+    os_skip || role_skip
+}
+
 /// A machine's effective template vars: the global `[vars]` overlaid by the
 /// machine's own `vars` (per-machine wins). Lets a Linux box override a
 /// Mac-valued `BREW_PREFIX` without a second global table.
@@ -320,5 +341,36 @@ mod tests {
         global.insert("A".to_string(), "1".to_string());
         let m = machine_with_vars(&[]);
         assert_eq!(effective_vars(&global, &m), global);
+    }
+
+    fn machine(os: &str, role: Option<&str>) -> Machine {
+        Machine {
+            name: "m".into(),
+            os: os.into(),
+            role: role.map(String::from),
+            apps: vec![],
+            packages: vec![],
+            brewfile: None,
+            vars: Default::default(),
+        }
+    }
+
+    #[test]
+    fn gate_semantics() {
+        let server = machine("linux", Some("server"));
+        let desktop = machine("linux", Some("desktop"));
+        let mac = machine("mac", Some("desktop"));
+        let os_l = Some("linux".to_string());
+        let role_d = Some("desktop".to_string());
+
+        // A desktop-Linux bundle is skipped on a server and on a Mac...
+        assert!(gated(&os_l, &role_d, &server)); // role mismatch
+        assert!(gated(&os_l, &role_d, &mac)); // os mismatch
+        // ...and applies on a Linux desktop.
+        assert!(!gated(&os_l, &role_d, &desktop));
+        // Unset gates never skip.
+        assert!(!gated(&None, &None, &server));
+        // A role gate is lenient when the machine declares no role.
+        assert!(!gated(&None, &role_d, &machine("linux", None)));
     }
 }

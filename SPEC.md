@@ -48,11 +48,15 @@ Effective package set for a machine = union(each app's `packages`(+`_mac`/
 ## `apps/<name>.toml` (a bundle)
 
 ```toml
+os             = "linux"             # optional bundle-level gate: skip this
+role           = "desktop"           #   bundle's extensions/rpm unless the
+                                     #   machine's os/role match (enforces
+                                     #   "GNOME extensions are desktop-only")
 packages       = ["brew \"jq\""]     # Brewfile-grammar tokens (all-OS)
 packages_mac   = []                  # mac-only
 packages_linux = []                  # linux-only
-extensions     = ["ext@uuid"]        # GNOME extensions (gext; Linux)
-rpm            = ["proton-vpn-gnome-desktop"]  # rpm-ostree layered (Linux)
+extensions     = ["ext@uuid"]        # GNOME extensions (gext; Linux) — os/role-gated
+rpm            = ["proton-vpn-gnome-desktop"]  # rpm-ostree layered (Linux) — os/role-gated
 
 [[step]]   # ordered; each step sets EXACTLY ONE primitive
 # … see steps below …

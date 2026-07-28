@@ -15,22 +15,6 @@ use crate::manifest::{self, expand_tilde, Assert, Ignore, Machine, Step};
 use crate::primitives::{self, CopyOpts, ExecOpts, FileState};
 use crate::{drift, packages, providers};
 
-fn os_gated(step_os: &Option<String>, machine: &Machine) -> bool {
-    match step_os {
-        Some(os) => os != &machine.os,
-        None => false,
-    }
-}
-
-/// Skip a step whose declared role doesn't match the machine's role. If either
-/// side is unset, don't gate (lenient — the machine may not declare a role).
-fn role_gated(step_role: &Option<String>, machine: &Machine) -> bool {
-    match (step_role, &machine.role) {
-        (Some(r), Some(mr)) => r != mr,
-        _ => false,
-    }
-}
-
 /// Everything a machine composes, OS-gated to this host.
 pub struct Resolved {
     pub steps: Vec<(String, Step)>,     // (app, step)
@@ -43,12 +27,12 @@ pub fn resolve(home: &Path, machine: &Machine) -> Result<Resolved> {
     for app in &machine.apps {
         let bundle = manifest::load_bundle(home, app)?;
         for step in bundle.step {
-            if !os_gated(&step.os, machine) && !role_gated(&step.role, machine) {
+            if !manifest::gated(&step.os, &step.role, machine) {
                 steps.push((app.clone(), step));
             }
         }
         for assert in bundle.assert {
-            if !os_gated(&assert.os, machine) && !role_gated(&assert.role, machine) {
+            if !manifest::gated(&assert.os, &assert.role, machine) {
                 asserts.push((app.clone(), assert));
             }
         }

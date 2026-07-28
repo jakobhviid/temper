@@ -59,9 +59,9 @@
 probing, `install --dry-run`) are verified against a real machine. Known
 limitations: `setkey` toml reserializes (drops comments); `defaults`/`dconf`
 writes aren't journaled; `profile` install is manual; presence-gating
-(`when`/`needs`) is unbuilt (os/role gating only); role-gating is per-step
-(bundles must opt in — steel guards servers by
-their app list too).
+(`when`/`needs`) is unbuilt (os/role gating only). Steps, asserts, **and
+bundle-level `extensions`/`rpm`** now os/role-gate (a server can't layer a
+desktop bundle's extensions/rpm even if it composes it).
 
 `WORKFLOWS.md` (compiled into `--llm`) gets written once the VM run confirms the
 real-machine behavior.

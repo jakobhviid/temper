@@ -30,15 +30,6 @@ on a box without Ghostty just leaves a dead file — harmless.
 `binary|brew|cask|flatpak|mas|gext|rpm|path|exec`; evaluate before apply; skip
 loudly (Principle #6). Default `when` = "my declared package is installed."
 
-### `extensions` / `rpm` os/role gating
-**Status:** deferred. These bundle-level lists are aggregated across a machine's
-apps with no os/role filter.
-**Now:** convention (servers don't list gnome/proton-vpn) + `have(gext|rpm)`
-guards + the host-OS install guard. A Fedora **server** that wrongly listed a
-desktop bundle could still `rpm-ostree install` proton-vpn.
-**Sketch:** either move them to `[[step]]`s (which have os/role), or add os/role
-to the bundle and filter in `effective_extensions`/`effective_rpm`.
-
 ### Discovery auto-scan
 **Status:** deferred. Only `$TEMPER_DIR` + a cwd walk-up.
 **Sketch:** port dotsync's `discovery.rs` (scan common cloud-folder locations, a
