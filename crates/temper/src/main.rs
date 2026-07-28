@@ -1125,6 +1125,8 @@ fn llm_guide() -> String {
     out.push_str(include_str!("../../../WORKFLOWS.md"));
     out.push_str("\n\n=== MANIFEST SCHEMA (authoritative — matches the parser; unknown fields error) ===\n\n");
     out.push_str(include_str!("../../../SPEC.md"));
+    out.push_str("\n\n=== PATTERNS (how to COMPOSE primitives for common problem shapes) ===\n\n");
+    out.push_str(include_str!("../../../PATTERNS.md"));
     out.push_str("\n\n=== README (overview + implementation status) ===\n\n");
     out.push_str(include_str!("../../../README.md"));
     // The design docs describe intent; the SCHEMA + STATUS above are what's real.

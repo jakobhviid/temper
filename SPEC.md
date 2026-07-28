@@ -97,6 +97,9 @@ Package token grammar (same as a Brewfile line):
 
 ## Steps (`[[step]]`) — one primitive each
 
+> This section is the grammar of each primitive in isolation. For which
+> *combination* solves a given problem shape, see **PATTERNS.md**.
+
 Common: `os = "mac"|"linux"` and `role = "desktop"|"server"` (skip on a
 non-matching OS/role; an unknown os/role errors at load); `run = "always"|
 "install"|"ensure"|"manual"` (lifecycle; default: copy/block/setkey → always,

@@ -111,7 +111,8 @@ detection; temper prints it under Next steps, and in `--json` as `remediation`).
    or its `brewfile`; add config steps to the app bundle. (The `[[step]]`
    primitives and their fields are in `SPEC.md` / `temper --llm` — e.g. `setkey`
    can resolve `{{ … }}` in a value at apply time with `template = true`, and its
-   `json` backend edits JSONC comment-preservingly.)
+   `json` backend edits JSONC comment-preservingly. `PATTERNS.md` shows how to
+   *compose* the primitives for common problem shapes.)
 2. Apply it:
 
 ```sh
