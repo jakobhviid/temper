@@ -78,6 +78,13 @@ that are missing. It does **not** add newly-declared apps wholesale (that's an
 `install`), and it never runs `restore` (reloading a snapshot would clobber live
 tweaks). *(RIS: `just update`, which deliberately excludes gnome-restore.)*
 
+> **Keep temper itself current across the fleet before using a new manifest
+> field.** Because unknown fields are rejected (`deny_unknown_fields`), a machine
+> on an older temper doesn't *skip* a field it doesn't know — it fails to parse
+> the whole manifest, breaking that machine's entire converge, not just the step.
+> So a new field (a new `setkey` backend, `template`, `append`, …) sets a version
+> *floor*: bump temper everywhere first, and note the floor in the commit/recipe.
+
 ## 3. The drift loop (the core habit)
 
 **When:** anytime you want to know "is this machine what I said it should be?" —
