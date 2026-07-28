@@ -10,7 +10,7 @@ Adding a **primitive** is a big deal — new release, new drift/undo logic, new
 surface area. Adding an **app-bundle** is free (it's config). The set is
 deliberately small: `copy`, `block`, `setkey` (a backend family — dconf/defaults/
 ini/json/toml — *not* one per format), `brew`/`flatpak`/`mas`/`gext`/`rpm-ostree`
-(converge providers), `profile`, `exec`. It grew during sanity-check but stayed
+(converge providers), `profile`, `sysfile` (one root-owned `/etc` file), `exec`. It grew during sanity-check but stayed
 *closed*: each addition was a whole class the repo proved, not a one-app patch.
 If you're reaching for a new primitive to support one app, you want `exec`.
 

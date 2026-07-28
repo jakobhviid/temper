@@ -23,14 +23,6 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 **Sketch:** port dotsync's `discovery.rs` (scan common cloud-folder locations, a
 saved pointer, first-run prompt).
 
-### Declarative system-file primitive (the clean `/etc` path)
-**Status:** idea. Root-owned config (the 1Password `/etc` allowlist) is done via
-an `exec` script that self-escalates.
-**Sketch:** a first-class primitive that writes one root-owned file with
-mode/owner, escalating internally for just that write (Ansible's per-task
-`become` on a `copy`). Lets `/etc` writes be declarative + drift-checkable
-instead of buried in `exec`.
-
 ### Journaled system-side `setkey` (maybe)
 Low-value polish, only if the need shows up: snapshot the prior `defaults read` /
 `dconf read` value so those `setkey` backends become undoable. (The

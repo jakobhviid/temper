@@ -64,6 +64,16 @@ fn is_step(step: &Step) -> bool {
         || step.setkey.is_some()
         || step.exec.is_some()
         || step.profile.is_some()
+        || step.sysfile.is_some()
+}
+
+/// `sysfile` options from a step.
+fn sysfile_opts(step: &Step) -> primitives::SysfileOpts {
+    primitives::SysfileOpts {
+        mode: step.mode.as_deref(),
+        owner: step.owner.as_deref(),
+        group: step.group.as_deref(),
+    }
 }
 
 /// One drift finding across any primitive or assertion.
@@ -169,6 +179,11 @@ fn step_finding(
             ok: true,
             status: "manual".into(),
         }));
+    }
+    if let (Some(sysfile), Some(to)) = (&step.sysfile, &step.to) {
+        let state =
+            primitives::sysfile_state(&home.join(sysfile), &expand_tilde(to), &sysfile_opts(step))?;
+        return Ok(Some(Finding::state(app, "sysfile", to.clone(), state)));
     }
     Ok(None)
 }
@@ -409,7 +424,10 @@ fn apply_step(
     if let Some(profile) = &step.profile {
         return primitives::profile_apply(&home.join(profile));
     }
-    bail!("step names no known primitive (copy / block / setkey / exec / profile)")
+    if let (Some(sysfile), Some(to)) = (&step.sysfile, &step.to) {
+        return primitives::sysfile_apply(&home.join(sysfile), &expand_tilde(to), &sysfile_opts(step));
+    }
+    bail!("step names no known primitive (copy / block / setkey / exec / profile / sysfile)")
 }
 
 /// A step's effective lifecycle. Defaults by primitive: exec & seed are

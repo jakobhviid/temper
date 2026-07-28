@@ -958,6 +958,153 @@ fn dconf_apply(sk: &SetKey) -> Result<bool> {
     Ok(true)
 }
 
+// --- sysfile: write one root-owned system file (the clean /etc path) ----------
+// Not journaled (system-side, like defaults/dconf). Applies via `sudo install`,
+// escalating for just that one write; drift compares content + mode + owner.
+
+/// Options for a `sysfile` step.
+pub struct SysfileOpts<'a> {
+    pub mode: Option<&'a str>,
+    pub owner: Option<&'a str>,
+    pub group: Option<&'a str>,
+}
+
+/// The `sudo install` argv for an escalated system-file write. `-D` creates
+/// parent dirs; mode/owner/group are applied atomically by `install` itself.
+fn sysfile_install_argv(src: &Path, dest: &Path, opts: &SysfileOpts) -> Vec<String> {
+    let mut a: Vec<String> = ["sudo", "install", "-D"].iter().map(|s| s.to_string()).collect();
+    if let Some(m) = opts.mode {
+        a.push("-m".into());
+        a.push(m.to_string());
+    }
+    if let Some(o) = opts.owner {
+        a.push("-o".into());
+        a.push(o.to_string());
+    }
+    if let Some(g) = opts.group {
+        a.push("-g".into());
+        a.push(g.to_string());
+    }
+    a.push(src.to_string_lossy().into_owned());
+    a.push(dest.to_string_lossy().into_owned());
+    a
+}
+
+fn uid_of(name: &str) -> Option<u32> {
+    std::process::Command::new("id")
+        .args(["-u", name])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+}
+
+fn gid_of(name: &str) -> Option<u32> {
+    // `getent group <name>` → "name:x:GID:members"
+    std::process::Command::new("getent")
+        .args(["group", name])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split(':')
+                .nth(2)
+                .and_then(|g| g.trim().parse().ok())
+        })
+}
+
+/// Drift for a `sysfile`: Missing (absent), Unavailable (present but unreadable
+/// without escalation — degrade, don't prompt), else content + mode + owner/group.
+pub fn sysfile_state(src: &Path, dest: &Path, opts: &SysfileOpts) -> Result<FileState> {
+    if !dest.exists() {
+        return Ok(FileState::Missing);
+    }
+    let want = fs::read(src).with_context(|| format!("reading source {}", src.display()))?;
+    let have = match fs::read(dest) {
+        Ok(h) => h,
+        Err(_) => return Ok(FileState::Unavailable), // unreadable → don't sudo on a drift
+    };
+    if have != want {
+        return Ok(FileState::Drifted);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::fs::PermissionsExt;
+        let md = fs::metadata(dest)?;
+        if let Some(m) = opts.mode {
+            let want = u32::from_str_radix(m.strip_prefix("0o").unwrap_or(m), 8)?;
+            if md.permissions().mode() & 0o777 != want {
+                return Ok(FileState::Drifted);
+            }
+        }
+        if let Some(o) = opts.owner {
+            if uid_of(o).is_some_and(|u| u != md.uid()) {
+                return Ok(FileState::Drifted);
+            }
+        }
+        if let Some(g) = opts.group {
+            if gid_of(g).is_some_and(|gid| gid != md.gid()) {
+                return Ok(FileState::Drifted);
+            }
+        }
+    }
+    Ok(FileState::InSync)
+}
+
+/// Apply a `sysfile`: idempotent — a no-op when already in sync, else an
+/// escalated `sudo install`. Returns whether it changed anything. Not journaled.
+pub fn sysfile_apply(src: &Path, dest: &Path, opts: &SysfileOpts) -> Result<bool> {
+    if matches!(sysfile_state(src, dest, opts)?, FileState::InSync) {
+        return Ok(false);
+    }
+    let argv = sysfile_install_argv(src, dest, opts);
+    let status = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .status()
+        .with_context(|| format!("running {}", argv.join(" ")))?;
+    if !status.success() {
+        bail!("sudo install of {} failed", dest.display());
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+mod sysfile_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn install_argv_shape() {
+        let opts = SysfileOpts { mode: Some("0755"), owner: Some("root"), group: Some("root") };
+        let argv = sysfile_install_argv(&PathBuf::from("/s"), &PathBuf::from("/etc/x"), &opts);
+        assert_eq!(
+            argv,
+            vec!["sudo", "install", "-D", "-m", "0755", "-o", "root", "-g", "root", "/s", "/etc/x"]
+        );
+        // minimal (no mode/owner/group)
+        let bare = SysfileOpts { mode: None, owner: None, group: None };
+        let argv = sysfile_install_argv(&PathBuf::from("/s"), &PathBuf::from("/d"), &bare);
+        assert_eq!(argv, vec!["sudo", "install", "-D", "/s", "/d"]);
+    }
+
+    #[test]
+    fn state_missing_then_in_sync_without_escalation() {
+        // A user-owned dest (no owner/group) exercises drift with no sudo.
+        let dir = tempfile::TempDir::new().unwrap();
+        let src = dir.path().join("src");
+        let dest = dir.path().join("dest");
+        fs::write(&src, b"policy\n").unwrap();
+        let opts = SysfileOpts { mode: None, owner: None, group: None };
+        assert_eq!(sysfile_state(&src, &dest, &opts).unwrap(), FileState::Missing);
+        fs::write(&dest, b"policy\n").unwrap();
+        assert_eq!(sysfile_state(&src, &dest, &opts).unwrap(), FileState::InSync);
+        fs::write(&dest, b"tampered\n").unwrap();
+        assert_eq!(sysfile_state(&src, &dest, &opts).unwrap(), FileState::Drifted);
+    }
+}
+
 // --- profile: install a macOS .mobileconfig -----------------------------------
 // Apply opens it in System Settings for the user to approve — installation
 // can't be silently scripted without MDM, so drift is status-only ("manual").

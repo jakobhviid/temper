@@ -54,6 +54,7 @@
 | `eq-import` (fetch calibrated speaker profiles into the folder) | ✅ | ✅ live clone/scan/cleanup |
 | providers: **gext** / **rpm-ostree** | ✅ | — (Linux/VM) |
 | `profile` (macOS .mobileconfig) | ✅ | — (manual/System Settings) |
+| `sysfile` (root-owned /etc file via `sudo install`; drift = content+mode+owner) | ✅ | ✅ drift live; apply = sudo (unit-tested argv) |
 | discovery (auto-scan cloud folders) beyond `$TEMPER_DIR` + cwd walk-up | ⏳ | — |
 
 **VM run checklist** (things only a live *write* exercises): `brew bundle`

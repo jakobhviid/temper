@@ -121,6 +121,7 @@ app-bundles it wants. Drift at app scope is per-file / per-key / per-assertion.
 | `gext` | machine | converge GNOME extensions (install from EGO + `gext update`); distinct from *enabling* them (a dconf key) |
 | `rpm-ostree` | machine | layer an rpm that can't be image-baked (proton-vpn); emits a **reboot-required** signal temper reports but never automates |
 | `profile` | app/machine | install a macOS `.mobileconfig` — **weaker contract** (apply is a GUI `open`; drift is a plist key-subset compare; not silently undoable) |
+| `sysfile` | app | write one **root-owned** system file (`/etc/…`) with mode/owner/group, escalating internally (`sudo install`) for just that write. Drift compares content + mode + owner; not journaled (system-side) |
 | `exec` | app | run a user-supplied script — the escape hatch (see "exec's contract") |
 
 Every primitive is **planned and drift-checked**. The **file-writing** ones

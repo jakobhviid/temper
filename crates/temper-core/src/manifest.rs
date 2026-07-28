@@ -189,6 +189,19 @@ pub struct Step {
     #[serde(default)]
     pub profile: Option<String>,
 
+    // --- sysfile: write one ROOT-owned file (the clean /etc path) ---
+    /// Source file in the folder, deployed to `to` as a root-owned system file
+    /// with `mode`/`owner`/`group`, escalating internally (`sudo install`) for
+    /// just that write. Drift-checkable; not journaled (system-side).
+    #[serde(default)]
+    pub sysfile: Option<String>,
+    /// `sysfile` owner (e.g. "root"). Enforced on apply, drift-checked.
+    #[serde(default)]
+    pub owner: Option<String>,
+    /// `sysfile` group (e.g. "root").
+    #[serde(default)]
+    pub group: Option<String>,
+
     // --- exec: run a user script (the escape hatch) ---
     #[serde(default)]
     pub exec: Option<String>,

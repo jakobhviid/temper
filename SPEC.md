@@ -132,6 +132,14 @@ secrets = ["ACOUSTID_KEY"]   # env vars that must be set; passed through (loud e
 # profile: install a macOS .mobileconfig (opens System Settings; manual)
 [[step]]
 profile = "assets/x.mobileconfig"   # drift is status-only ("manual")
+
+# sysfile: write one ROOT-owned system file (the clean /etc path)
+[[step]]
+sysfile = "assets/1password.policy"           # source in the folder
+to      = "/etc/1password/custom_allowed_browsers"
+mode    = "0755"
+owner   = "root"                              # enforced via `sudo install`
+group   = "root"                              # drift compares content+mode+owner
 ```
 
 ## Assertions (`[[assert]]`) — drift-only, one check each
