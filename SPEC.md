@@ -154,6 +154,12 @@ setkey = { backend = "dconf",    key = "/org/gnome/desktop/interface/color-schem
 #
 #   File backends CREATE the file + parent dirs if absent (drift shows `missing`
 #   until first apply); json/toml refuse a file whose root isn't an object/table.
+#   json is JSONC-aware: it reads targets with // and /* */ comments + trailing
+#   commas (e.g. opencode.jsonc, VS Code settings.json), and writes
+#   comment/format-preserving — only the changed key is spliced, so sibling keys,
+#   comments, and layout survive. A deep dotted key creates the intermediate
+#   objects (mcp.searxng.type builds mcp + searxng). json/toml also accept an
+#   object/table value, to set a whole block in one step.
 #   defaults/dconf report `unavailable` in drift (and skip in apply) when their CLI
 #   is absent (e.g. dconf on a Mac) — degrade, never abort. dconf writes are
 #   journaled/undoable; defaults writes are not.

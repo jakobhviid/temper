@@ -21,6 +21,7 @@ pub mod manifest; // parse temper.toml + apps/*.toml (machines, apps, ignore)
 pub mod packages; // package model: parse, effective set, drift (pure)
 pub mod machine; // machine identity (hostname) + role derivation
 pub mod primitives; // copy / block / setkey / profile / exec
+mod jsonc; // comment-preserving JSONC edits for the setkey(json) backend
 pub mod providers; // brew / flatpak / mas / gext / rpm-ostree: converge + probe
 pub mod drift; // assertions, exec-hooks, status-only reporting
 pub mod plan; // build a plan, then apply it (dry-run first)

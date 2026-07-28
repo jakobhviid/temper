@@ -367,10 +367,9 @@ fn read_json_root(file: &Path) -> Result<Json> {
         return Ok(Json::Object(Default::default()));
     }
     let s = fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
-    if s.trim().is_empty() {
-        return Ok(Json::Object(Default::default()));
-    }
-    serde_json::from_str(&s).with_context(|| format!("parsing json {}", file.display()))
+    // Tolerant parse: the target may be JSONC (comments / trailing commas), e.g.
+    // opencode.jsonc or VS Code settings.json.
+    crate::jsonc::parse_value(&s).with_context(|| format!("parsing json {}", file.display()))
 }
 
 fn json_get<'a>(root: &'a Json, parts: &[&str]) -> Option<&'a Json> {
@@ -387,36 +386,6 @@ fn json_satisfied(root: &Json, parts: &[&str], value: &Json, append: bool) -> bo
         Some(cur) if append => cur.as_array().is_some_and(|a| a.contains(value)),
         Some(cur) => cur == value,
     }
-}
-
-fn json_set(root: &mut Json, parts: &[&str], value: Json, append: bool) -> Result<()> {
-    // root is guaranteed an object by the caller (json_apply guards it, and each
-    // recursion guards the child below), so this never clobbers real data.
-    let obj = root
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("setkey json: `{}` is not an object", parts[0]))?;
-    if parts.len() == 1 {
-        if append {
-            let arr = obj.entry(parts[0].to_string()).or_insert(Json::Array(vec![]));
-            let a = arr
-                .as_array_mut()
-                .ok_or_else(|| anyhow!("setkey append: `{}` is not an array", parts[0]))?;
-            if !a.contains(&value) {
-                a.push(value);
-            }
-        } else {
-            obj.insert(parts[0].to_string(), value);
-        }
-        return Ok(());
-    }
-    let child = obj
-        .entry(parts[0].to_string())
-        .or_insert(Json::Object(Default::default()));
-    // Refuse to descend into (and clobber) an existing scalar intermediate.
-    if !child.is_object() {
-        bail!("setkey json: intermediate key `{}` is not an object", parts[0]);
-    }
-    json_set(child, &parts[1..], value, append)
 }
 
 /// `append` (array-union) is implemented only for the structured json/toml
@@ -577,9 +546,15 @@ pub fn setkey_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
 
 fn json_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
     let file = sk_file(sk)?;
-    let mut root = read_json_root(&file)?;
-    // read_json_root gives {} for absent/empty; a non-object here means the file
-    // has real array/scalar content — refuse rather than overwrite it wholesale.
+    let text = if file.exists() {
+        fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?
+    } else {
+        String::new()
+    };
+    // Tolerant read for the idempotency check; a non-object root (real array/
+    // scalar content) is refused rather than overwritten wholesale.
+    let root = crate::jsonc::parse_value(&text)
+        .with_context(|| format!("parsing json {}", file.display()))?;
     if !root.is_object() {
         bail!("setkey json: {} root is not an object", file.display());
     }
@@ -588,9 +563,8 @@ fn json_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
     if json_satisfied(&root, &parts, &value, sk.append) {
         return Ok(false);
     }
-    json_set(&mut root, &parts, value, sk.append)?;
-    let mut new = serde_json::to_string_pretty(&root)?;
-    new.push('\n');
+    // Comment/format-preserving write: splice the original text, don't reformat.
+    let new = crate::jsonc::set(&text, &parts, &value, sk.append)?;
     journaled_write(&file, new.as_bytes(), journal)
 }
 

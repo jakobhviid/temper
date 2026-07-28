@@ -182,8 +182,9 @@ pub fn eval(home: &Path, a: &Assert) -> Result<(bool, String)> {
         if !dep.exists() {
             return Ok((false, "file missing".into()));
         }
-        let a_val: serde_json::Value = serde_json::from_str(&fs::read_to_string(&dep)?)?;
-        let b_val: serde_json::Value = serde_json::from_str(&fs::read_to_string(&reference)?)?;
+        // Tolerant parse: either side may be JSONC (comments / trailing commas).
+        let a_val = crate::jsonc::parse_value(&fs::read_to_string(&dep)?)?;
+        let b_val = crate::jsonc::parse_value(&fs::read_to_string(&reference)?)?;
         return Ok(if a_val == b_val {
             (true, "matches reference".into())
         } else {
