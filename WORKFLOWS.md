@@ -20,6 +20,11 @@ place** (this folder, in git) and **run per-machine** (locally, or over ssh — 
 §Fleet). `restore` is used both when bringing a desktop back up *and* mid-life to
 snap GNOME/Ptyxis back to the known-good snapshot.
 
+Throughout, every verb runs against **this machine** (resolved by hostname); a
+machine name is **optional** — pass one only to target or preview another (a
+live `install <name>` then asks to confirm). The examples below omit it, matching
+what `drift`'s Next steps print.
+
 ---
 
 ## 1. Bring up a machine (fresh install / reinstall)
@@ -28,9 +33,9 @@ snap GNOME/Ptyxis back to the known-good snapshot.
 (bootstrap is out of scope — a separate script).
 
 ```sh
-temper use ~/steel          # once: record where the folder is (optional)
-temper install [machine]    # full converge: packages + all config + one-time setup
-temper restore [machine]    # Linux desktop only: load the dconf snapshot back
+temper use ~/steel   # once: record where the folder is (optional)
+temper install       # full converge: packages + all config + one-time setup
+temper restore       # Linux desktop only: load the dconf snapshot back
 ```
 
 `install` adds missing packages (brew/flatpak/mas/gext/rpm), applies every
@@ -59,21 +64,21 @@ tweaks). *(RIS: `just update`, which deliberately excludes gnome-restore.)*
 read-only, so run it freely.
 
 ```sh
-temper drift [machine]
+temper drift
 ```
 
 The report groups findings by app, surfaces out-of-sync items in red, collapses
 in-sync apps, and ends with **Next steps** — the exact command for each way out
 of the drift. You pick a direction and run what it prints:
 
-- **Config drifted** (a file/key/assert): `temper install [machine]` re-applies
+- **Config drifted** (a file/key/assert): `temper install` re-applies
   it, or `temper undo` reverts the last run.
-- **Packages missing:** `temper install [machine] --packages-only` (add them, no
+- **Packages missing:** `temper install --packages-only` (add them, no
   config churn) — the additive "install-missing" flow.
 - **Packages installed but not declared (extras):** decide the direction —
-  - converge machine→spec: `temper prune [machine]` (uninstall them, asks first);
-  - absorb spec←machine: `temper reconcile [machine]` (interactively add/drop),
-    or `temper backup [machine]` (overwrite the machine Brewfile wholesale).
+  - converge machine→spec: `temper prune` (uninstall them, asks first);
+  - absorb spec←machine: `temper reconcile` (interactively add/drop),
+    or `temper backup` (overwrite the machine Brewfile wholesale).
 
 This four-branch package fork is the heart of it (RIS emitted it at the moment of
 detection; temper prints it under Next steps, and in `--json` as `remediation`).
@@ -87,9 +92,9 @@ detection; temper prints it under Next steps, and in `--json` as `remediation`).
 2. Apply it:
 
 ```sh
-temper install [machine]                 # add packages + apply the new config
+temper install                 # add packages + apply the new config
 # or, packages only, no config re-run:
-temper install [machine] --packages-only
+temper install --packages-only
 ```
 
 ## 5. Absorb ad-hoc changes back into the spec
@@ -99,10 +104,10 @@ spec to reflect it (spec←machine). **The default habit is `reconcile`** — it
 per-item and surgical, so nothing lands in the spec without you saying so.
 
 ```sh
-temper reconcile [machine]   # the go-to: interactively add extras / drop missing
-                             #   entries / route a flatpak extra to [ignore]
-temper adopt                 # optional first look: just list the extras, mutate nothing
-temper backup [machine]      # rarely: wholesale dump of live state → Brewfile
+temper reconcile   # the go-to: interactively add extras / drop missing entries /
+                   #   route a flatpak extra to [ignore]
+temper adopt       # optional first look: just list the extras, mutate nothing
+temper backup      # rarely: wholesale dump of live state → Brewfile
 ```
 
 `reconcile` prompts per item (missing entries default to keep, extras default to
@@ -118,8 +123,8 @@ machine to the snapshot — both on a fresh bring-up **and** mid-life when live
 GNOME/Ptyxis state has drifted and you want it back to known-good.
 
 ```sh
-temper backup [machine]      # also writes each [[machine.dconf]] snapshot (filtered)
-temper restore [machine]     # load the snapshot(s) back into live dconf (confirm-gated)
+temper backup      # also writes each [[machine.dconf]] snapshot (filtered)
+temper restore     # load the snapshot(s) back into live dconf (confirm-gated)
 ```
 
 `backup`'s dconf dump runs through the `strip` filter (bookkeeping + per-monitor

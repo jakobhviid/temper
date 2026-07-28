@@ -355,7 +355,7 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
                 })
             })
             .collect();
-        let rem: Vec<_> = plan::remediations(&items, &m.name)
+        let rem: Vec<_> = plan::remediations(&items)
             .iter()
             .map(|r| serde_json::json!({ "label": r.label, "command": r.command }))
             .collect();
@@ -465,7 +465,7 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
 
     // "What to run next" — both directions out of the drift, RIS-style: a cyan
     // arrow + label with the exact command dimmed beneath it.
-    let rem = plan::remediations(items, machine);
+    let rem = plan::remediations(items);
     if !rem.is_empty() {
         println!("\n{}", ui::bold("Next steps"));
         for r in &rem {

@@ -200,7 +200,11 @@ pub struct Remediation {
 /// fork + a config line). Machine→spec: `install-missing` / `prune` /
 /// re-`install`. Spec←machine: `reconcile` / `backup`. Plus `undo` to revert.
 /// Empty when nothing is out of sync.
-pub fn remediations(items: &[Finding], machine: &str) -> Vec<Remediation> {
+///
+/// Commands are **bare** (no machine name): every verb defaults to this host by
+/// hostname, and you run these on the machine they apply to — so the name is
+/// noise (and passing it would trip the not-this-host confirm).
+pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
     let drifted = |kinds: &[&str]| {
         items
             .iter()
@@ -213,28 +217,28 @@ pub fn remediations(items: &[Finding], machine: &str) -> Vec<Remediation> {
         .any(|f| !f.ok && !["package", "package-extra", "extension", "rpm"].contains(&f.kind));
 
     let mut out = Vec::new();
-    let push = |out: &mut Vec<Remediation>, label: &str, command: String| {
+    let push = |out: &mut Vec<Remediation>, label: &str, command: &str| {
         out.push(Remediation {
             label: label.to_string(),
-            command,
+            command: command.to_string(),
         })
     };
     // Machine → spec (converge the machine toward the declared state).
     if missing_pkg {
-        push(&mut out, "install declared packages that are missing", format!("temper install {machine} --packages-only"));
+        push(&mut out, "install declared packages that are missing", "temper install --packages-only");
     }
     if extra_pkg {
-        push(&mut out, "uninstall packages not in the spec (asks first)", format!("temper prune {machine}"));
+        push(&mut out, "uninstall packages not in the spec (asks first)", "temper prune");
     }
     // Spec ← machine (absorb the machine's state into the spec).
     if missing_pkg || extra_pkg {
-        push(&mut out, "interactively add extras / drop missing entries", format!("temper reconcile {machine}"));
-        push(&mut out, "overwrite the machine Brewfile with live state", format!("temper backup {machine}"));
+        push(&mut out, "interactively add extras / drop missing entries", "temper reconcile");
+        push(&mut out, "overwrite the machine Brewfile with live state", "temper backup");
     }
     // Config drift: re-apply, or revert the last run.
     if config_drift {
-        push(&mut out, "re-apply configuration to fix the drift above", format!("temper install {machine}"));
-        push(&mut out, "revert the most recent run instead", "temper undo".to_string());
+        push(&mut out, "re-apply configuration to fix the drift above", "temper install");
+        push(&mut out, "revert the most recent run instead", "temper undo");
     }
     out
 }
@@ -250,18 +254,21 @@ mod remediation_tests {
     #[test]
     fn missing_and_extra_offer_both_directions() {
         let items = vec![f("package", false), f("package-extra", false)];
-        let cmds: Vec<String> = remediations(&items, "kira").iter().map(|r| r.command.clone()).collect();
-        assert!(cmds.contains(&"temper install kira --packages-only".to_string())); // add missing
-        assert!(cmds.contains(&"temper prune kira".to_string())); // remove extras
-        assert!(cmds.contains(&"temper reconcile kira".to_string())); // absorb (surgical)
-        assert!(cmds.contains(&"temper backup kira".to_string())); // absorb (wholesale)
+        let cmds: Vec<String> = remediations(&items).iter().map(|r| r.command.clone()).collect();
+        // Bare commands — no machine name (default resolves this host).
+        assert!(cmds.contains(&"temper install --packages-only".to_string())); // add missing
+        assert!(cmds.contains(&"temper prune".to_string())); // remove extras
+        assert!(cmds.contains(&"temper reconcile".to_string())); // absorb (surgical)
+        assert!(cmds.contains(&"temper backup".to_string())); // absorb (wholesale)
+        // never a machine name baked into a suggested command
+        assert!(!cmds.iter().any(|c| c.split_whitespace().count() > 3 && !c.contains("--")));
     }
 
     #[test]
     fn config_drift_offers_reapply_and_undo() {
         let items = vec![f("copy", false)];
-        let cmds: Vec<String> = remediations(&items, "kira").iter().map(|r| r.command.clone()).collect();
-        assert!(cmds.contains(&"temper install kira".to_string()));
+        let cmds: Vec<String> = remediations(&items).iter().map(|r| r.command.clone()).collect();
+        assert!(cmds.contains(&"temper install".to_string()));
         assert!(cmds.contains(&"temper undo".to_string()));
         // no package direction when only config drifted
         assert!(!cmds.iter().any(|c| c.contains("prune") || c.contains("reconcile")));
@@ -270,7 +277,7 @@ mod remediation_tests {
     #[test]
     fn all_in_sync_yields_no_remediation() {
         let items = vec![f("copy", true), f("package", true)];
-        assert!(remediations(&items, "kira").is_empty());
+        assert!(remediations(&items).is_empty());
     }
 }
 
