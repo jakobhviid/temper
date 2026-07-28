@@ -196,6 +196,50 @@ pub struct Step {
     /// Skip this step unless the machine's role matches ("desktop" | "server").
     #[serde(default)]
     pub role: Option<String>,
+
+    /// Presence gate — **skip** this step (loudly) unless the probe passes
+    /// ("run my config only if the app is actually here"). Reality, not intent.
+    #[serde(default)]
+    pub when: Option<Probe>,
+    /// Hard presence requirement — **error** unless the probe passes. For a step
+    /// that is meaningless (not merely skippable) without its dependency.
+    #[serde(default)]
+    pub needs: Option<Probe>,
+}
+
+/// A presence probe: exactly one field set. Checks *reality* (what's actually on
+/// the machine), so image-baked / hand-installed / opted-out apps all behave
+/// under one rule.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct Probe {
+    /// A command that must resolve on PATH.
+    #[serde(default)]
+    pub binary: Option<String>,
+    /// A filesystem path that must exist (`~` expands).
+    #[serde(default)]
+    pub path: Option<String>,
+    /// A brew formula that must be installed.
+    #[serde(default)]
+    pub brew: Option<String>,
+    /// A brew cask that must be installed.
+    #[serde(default)]
+    pub cask: Option<String>,
+    /// A flatpak app id that must be installed.
+    #[serde(default)]
+    pub flatpak: Option<String>,
+    /// A Mac App Store id that must be installed.
+    #[serde(default)]
+    pub mas: Option<String>,
+    /// A GNOME extension uuid that must be present.
+    #[serde(default)]
+    pub gext: Option<String>,
+    /// An rpm that must be installed (`rpm -q`).
+    #[serde(default)]
+    pub rpm: Option<String>,
+    /// A script (relative to the temper-home) that must exit 0.
+    #[serde(default)]
+    pub exec: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -19,17 +19,6 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 
 ## Deferred features (buildable — just not built yet)
 
-### Presence-gating (`when` / `needs`)
-**Status:** designed, not built. ARCHITECTURE describes it; the parser rejects
-`when`/`needs` (deny_unknown_fields).
-**Now:** steps gate on `os` + `role` only. The "run config only if the app is
-present" intent is met today by (a) exec scripts' own `command -v` guards and
-(b) drift's `executable_resolves` assert. A `copy` to `~/.config/ghostty/config`
-on a box without Ghostty just leaves a dead file — harmless.
-**Sketch:** add `when`/`needs` to `Step`; a probe enum
-`binary|brew|cask|flatpak|mas|gext|rpm|path|exec`; evaluate before apply; skip
-loudly (Principle #6). Default `when` = "my declared package is installed."
-
 ### Discovery auto-scan
 **Status:** deferred. Only `$TEMPER_DIR` + a cwd walk-up.
 **Sketch:** port dotsync's `discovery.rs` (scan common cloud-folder locations, a

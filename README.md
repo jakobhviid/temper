@@ -44,7 +44,7 @@
 | journal / `undo` (named-run or newest · `--list` · after-hash-guarded, skip-and-report) | ✅ | ✅ sandbox |
 | os + role step-gating (validated; unknown os/role errors) | ✅ | ✅ sandbox |
 | host-OS guard (live `install` refuses cross-OS; drift/dry-run don't) | ✅ | ✅ sandbox |
-| presence-gating (`when`/`needs` probes) | ❌ design | — (only os/role gating today) |
+| presence-gating (`when` soft-skip / `needs` hard-require; 9 probe kinds) | ✅ | ✅ sandbox + live |
 | packages: parse · effective-set · missing/extras | ✅ | ✅ unit + **real brew drift** |
 | providers: brew / cask / tap / flatpak / mas / vscode — probe | ✅ | ✅ real (drift) |
 | providers: … converge (`brew bundle` / `flatpak install`) | ✅ | ✅ **brew bundle live on Bazzite**; flatpak ⏳ |

@@ -184,22 +184,21 @@ Store before `install`, or drop the `mas` lines.
 
 ### The gate: presence probes config
 
-> **Status: DESIGN, not built.** The `when`/`needs` presence-probe described
-> here is the intended model but is **not implemented** — steps are currently
-> gated only by `os` and `role` (both validated; unknown values error). The
-> probe vocabulary and `when`/`needs` fields are rejected by the parser today
-> (see SPEC "Not in the schema"). The paragraph below is the target.
+> **Status: BUILT.** `when`/`needs` presence gating is implemented (`probe.rs`);
+> steps also still gate on `os`/`role`.
 
-Config runs in a second phase; each app's steps would be **gated on a presence
+Config runs in a second phase; each app's steps are **gated on a presence
 probe** — "is this actually here? → run my config." The gate checks *reality,
 not intent*: on Linux, **Ghostty is baked into the image and in no Brewfile**, so
-a gate of `binary: ghostty` fires correctly however it was installed. Probe
-vocabulary (declarative): `binary` / `brew` / `cask` / `flatpak` / `mas` / `gext`
-/ `rpm` / `path` / `exec`. Default = "the package(s) I declared are installed."
+a gate of `when = { binary = "ghostty" }` fires correctly however it was
+installed. Probe vocabulary (declarative, exactly one per probe): `binary` /
+`brew` / `cask` / `flatpak` / `mas` / `gext` / `rpm` / `path` / `exec`. `when`
+skips the step when the probe fails; `needs` errors (a hard requirement).
 
-**Skips must be loud** (Principle #6): `skipped 1password config: probe failed`.
-(The `binary: ghostty` case is handled today by drift's `executable_resolves`
-assertion rather than a step gate.)
+**Skips are loud** (Principle #6): install/update print `⚠ skipped: binary
+\`ghostty\` absent`, and `drift` reports the gated-out step status-only (never as
+red drift). (The implicit "my declared package is installed" default is not
+inferred — declare the probe explicitly.)
 
 ### The cask-artifact exception (a named Principle-#2 violation)
 

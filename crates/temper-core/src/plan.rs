@@ -13,7 +13,7 @@ use anyhow::{bail, Result};
 use crate::journal::Journal;
 use crate::manifest::{self, expand_tilde, Assert, Ignore, Machine, Step};
 use crate::primitives::{self, CopyOpts, ExecOpts, FileState};
-use crate::{drift, packages, providers};
+use crate::{drift, packages, probe, providers};
 
 /// Everything a machine composes, OS-gated to this host.
 pub struct Resolved {
@@ -93,10 +93,36 @@ impl Finding {
     /// they neither read as green "in sync" nor as red drift.
     pub fn status_only(&self) -> bool {
         self.kind == "profile"
+            || self.kind == "when"
             || self.status == "unavailable"
             || self.status == "no drift-check"
             || self.status.starts_with("manual")
     }
+}
+
+/// The outcome of a step's presence gate (`when`/`needs`).
+enum Gate {
+    /// Apply/evaluate the step normally.
+    Apply,
+    /// `when` failed — skip the step (loudly). Carries the probe description.
+    Skip(String),
+    /// `needs` failed — a hard requirement is absent. Carries the description.
+    Require(String),
+}
+
+/// Evaluate a step's `needs` (hard) then `when` (soft) presence gate.
+fn gate_step(home: &Path, step: &Step) -> Gate {
+    if let Some(n) = &step.needs {
+        if !probe::passes(home, n) {
+            return Gate::Require(probe::describe(n));
+        }
+    }
+    if let Some(w) = &step.when {
+        if !probe::passes(home, w) {
+            return Gate::Skip(probe::describe(w));
+        }
+    }
+    Gate::Apply
 }
 
 /// Drift a single step, if it's one we evaluate.
@@ -242,6 +268,31 @@ pub fn run_drift(
     let resolved = resolve(home, machine)?;
     let mut findings = Vec::new();
     for (app, step) in &resolved.steps {
+        // Presence gate: a `when`-skipped step is status-only (its app isn't
+        // here); a failed `needs` is real drift (a hard dep is missing).
+        match gate_step(home, step) {
+            Gate::Skip(desc) => {
+                findings.push(Finding {
+                    app: app.clone(),
+                    kind: "when",
+                    target: desc.clone(),
+                    ok: true,
+                    status: format!("skipped: {desc} absent"),
+                });
+                continue;
+            }
+            Gate::Require(desc) => {
+                findings.push(Finding {
+                    app: app.clone(),
+                    kind: "needs",
+                    target: desc.clone(),
+                    ok: false,
+                    status: format!("required {desc} is absent"),
+                });
+                continue;
+            }
+            Gate::Apply => {}
+        }
         if let Some(mut f) = step_finding(home, machine, app, step, vars)? {
             // A `manual` step is never applied by install/update, so don't
             // report it as permanent, unfixable drift — mark it status-only.
@@ -403,6 +454,9 @@ pub struct InstallReport {
     pub steps_total: usize,
     /// A layered rpm was added and the machine needs a reboot.
     pub reboot: bool,
+    /// Steps skipped because their `when` probe failed (app not present) —
+    /// announced loudly (Principle #6). Each entry is a probe description.
+    pub skipped: Vec<String>,
 }
 
 /// Install flow: phase 1 converges packages (whole-machine), phase 2 applies
@@ -444,6 +498,7 @@ pub fn run_install(
             steps_changed: 0,
             steps_total: 0,
             reboot,
+            skipped: Vec::new(),
         });
     }
 
@@ -451,11 +506,21 @@ pub fn run_install(
     let resolved = resolve(home, machine)?;
     let mut journal = Journal::begin();
     let (mut changed, mut total) = (0usize, 0usize);
-    for (_app, step) in &resolved.steps {
+    let mut skipped = Vec::new();
+    for (app, step) in &resolved.steps {
         // `manual` steps are never run by an automated flow (e.g. speaker-eq's
         // interactive picker) — only when explicitly invoked.
         if !is_step(step) || lifecycle(step) == "manual" {
             continue;
+        }
+        // Presence gate — skip loudly when absent, error on a failed `needs`.
+        match gate_step(home, step) {
+            Gate::Skip(desc) => {
+                skipped.push(desc);
+                continue;
+            }
+            Gate::Require(desc) => bail!("step in `{app}` needs {desc}, which is absent"),
+            Gate::Apply => {}
         }
         total += 1;
         if dry_run {
@@ -474,6 +539,7 @@ pub fn run_install(
         steps_changed: changed,
         steps_total: total,
         reboot,
+        skipped,
     })
 }
 
@@ -570,7 +636,8 @@ pub fn run_update(
     let resolved = resolve(home, machine)?;
     let mut journal = Journal::begin();
     let (mut changed, mut total) = (0usize, 0usize);
-    for (_app, step) in &resolved.steps {
+    let mut skipped = Vec::new();
+    for (app, step) in &resolved.steps {
         if !is_step(step) {
             continue;
         }
@@ -583,6 +650,15 @@ pub fn run_update(
             }
             _ => continue, // install-only + manual are not applied on update
         }
+        // Presence gate — same as install.
+        match gate_step(home, step) {
+            Gate::Skip(desc) => {
+                skipped.push(desc);
+                continue;
+            }
+            Gate::Require(desc) => bail!("step in `{app}` needs {desc}, which is absent"),
+            Gate::Apply => {}
+        }
         total += 1;
         if apply_step(home, machine, step, vars, &mut journal)? {
             changed += 1;
@@ -594,5 +670,6 @@ pub fn run_update(
         steps_changed: changed,
         steps_total: total,
         reboot: false,
+        skipped,
     })
 }

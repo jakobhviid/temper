@@ -79,7 +79,12 @@ Package token grammar (same as a Brewfile line):
 Common: `os = "mac"|"linux"` and `role = "desktop"|"server"` (skip on a
 non-matching OS/role; an unknown os/role errors at load); `run = "always"|
 "install"|"ensure"|"manual"` (lifecycle; default: copy/block/setkey → always,
-exec/seed → install). `always` re-applies every update (fixes drift); `ensure`
+exec/seed → install). Presence gates (gate config on **reality**):
+`when = { <probe> }` skips the step (loudly) unless the probe passes;
+`needs = { <probe> }` errors unless it passes. A probe is exactly one of
+`binary` / `path` / `brew` / `cask` / `flatpak` / `mas` / `gext` / `rpm` /
+`exec` (e.g. `when = { binary = "ghostty" }` — deploy ghostty config only where
+ghostty is actually present, however it was installed). `always` re-applies every update (fixes drift); `ensure`
 is **install-if-missing** on update (creates an absent target, never overwrites
 a present one — an `exec` `ensure` needs a `check` to be applied on update,
 without one it's skipped); `manual` is skipped by automated flows — run it only

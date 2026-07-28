@@ -187,7 +187,8 @@ fn cmd_install(
             serde_json::json!({
                 "machine": m.name, "packages": r.packages,
                 "changed": r.steps_changed, "total": r.steps_total,
-                "reboot": r.reboot, "dry_run": dry_run, "packages_only": packages_only
+                "reboot": r.reboot, "dry_run": dry_run, "packages_only": packages_only,
+                "skipped": r.skipped
             })
         );
     } else if packages_only {
@@ -202,11 +203,19 @@ fn cmd_install(
             "install {}: {} package(s), {verb} {} of {} config step(s)",
             m.name, r.packages, r.steps_changed, r.steps_total
         );
+        announce_skipped(&r.skipped);
         if r.reboot {
             println!("  ⚠ reboot required (rpm-ostree layered a package)");
         }
     }
     Ok(())
+}
+
+/// Loudly report steps skipped by a failed `when` presence gate (Principle #6).
+fn announce_skipped(skipped: &[String]) {
+    for s in skipped {
+        println!("  {} skipped: {s} absent", ui::yellow("⚠"));
+    }
 }
 
 fn cmd_update(json: bool) -> Result<()> {
@@ -220,7 +229,8 @@ fn cmd_update(json: bool) -> Result<()> {
             "{}",
             serde_json::json!({
                 "machine": m.name, "packages": r.packages,
-                "reapplied": r.steps_changed, "total": r.steps_total
+                "reapplied": r.steps_changed, "total": r.steps_total,
+                "skipped": r.skipped
             })
         );
     } else {
@@ -228,6 +238,7 @@ fn cmd_update(json: bool) -> Result<()> {
             "update {}: upgraded {} package set, re-applied {} of {} always-step(s)",
             m.name, r.packages, r.steps_changed, r.steps_total
         );
+        announce_skipped(&r.skipped);
     }
     Ok(())
 }
