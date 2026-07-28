@@ -436,9 +436,18 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
         );
     }
     if !status_only.is_empty() {
+        // Show the reason for actionable ones (an `unavailable` — e.g. a missing
+        // secret or an absent backend tool); keep boring ones (no-drift-check /
+        // manual) compact as `app:kind`.
         let labels: Vec<String> = status_only
             .iter()
-            .map(|f| format!("{}:{}", f.app, f.kind))
+            .map(|f| {
+                if f.status.starts_with("unavailable") {
+                    format!("{}:{} ({})", f.app, f.kind, f.status)
+                } else {
+                    format!("{}:{}", f.app, f.kind)
+                }
+            })
             .collect();
         println!("  {} {}", ui::cyan("ℹ status-only:"), ui::dim(&labels.join(", ")));
     }

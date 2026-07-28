@@ -152,10 +152,10 @@ setkey = { backend = "dconf",    key = "/org/gnome/desktop/interface/color-schem
 exec    = "assets/setup.sh"  # runs via sh AS YOU (not root); cwd = temper-home; env TEMPER_HOME/MACHINE/OS
 check   = "assets/check.sh"  # optional drift-hook: exit 0 = in sync; gates re-run
 sudo    = false              # deprecated no-op — escalate inside the script with sudo per-command
-secrets = ["ACOUSTID_KEY"]   # env vars that must be set; passed through. NOTE: the
-                             # `check` hook runs during drift too, so a declared
-                             # secret must be set even for `drift`/`install --dry-run`
-                             # (they error if it's missing), not just a live apply.
+secrets = ["ACOUSTID_KEY"]   # env vars passed through to the script. A live apply
+                             # errors if a declared secret is missing; a read-only
+                             # `drift`/`install --dry-run` DEGRADES that step to
+                             # status-only ("unavailable — secret …") — never aborts.
 # exec is NOT journaled (not reversible by undo).
 
 # profile: install a macOS .mobileconfig (opens System Settings; manual)

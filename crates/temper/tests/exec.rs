@@ -75,8 +75,25 @@ fn exec_check_secret_and_failure() {
         .success();
     assert_eq!(fs::read_to_string(&marker).unwrap(), "hunter2\n", "exec re-ran despite passing check");
 
-    // remove the marker (check now fails) and drop the secret → install must
-    // fail loudly rather than run without the required secret.
+    // drift with the secret UNSET → read-only must NOT abort; the exec check
+    // degrades to status-only ("unavailable — secret …"), 0 out of sync.
+    temper(h, fake_home.path(), state.path())
+        .env_remove("MY_SECRET")
+        .arg("drift")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("unavailable"))
+        .stdout(predicates::str::contains("0 out of sync"));
+
+    // install --dry-run with the secret unset → also read-only, must not abort.
+    temper(h, fake_home.path(), state.path())
+        .env_remove("MY_SECRET")
+        .args(["install", "--dry-run"])
+        .assert()
+        .success();
+
+    // remove the marker (check now fails) and drop the secret → a real install
+    // must still fail loudly rather than run without the required secret.
     fs::remove_file(&marker).unwrap();
     temper(h, fake_home.path(), state.path())
         .env_remove("MY_SECRET")

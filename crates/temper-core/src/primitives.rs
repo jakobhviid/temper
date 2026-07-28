@@ -492,6 +492,16 @@ fn exec_command(script: &Path, opts: &ExecOpts) -> Result<std::process::Command>
     Ok(cmd)
 }
 
+/// The first declared secret missing from the environment, if any. Read-only
+/// paths (`drift`, `--dry-run`) use this to degrade a check they can't run to
+/// `unavailable` instead of aborting — the apply path still errors loudly.
+pub fn exec_missing_secret(opts: &ExecOpts) -> Option<String> {
+    opts.secrets
+        .iter()
+        .find(|s| std::env::var(s).is_err())
+        .cloned()
+}
+
 /// Run a drift-hook: true if it exits 0 (in sync).
 pub fn exec_check(check: &Path, opts: &ExecOpts) -> Result<bool> {
     let status = exec_command(check, opts)?
@@ -522,11 +532,18 @@ pub fn exec_apply(script: &Path, check: Option<&Path>, opts: &ExecOpts) -> Resul
 /// reports that there is no drift story (visible, not failing).
 pub fn exec_state(check: Option<&Path>, opts: &ExecOpts) -> Result<(bool, String)> {
     match check {
-        Some(check) => Ok(if exec_check(check, opts)? {
-            (true, "in sync".into())
-        } else {
-            (false, "drifted".into())
-        }),
+        Some(check) => {
+            // A read-only drift can't run the hook without its secret — degrade
+            // to status-only (Principle #6: degrade, don't abort), never fail.
+            if let Some(s) = exec_missing_secret(opts) {
+                return Ok((true, format!("unavailable — secret `{s}` not set")));
+            }
+            Ok(if exec_check(check, opts)? {
+                (true, "in sync".into())
+            } else {
+                (false, "drifted".into())
+            })
+        }
         None => Ok((true, "no drift-check".into())),
     }
 }

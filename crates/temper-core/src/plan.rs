@@ -104,7 +104,7 @@ impl Finding {
     pub fn status_only(&self) -> bool {
         self.kind == "profile"
             || self.kind == "when"
-            || self.status == "unavailable"
+            || self.status.starts_with("unavailable") // incl. "unavailable — secret …"
             || self.status == "no drift-check"
             || self.status.starts_with("manual")
     }
@@ -460,11 +460,14 @@ fn step_would_change(
     if step.exec.is_some() {
         // Never run the script during a preview. Use the check hook if present;
         // otherwise we can't tell, so assume it would run.
+        let opts = exec_opts(home, machine, step);
+        // A missing secret means the hook can't run — a read-only preview must
+        // degrade (report no change), not abort.
+        if primitives::exec_missing_secret(&opts).is_some() {
+            return Ok(false);
+        }
         return match &step.check {
-            Some(check) => {
-                let opts = exec_opts(home, machine, step);
-                Ok(!primitives::exec_check(&home.join(check), &opts)?)
-            }
+            Some(check) => Ok(!primitives::exec_check(&home.join(check), &opts)?),
             None => Ok(true),
         };
     }
