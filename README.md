@@ -109,52 +109,26 @@ open tool and leaving the *data* in a folder anyone can bring. It's built in the
 same Rust-on-a-shared-tap style as its siblings [`grove`], [`amdl`], and
 [`dotsync`].
 
-## Status
+## Known Limitations
 
-Every verb is live and on the Homebrew tap. Read-only paths (all of `drift`,
-package probing, `install --dry-run`) are verified against real machines, and
-many write paths are now verified live on a Bazzite host. What each piece is and
-how far it's verified:
+- **`setkey(toml)`** preserves comments and formatting, *except* the changed
+  key's own inline comment.
+- **`setkey(defaults)`, `sysfile`, and `exec` aren't undoable** — they mutate
+  system-side or arbitrary state, not a file temper can snapshot (dconf writes
+  *are* journaled and undoable).
+- **`profile`** (macOS `.mobileconfig`) install is a manual System-Settings step;
+  drift on it is status-only.
 
-| Area | Built | Verified |
-|---|---|---|
-| `install` / `update` / `drift` / `prune` / `backup` / `adopt` / `reconcile` / `restore` / `undo` / `use` / `eq-import` | ✅ | sandbox + real drift |
-| `--json`, `--dry-run`, completions, `--man`, `--llm` | ✅ | ✅ |
-| `copy` (verbatim · template · seed · mode) | ✅ | ✅ sandbox |
-| `block` (marker region) | ✅ | ✅ sandbox + real drift |
-| `setkey` — json · toml (comment-preserving) · ini/.desktop · **defaults** | ✅ | ✅ sandbox |
-| `setkey` — **dconf** (journaled + undoable) | ✅ | ✅ live round-trip on Bazzite |
-| `sysfile` (root-owned /etc file via `sudo install`; drift = content+mode+owner) | ✅ | ✅ drift live; apply argv unit-tested |
-| `exec` (check-hook · secrets; runs as you, via `sh`) | ✅ | ✅ sandbox |
-| `[[assert]]` — absent / contains-line / mode / executable-resolves / not-member / shell / json-semantic | ✅ | ✅ sandbox + real drift |
-| journal / `undo` (named-run or newest · `--list` · after-hash-guarded, skip-and-report) | ✅ | ✅ sandbox + live (dconf) |
-| gating — os/role (steps, asserts, bundle extensions/rpm) + presence `when`/`needs` (9 probes) | ✅ | ✅ sandbox + live |
-| host guards — cross-OS install refused; explicit-name install confirms when it isn't this host | ✅ | ✅ live |
-| packages — parse · effective-set · missing/extras · dependency-aware brew extras | ✅ | ✅ unit + **real brew drift** |
-| providers: brew / cask / tap / flatpak / mas / vscode — probe | ✅ | ✅ real (drift) |
-| providers: converge — `brew bundle` · forgiving `mas` · `flatpak install` | ✅ | ✅ **brew bundle live on Bazzite**; flatpak ⏳ |
-| dconf snapshot `backup` (filtered) + `restore` (confirm-gated) | ✅ | ✅ **live round-trip on Bazzite** |
-| `eq-import` (fetch calibrated speaker profiles into the folder) | ✅ | ✅ live clone/scan/cleanup |
-| providers: **gext** / **rpm-ostree** layering | ✅ | — (Linux/VM) |
-| `profile` (macOS .mobileconfig) | ✅ | — (manual/System Settings) |
-
-**Still awaiting a fuller live run** (writes only a real converge exercises):
-`flatpak install`, `brew upgrade` on `update`, dependency-aware `prune`,
-`brew bundle dump` on `backup`, and `gext`/`rpm-ostree` layering.
-
-**Known limitations (by design):** `setkey(toml)` preserves comments except the
-*changed* key's own inline comment; `setkey(defaults)`, `sysfile`, and `exec`
-aren't undoable (system-side / arbitrary state); `profile` install is a manual
-System-Settings step. See `ROADMAP.md` for the full ledger.
-
-`WORKFLOWS.md` (the operating loops) is compiled into `--llm` alongside the schema
-and this status, so an agent can both operate and author a temper folder.
+See `ROADMAP.md` for the full ledger of deferred features and scope boundaries.
 
 ## AI disclosure
 
-Parts of temper were written with AI assistance (Claude Code). Per the repo's
-`AGENTS.md`, this is the single place that's disclosed — commits are authored
-solely by the repository owner. *(Wording is the owner's to adjust.)*
+Parts of this codebase were written with the assistance of AI coding agents
+(Claude Code, opencode, and others). All changes were reviewed by the maintainer.
+
+## License
+
+MIT
 
 [`grove`]: https://github.com/jakobhviid/grove
 [`amdl`]: https://github.com/jakobhviid/amdl
