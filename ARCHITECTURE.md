@@ -297,12 +297,17 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
 - **`backup [machine]`** — dump live package state into the folder
   (`brew bundle dump` → `machines/<name>/Brewfile`). *(A filtered dconf snapshot
   is designed but not yet built — see the status table.)*
-- **`adopt`** — report installed extras not in the spec (advisory / non-mutating
-  today) so you can add each to a bundle, the machine loose list, or `[ignore]`.
-  *(Interactive spec←machine capture — dotsync's verb, and exactly what
-  ReinstallScripts' `reconcile` does — is the target shape; see ROADMAP.md.)*
-  Converging the other way, machine←spec, *is* `install`/`update` — that's why
-  no separate verb is needed for it.
+- **`adopt`** — report installed extras not in the spec (advisory / non-mutating)
+  so you can add each to a bundle, the machine loose list, or `[ignore]`. The
+  read-only sibling of `reconcile`.
+- **`reconcile [machine]`** — the interactive spec←machine capture (RIS's
+  `reconcile`): per-item, absorb installed-but-undeclared extras INTO the
+  machine's own Brewfile, drop declared-but-absent entries FROM it, or route a
+  flatpak extra to `[ignore]` (comment-preserving, via toml_edit). Missing
+  entries default to *keep*, extras default to *skip*; a unified preview + one
+  confirm precede any write. Edits only the machine's **own** `brewfile`, never a
+  shared bundle. `--json` previews the plan without prompting. Converging the
+  other way, machine←spec, *is* `install`/`update`.
 - **`undo [run]`** — revert a run — the one named by its id, else the newest;
   **`undo --list`** enumerates revertible runs (read-only). amdl's
   content-addressed journal: after-hash-guarded reverts skip-and-report (a file

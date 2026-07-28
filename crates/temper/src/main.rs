@@ -17,7 +17,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
-use temper_core::{discovery, journal, machine, manifest, plan};
+use temper_core::{discovery, journal, machine, manifest, plan, reconcile, ui};
 
 const REPO_URL: &str = "https://github.com/jakobhviid/temper";
 
@@ -81,6 +81,14 @@ enum Cmd {
     /// Report installed packages not in the spec (advisory) so you can add them
     /// to a bundle, the machine's loose list, or `[ignore]`. Non-mutating.
     Adopt,
+    /// Interactively reconcile the machine's Brewfile with reality (spec←machine):
+    /// absorb installed-but-undeclared extras, drop declared-but-absent entries,
+    /// or route a flatpak extra to `[ignore]`. Edits only the machine's own
+    /// Brewfile. `--json` previews the plan without prompting.
+    Reconcile {
+        /// Machine name (default: resolved from hostname).
+        machine: Option<String>,
+    },
     /// Revert the last mutating run.
     Undo {
         /// Run id to revert (default: the most recent).
@@ -146,6 +154,7 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Prune { dry_run }) => cmd_prune(dry_run, json)?,
         Some(Cmd::Backup { machine }) => cmd_backup(machine, json)?,
         Some(Cmd::Adopt) => cmd_adopt(json)?,
+        Some(Cmd::Reconcile { machine }) => cmd_reconcile(machine, json)?,
     }
     Ok(())
 }
@@ -247,7 +256,6 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
 /// real tty by `ui`).
 fn render_drift(machine: &str, items: &[plan::Finding]) {
     use std::collections::HashMap;
-    use temper_core::ui;
 
     // Group findings by app, preserving first-seen order.
     let mut order: Vec<&str> = Vec::new();
@@ -402,6 +410,164 @@ fn cmd_adopt(json: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Interactive spec←machine reconcile. Under `--json` it previews the plan and
+/// prompts for nothing.
+fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    let ft = manifest::load_fleet(&home)?;
+    let m = machine::resolve(&ft, machine.as_deref())?;
+    let plan = reconcile::plan(&home, &m, &ft.ignore)?;
+
+    if json {
+        let adds: Vec<_> = plan
+            .adds
+            .iter()
+            .map(|a| serde_json::json!({ "manager": a.manager.as_str(), "name": a.name, "token": a.token }))
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({
+                "machine": m.name, "brewfile": plan.brewfile_rel,
+                "adds": adds, "drops": plan.drops
+            })
+        );
+        return Ok(());
+    }
+
+    if plan.adds.is_empty() && plan.drops.is_empty() {
+        println!("reconcile {}: already in sync — nothing to absorb or drop.", m.name);
+        return Ok(());
+    }
+
+    let bf_path = home.join(&plan.brewfile_rel);
+    let original = std::fs::read_to_string(&bf_path)
+        .map_err(|e| anyhow::anyhow!("reading {}: {e}", bf_path.display()))?;
+
+    // Missing → keep/drop (default KEEP).
+    let mut chosen_drops = Vec::new();
+    if !plan.drops.is_empty() {
+        println!("\n{}", ui::bold("Declared in the Brewfile but not installed:"));
+        for line in &plan.drops {
+            if !prompt_yes(&format!("  keep {:?} in the Brewfile?", line.trim())) {
+                chosen_drops.push(line.clone());
+            }
+        }
+    }
+
+    // Extras → add / (flatpak) ignore / skip (default SKIP).
+    let mut chosen_adds = Vec::new();
+    let mut chosen_ignores: Vec<String> = Vec::new(); // flatpak app ids
+    if !plan.adds.is_empty() {
+        println!("\n{}", ui::bold("Installed but not in the spec:"));
+        for a in &plan.adds {
+            match prompt_add(&a.token, a.is_flatpak) {
+                AddChoice::Add => chosen_adds.push(a.token.clone()),
+                AddChoice::Ignore => chosen_ignores.push(a.name.clone()),
+                AddChoice::Skip => {}
+            }
+        }
+    }
+
+    if chosen_drops.is_empty() && chosen_adds.is_empty() && chosen_ignores.is_empty() {
+        println!("\nNothing selected — nothing changed.");
+        return Ok(());
+    }
+
+    // Preview.
+    println!("\n{}", ui::bold("Proposed changes"));
+    for t in &chosen_adds {
+        println!("  {} {}  {}", ui::green("+"), t, ui::dim(&format!("→ {}", plan.brewfile_rel)));
+    }
+    for d in &chosen_drops {
+        println!("  {} {}  {}", ui::red("-"), d.trim(), ui::dim(&format!("→ {}", plan.brewfile_rel)));
+    }
+    for name in &chosen_ignores {
+        println!("  {} flatpak {}  {}", ui::yellow("~"), name, ui::dim("→ [ignore].flatpak in temper.toml"));
+    }
+
+    if !prompt_no("\napply these changes?") {
+        println!("aborted — nothing changed.");
+        return Ok(());
+    }
+
+    // Write the Brewfile (drops first, then adds).
+    let new_bf = reconcile::brewfile_with_adds(
+        &reconcile::brewfile_without(&original, &chosen_drops),
+        &chosen_adds,
+    );
+    if new_bf != original {
+        std::fs::write(&bf_path, &new_bf)
+            .map_err(|e| anyhow::anyhow!("writing {}: {e}", bf_path.display()))?;
+    }
+    // Write [ignore] additions (comment-preserving).
+    if !chosen_ignores.is_empty() {
+        let tt_path = home.join("temper.toml");
+        let mut tt = std::fs::read_to_string(&tt_path)?;
+        for name in &chosen_ignores {
+            tt = reconcile::append_ignore(&tt, "flatpak", name)?;
+        }
+        std::fs::write(&tt_path, tt)?;
+    }
+    println!(
+        "{} reconcile {}: {} added, {} dropped, {} ignored.",
+        ui::green("✓"),
+        m.name,
+        chosen_adds.len(),
+        chosen_drops.len(),
+        chosen_ignores.len()
+    );
+    Ok(())
+}
+
+enum AddChoice {
+    Add,
+    Ignore,
+    Skip,
+}
+
+/// Read a reply from stdin (flushing the prompt first), trimmed + lowercased.
+fn read_reply() -> String {
+    use std::io::Write;
+    let _ = io::stdout().flush();
+    let mut s = String::new();
+    let _ = io::stdin().read_line(&mut s);
+    s.trim().to_lowercase()
+}
+
+/// `[Y/n]` — default yes.
+fn prompt_yes(msg: &str) -> bool {
+    print!("{msg} [Y/n] ");
+    !read_reply().starts_with('n')
+}
+
+/// `[y/N]` — default no.
+fn prompt_no(msg: &str) -> bool {
+    print!("{msg} [y/N] ");
+    read_reply().starts_with('y')
+}
+
+/// `[y/N]` (or `[y/N/i]` for flatpak) — default skip.
+fn prompt_add(token: &str, flatpak: bool) -> AddChoice {
+    if flatpak {
+        print!("  add {token}? [y/N/i]  (i = add to [ignore]) ");
+        let r = read_reply();
+        if r.starts_with('y') {
+            AddChoice::Add
+        } else if r.starts_with('i') {
+            AddChoice::Ignore
+        } else {
+            AddChoice::Skip
+        }
+    } else {
+        print!("  add {token}? [y/N] ");
+        if read_reply().starts_with('y') {
+            AddChoice::Add
+        } else {
+            AddChoice::Skip
+        }
+    }
 }
 
 fn cmd_undo(run: Option<String>, list: bool, dry_run: bool, json: bool) -> Result<()> {

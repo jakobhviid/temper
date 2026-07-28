@@ -49,6 +49,7 @@
 | providers: brew / cask / tap / flatpak / mas / vscode — probe | ✅ | ✅ real (drift) |
 | providers: … converge (`brew bundle` / `flatpak install`) | ✅ | ✅ **brew bundle live on Bazzite**; flatpak ⏳ |
 | `install --packages-only` (additive "install-missing" — packages, no config) | ✅ | ✅ live (brew) |
+| `reconcile` (interactive spec←machine: add/drop Brewfile entries, flatpak→[ignore]) | ✅ | ✅ live drop + `--json` preview |
 | providers: **gext** / **rpm-ostree** | ✅ | — (Linux/VM) |
 | `profile` (macOS .mobileconfig) | ✅ | — (manual/System Settings) |
 | discovery (auto-scan cloud folders) beyond `$TEMPER_DIR` + cwd walk-up | ⏳ | — |

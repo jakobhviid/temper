@@ -92,29 +92,6 @@ findings carry the both-direction fork; config-drift findings point at
 existing for the absorb-direction actions to target — the drift item type must
 carry the remediation forward *and* have a verb to point at.
 
-### `reconcile` — interactive spec←machine capture (both directions, with drops)
-**Status:** designed as `adopt`'s target shape; not built. (ARCHITECTURE named
-"interactive spec←machine capture — dotsync's verb" as adopt's target but
-formerly dismissed the *name* `reconcile` as machine←spec = install/update — the
-wrong way round. RIS `reconcile` is **spec←machine**, the opposite of install;
-that line is now corrected.)
-**Now:** `adopt` covers the **extras half only**, reports without mutating, and
-**never drops**. Absorbing a change into the spec is a hand TOML edit — except
-packages, where `backup` does a *full overwrite* rather than a per-item choice.
-RIS `reconcile` (Linux `justfile:723-852`) is per-item and surgical: missing
-entries prompt `[Y/n]` (default keep; `n` drops the line from the Brewfile),
-extras prompt `[y/N]` (default skip; `y` adds), and **flatpak** extras get a
-three-way `[y/N/i]` where `i` appends the appid to `bazzite-flatpak-ignore.txt`
-(silenced in future drift without being tracked). It ends with a unified
-`diff -u` preview + a separate `+`-prefixed ignore-file preview + one final
-`[y/N]` gate before any write. Mac (`justfile:334-435`) is the same minus
-flatpak/ignore, scoped to `brew|cask|tap`.
-**Sketch:** a `reconcile [machine]` verb: compute the same missing/extras diff
-`drift` already computes, prompt per item (keep/drop for missing; add/skip/ignore
-for extras, `ignore` flatpak-only), preview the resulting TOML/Brewfile edit,
-confirm once, write. This is the absorb-direction verb the remediation summary
-above points at.
-
 ### Filtered dconf snapshot + targeted restore
 **Status:** snapshot designed, not built; the restore pair is absent entirely.
 `backup` does `brew bundle dump` only. RIS additionally has

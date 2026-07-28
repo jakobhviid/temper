@@ -175,6 +175,11 @@ impl Installed {
         self.by_manager.get(&m).is_some_and(|s| s.contains(name))
     }
 
+    /// Public form of `has` for callers outside this module (reconcile).
+    pub fn contains(&self, m: Manager, name: &str) -> bool {
+        self.has(m, name)
+    }
+
     /// Whether this manager was probed at all (absent = not installed / skipped).
     pub fn probed(&self, m: Manager) -> bool {
         self.by_manager.contains_key(&m)
