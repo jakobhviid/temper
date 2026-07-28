@@ -169,12 +169,15 @@ temper acts on the **machine it runs on**. The machine *argument* selects which
   `drift` with **no machine name** resolves *this* machine by hostname. Drive
   remotes over ssh — `ssh atlas 'cd ~/steel && temper drift'` — so atlas resolves
   and converges *itself*.
-- **The machine argument is for preview from elsewhere, not remote converge.**
-  `temper drift atlas` on another box checks *this* box's live state against
-  *atlas's* spec (useful while authoring). But a live `temper install atlas` run
-  somewhere else either refuses (OS differs) or would apply atlas's spec to the
-  **current** machine (same OS) — so never converge a remote by name; ssh in and
-  run it there.
+- **The machine argument selects a spec, not a remote target.** `temper drift
+  atlas` on another box checks *this* box's live state against *atlas's* spec
+  (useful while authoring). A live `temper install atlas` from a different host
+  **asks you to confirm** — because it would apply atlas's spec to the box you're
+  on, not to a remote atlas (`--yes` skips the prompt; `--json` refuses without
+  it; a differing OS is still hard-refused). To converge atlas for real, ssh in
+  and run `temper install` there — with no name it resolves *itself* by hostname,
+  no prompt. Installing by an explicit name is for the deliberate case (e.g.
+  imaging a box whose hostname isn't set yet).
 
 ## Presence-gating in practice (why config "just works" per machine)
 

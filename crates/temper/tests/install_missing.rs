@@ -49,7 +49,7 @@ fn packages_only_skips_config_steps() {
 
     // packages-only: config step must NOT run → the file is not created.
     temper(h, fake_home.path(), state.path())
-        .args(["install", "t", "--packages-only"])
+        .args(["install", "t", "--packages-only", "--yes"])
         .assert()
         .success()
         .stdout(predicates::str::contains("config skipped"));
@@ -57,7 +57,7 @@ fn packages_only_skips_config_steps() {
 
     // full install: the config step runs → the file is created.
     temper(h, fake_home.path(), state.path())
-        .args(["install", "t"])
+        .args(["install", "t", "--yes"])
         .assert()
         .success();
     assert!(target.exists(), "full install should have applied the copy step");

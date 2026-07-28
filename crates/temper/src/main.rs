@@ -48,7 +48,9 @@ enum Cmd {
     /// Converge a machine to its spec — full: add missing packages, apply
     /// everything, run one-time setup. Defaults to this machine.
     Install {
-        /// Machine name (default: resolved from hostname).
+        /// Machine name (default: resolved from hostname). Passing a name that
+        /// isn't this host is allowed, but a live install asks to confirm first
+        /// (temper converges the LOCAL machine).
         machine: Option<String>,
         /// Show what would change without touching anything.
         #[arg(long)]
@@ -57,6 +59,9 @@ enum Cmd {
         /// config-step phase — the additive, no-churn "install-missing" flow.
         #[arg(long)]
         packages_only: bool,
+        /// Skip the confirmation when the named machine isn't this host.
+        #[arg(long)]
+        yes: bool,
     },
     /// Re-apply the `always` config steps and upgrade declared packages
     /// (`brew upgrade` + `flatpak update`). Does not add newly-declared apps.
@@ -168,8 +173,8 @@ fn run(cli: Cli) -> Result<()> {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "temper", &mut io::stdout());
         }
-        Some(Cmd::Install { machine, dry_run, packages_only }) => {
-            cmd_install(machine, dry_run, packages_only, json)?
+        Some(Cmd::Install { machine, dry_run, packages_only, yes }) => {
+            cmd_install(machine, dry_run, packages_only, yes, json)?
         }
         Some(Cmd::Update) => cmd_update(json)?,
         Some(Cmd::Drift { machine }) => cmd_drift(machine, json)?,
@@ -233,11 +238,41 @@ fn cmd_install(
     machine: Option<String>,
     dry_run: bool,
     packages_only: bool,
+    yes: bool,
     json: bool,
 ) -> Result<()> {
     let home = discovery::find_home()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
+
+    // A live install with an *explicit* name that isn't this host is a footgun:
+    // temper converges the LOCAL machine, so it would apply the named machine's
+    // spec to whatever box you're on. Allow it (you may mean it — e.g. imaging a
+    // renamed box), but confirm first. Read-only/dry-run paths never gate.
+    if !dry_run && machine.is_some() {
+        let host = machine::hostname();
+        let is_this_host = host.as_deref().is_some_and(|h| m.name.eq_ignore_ascii_case(h));
+        if !is_this_host {
+            let host_label = host.as_deref().unwrap_or("an unknown hostname");
+            let warn = format!(
+                "installing as '{}', but this machine is '{}' — temper converges the \
+                 LOCAL box, so this applies {}'s spec here, not to a remote '{}'",
+                m.name, host_label, m.name, m.name
+            );
+            if yes {
+                eprintln!("{} {warn} (--yes)", ui::yellow("⚠"));
+            } else if json {
+                anyhow::bail!("{warn}; pass --yes to confirm");
+            } else {
+                eprintln!("{} {warn}", ui::yellow("⚠"));
+                if !prompt_no("proceed anyway?") {
+                    println!("aborted — nothing changed.");
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     let vars = manifest::effective_vars(&ft.vars, &m);
     let r = plan::run_install(&home, &m, &vars, &ft.brew.trust, dry_run, packages_only)?;
     if json {
