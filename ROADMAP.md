@@ -127,24 +127,6 @@ step.
 the aggregate package converge in add-only mode — no prune, no config phase. It's
 a subset of what `install` already does.
 
-### Drift overview: grouping, salience, color
-**Status:** not built — reviewer-flagged ("becomes large, no groups or better
-colors to understand the important parts").
-RIS groups findings live under bold `section` headers as it scans (image → zsh →
-shell → git → brave → ghostty → … → brewfile → gnome → 1password), 2-space-indented
-`ok_line`/`fail_line` with **color = role** (green ✓, red ✗, cyan `→`, dim
-command), multi-item failures indented 6 spaces. Servers gate desktop-only
-sections off entirely so a headless box never sees a wall of false failures.
-**Now:** `cmd_drift` emits every finding as one undifferentiated `✓/✗` line
-regardless of scope or app — no headers, no color, no collapse of the in-sync
-majority. On a real machine (steel composes ~20 apps) this is a long flat wall
-where the few out-of-sync items don't stand out.
-**Sketch:** group findings by app (or by scope: machine / app), print a bold
-header per group, color the marks, and surface the drift — e.g. collapse
-all-in-sync groups to a one-line count and expand only groups that contain drift,
-with a leading out-of-sync total. `ui.rs` (currently a stub) is where the
-verbosity + color helpers land. `--json` output stays flat and unchanged.
-
 ### Filtered dconf snapshot + targeted restore
 **Status:** snapshot designed, not built; the restore pair is absent entirely.
 `backup` does `brew bundle dump` only. RIS additionally has

@@ -218,18 +218,102 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
             serde_json::json!({ "machine": m.name, "out_of_sync": out_of_sync, "items": arr })
         );
     } else {
-        for f in &items {
-            let mark = if f.ok { "✓" } else { "✗" };
-            println!("  {mark} {:<20} {} [{}] ({})", f.status, f.target, f.kind, f.app);
-        }
-        println!(
-            "drift {}: {} ok, {} out of sync",
-            m.name,
-            items.len() - out_of_sync,
-            out_of_sync
-        );
+        render_drift(&m.name, &items);
     }
     Ok(())
+}
+
+/// Human drift view: grouped by app, drift surfaced first (red), fully-in-sync
+/// apps collapsed to one green line, status-only items (manual / unavailable /
+/// no-drift-check / profile) called out separately so they read as neither
+/// green nor red. `--json` never reaches here, so ANSI is safe (and gated on a
+/// real tty by `ui`).
+fn render_drift(machine: &str, items: &[plan::Finding]) {
+    use std::collections::HashMap;
+    use temper_core::ui;
+
+    // Group findings by app, preserving first-seen order.
+    let mut order: Vec<&str> = Vec::new();
+    let mut groups: HashMap<&str, Vec<&plan::Finding>> = HashMap::new();
+    for f in items {
+        if !groups.contains_key(f.app.as_str()) {
+            order.push(f.app.as_str());
+        }
+        groups.entry(f.app.as_str()).or_default().push(f);
+    }
+
+    println!("{} {}\n", ui::dim("drift ·"), ui::bold(machine));
+
+    let mut clean_apps: Vec<&str> = Vec::new();
+    let mut drifted_groups = 0usize;
+    for app in &order {
+        let g = &groups[app];
+        let drifted: Vec<&&plan::Finding> = g.iter().filter(|f| !f.ok).collect();
+        if drifted.is_empty() {
+            // Collapse to the in-sync line only if something was actually
+            // verified — an app that is *entirely* status-only belongs solely
+            // in the status-only line, not counted as "in sync".
+            if g.iter().any(|f| f.ok && !f.status_only()) {
+                clean_apps.push(app);
+            }
+            continue;
+        }
+        drifted_groups += 1;
+        println!("  {}", ui::bold(app));
+        for f in &drifted {
+            println!(
+                "    {} {:<32} {} {}",
+                ui::red("✗"),
+                f.target,
+                ui::yellow(&f.status),
+                ui::dim(&format!("[{}]", f.kind)),
+            );
+        }
+        let in_sync = g.len() - drifted.len();
+        if in_sync > 0 {
+            println!("    {}", ui::dim(&format!("… {in_sync} more in sync")));
+        }
+    }
+
+    let status_only: Vec<&plan::Finding> = items.iter().filter(|f| f.status_only()).collect();
+
+    if !clean_apps.is_empty() {
+        if drifted_groups > 0 {
+            println!();
+        }
+        println!(
+            "  {} {}",
+            ui::green(&format!("✓ {} app(s) in sync:", clean_apps.len())),
+            ui::dim(&clean_apps.join(", ")),
+        );
+    }
+    if !status_only.is_empty() {
+        let labels: Vec<String> = status_only
+            .iter()
+            .map(|f| format!("{}:{}", f.app, f.kind))
+            .collect();
+        println!("  {} {}", ui::cyan("ℹ status-only:"), ui::dim(&labels.join(", ")));
+    }
+
+    // Footer — always carries the literal "<n> out of sync".
+    let out = items.iter().filter(|f| !f.ok).count();
+    let so = status_only.len();
+    let ok = items.len() - out - so;
+    println!();
+    if out == 0 {
+        println!(
+            "  {} {}",
+            ui::green("✓ all in sync"),
+            ui::dim(&format!("· {ok} checks · 0 out of sync · {so} status-only")),
+        );
+    } else {
+        println!(
+            "  {} · {} · {}",
+            ui::green(&format!("{ok} ok")),
+            ui::red(&format!("{out} out of sync")),
+            ui::dim(&format!("{so} status-only")),
+        );
+    }
 }
 
 fn cmd_prune(dry_run: bool, json: bool) -> Result<()> {

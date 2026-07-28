@@ -62,13 +62,25 @@ shell = "/bin/nonexistent-shell"                          # violated
     fs::write(cfg.join("eq.json"), "{\"a\":1,\"b\":2}\n").unwrap(); // same as ref, different order
     fs::write(cfg.join("diff.json"), "{\"x\":1}\n").unwrap(); // differs from ref
 
-    // USER must be set for the shell assert's lookup
+    // USER must be set for the shell assert's lookup.
+    // Human view: the two violations are surfaced; in-sync asserts (not_member,
+    // the order-independent json match) are collapsed, so their status text is
+    // intentionally absent here — see the --json check below for those.
     temper(h, fake_home.path(), state.path())
         .env("USER", std::env::var("USER").unwrap_or_else(|_| "runner".into()))
         .arg("drift")
         .assert()
         .success()
         .stdout(predicates::str::contains("2 out of sync"))
-        .stdout(predicates::str::contains("differs from reference"))
-        .stdout(predicates::str::contains("not a member"));
+        .stdout(predicates::str::contains("differs from reference"));
+
+    // --json carries every finding (flat, uncollapsed) — assert the in-sync
+    // not_member check is present and ok there.
+    temper(h, fake_home.path(), state.path())
+        .env("USER", std::env::var("USER").unwrap_or_else(|_| "runner".into()))
+        .args(["--json", "drift"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("not a member"))
+        .stdout(predicates::str::contains("\"out_of_sync\":2"));
 }

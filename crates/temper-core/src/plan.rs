@@ -85,6 +85,18 @@ impl Finding {
             status: state.label().to_string(),
         }
     }
+
+    /// An `ok` finding that isn't actually enforced-in-sync — reported for
+    /// visibility but not repairable/converged: a `manual` step, a backend whose
+    /// tool is absent (`unavailable`), an `exec` with no drift hook, or a
+    /// `profile` (GUI apply). The drift renderer surfaces these separately so
+    /// they neither read as green "in sync" nor as red drift.
+    pub fn status_only(&self) -> bool {
+        self.kind == "profile"
+            || self.status == "unavailable"
+            || self.status == "no drift-check"
+            || self.status.starts_with("manual")
+    }
 }
 
 /// Drift a single step, if it's one we evaluate.
