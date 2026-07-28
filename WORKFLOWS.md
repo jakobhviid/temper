@@ -108,7 +108,10 @@ detection; temper prints it under Next steps, and in `--json` as `remediation`).
 **When:** you want a new app/package on a machine going forward.
 
 1. Edit the folder: add the package to a bundle, the machine's loose `packages`,
-   or its `brewfile`; add config steps to the app bundle.
+   or its `brewfile`; add config steps to the app bundle. (The `[[step]]`
+   primitives and their fields are in `SPEC.md` / `temper --llm` — e.g. `setkey`
+   can resolve `{{ … }}` in a value at apply time with `template = true`, and its
+   `json` backend edits JSONC comment-preservingly.)
 2. Apply it:
 
 ```sh
