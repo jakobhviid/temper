@@ -63,7 +63,8 @@ on `update`, dependency-aware `prune`, `brew bundle dump` on `backup`,
 dconf/`defaults` writes, and `gext`/`rpm-ostree` layering. The read-only paths
 (all of `drift`, package probing, `install --dry-run`) are verified against a
 real machine. Known
-limitations: `setkey` toml reserializes (drops comments); `defaults`/`dconf`
+limitations: `setkey` toml now preserves comments/formatting (toml_edit) —
+except the *changed* key's own inline comment; `defaults`/`dconf`
 writes aren't journaled; `profile` install is manual; presence-gating
 (`when`/`needs`) is unbuilt (os/role gating only). Steps, asserts, **and
 bundle-level `extensions`/`rpm`** now os/role-gate (a server can't layer a

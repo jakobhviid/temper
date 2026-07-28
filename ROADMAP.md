@@ -7,9 +7,8 @@ parked, the current mitigation, and enough of a sketch to act on cold.
 
 This is planning — it is **not** embedded in `--llm`. *Current behavior*,
 including the limitations that are simply how temper works today
-(non-journaled `exec`/`setkey(defaults)`/`setkey(dconf)`, `setkey(toml)` dropping
-comments, `profile` being a manual install, `run = "ensure"` on a checkless
-`exec` being skipped), is
+(non-journaled `exec`/`setkey(defaults)`/`setkey(dconf)`, `profile` being a
+manual install, `run = "ensure"` on a checkless `exec` being skipped), is
 documented as **behavior** in `SPEC.md` / `ARCHITECTURE.md` / the README status
 table — which *do* ride `--llm`. This file is only the "what's coming" ledger.
 
@@ -32,11 +31,12 @@ mode/owner, escalating internally for just that write (Ansible's per-task
 `become` on a `copy`). Lets `/etc` writes be declarative + drift-checkable
 instead of buried in `exec`.
 
-### Journaled system-side `setkey`, comment-preserving toml (maybe)
+### Journaled system-side `setkey` (maybe)
 Low-value polish, only if the need shows up: snapshot the prior `defaults read` /
-`dconf read` value so those `setkey` backends become undoable; and swap `toml`
-for `toml_edit` so a hand-commented TOML keeps its comments on write. Both are
-"current behavior" today (see the note at the top), not bugs.
+`dconf read` value so those `setkey` backends become undoable. (The
+comment-preserving toml half of this item is **done** — `setkey(toml)` now edits
+via `toml_edit`, keeping hand comments/formatting.) System-side `setkey` journaling
+is still "current behavior," not a bug.
 
 ---
 

@@ -590,33 +590,99 @@ fn toml_satisfied(root: &toml::Value, parts: &[&str], value: &toml::Value, appen
     }
 }
 
-fn toml_set(root: &mut toml::Value, parts: &[&str], value: toml::Value, append: bool) -> Result<()> {
-    let tbl = root
-        .as_table_mut()
-        .ok_or_else(|| anyhow!("setkey toml: `{}` is not a table", parts[0]))?;
-    if parts.len() == 1 {
-        if append {
-            let arr = tbl
-                .entry(parts[0].to_string())
-                .or_insert(toml::Value::Array(vec![]));
-            let a = arr
-                .as_array_mut()
-                .ok_or_else(|| anyhow!("setkey append: `{}` is not an array", parts[0]))?;
-            if !a.contains(&value) {
-                a.push(value);
+/// Convert a `toml::Value` into a `toml_edit::Value` (for comment-preserving
+/// writes). Tables become inline tables (a leaf setkey value is a scalar/array
+/// in practice; nested tables are created as intermediates by the navigator).
+fn toml_to_edit_value(v: &toml::Value) -> toml_edit::Value {
+    use toml_edit::Value as EV;
+    match v {
+        toml::Value::String(s) => EV::from(s.as_str()),
+        toml::Value::Integer(i) => EV::from(*i),
+        toml::Value::Float(f) => EV::from(*f),
+        toml::Value::Boolean(b) => EV::from(*b),
+        toml::Value::Datetime(d) => EV::from(d.to_string()),
+        toml::Value::Array(a) => {
+            let mut arr = toml_edit::Array::new();
+            for x in a {
+                arr.push(toml_to_edit_value(x));
             }
-        } else {
-            tbl.insert(parts[0].to_string(), value);
+            EV::Array(arr)
         }
-        return Ok(());
+        toml::Value::Table(t) => {
+            let mut it = toml_edit::InlineTable::new();
+            for (k, val) in t {
+                it.insert(k, toml_to_edit_value(val));
+            }
+            EV::InlineTable(it)
+        }
     }
-    let child = tbl
-        .entry(parts[0].to_string())
-        .or_insert(toml::Value::Table(Default::default()));
-    if !child.is_table() {
-        bail!("setkey toml: intermediate key `{}` is not a table", parts[0]);
+}
+
+/// Set a dotted key in a `toml_edit` document, creating intermediate tables and
+/// preserving all surrounding comments/formatting. `append` array-unions.
+fn toml_edit_set(
+    doc: &mut toml_edit::DocumentMut,
+    parts: &[&str],
+    value: &toml::Value,
+    append: bool,
+) -> Result<()> {
+    let mut tbl = doc.as_table_mut();
+    for p in &parts[..parts.len() - 1] {
+        let entry = tbl
+            .entry(p)
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        tbl = entry
+            .as_table_mut()
+            .ok_or_else(|| anyhow!("setkey toml: intermediate key `{p}` is not a table"))?;
     }
-    toml_set(child, &parts[1..], value, append)
+    let last = parts[parts.len() - 1];
+    if append {
+        let item = tbl.entry(last).or_insert(toml_edit::Item::Value(
+            toml_edit::Value::Array(toml_edit::Array::new()),
+        ));
+        let arr = item
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("setkey append: `{last}` is not an array"))?;
+        let ev = toml_to_edit_value(value);
+        let evs = ev.to_string();
+        if !arr.iter().any(|x| x.to_string().trim() == evs.trim()) {
+            arr.push(ev);
+        }
+    } else {
+        tbl.insert(last, toml_edit::Item::Value(toml_to_edit_value(value)));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod toml_edit_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_comments_on_set() {
+        let src = "# top comment\n[tool]\nname = \"a\" # inline note\nother = 1\n";
+        let mut doc: toml_edit::DocumentMut = src.parse().unwrap();
+        toml_edit_set(&mut doc, &["tool", "name"], &toml::Value::String("b".into()), false).unwrap();
+        let out = doc.to_string();
+        assert!(out.contains("# top comment"), "lost top comment: {out}");
+        assert!(out.contains("other = 1"), "lost sibling: {out}");
+        assert!(out.contains("\"b\""), "value not set: {out}");
+    }
+
+    #[test]
+    fn append_dedups() {
+        let mut doc: toml_edit::DocumentMut = "list = [\"a\"]\n".parse().unwrap();
+        toml_edit_set(&mut doc, &["list"], &toml::Value::String("b".into()), true).unwrap();
+        toml_edit_set(&mut doc, &["list"], &toml::Value::String("b".into()), true).unwrap();
+        assert_eq!(doc.to_string().matches("\"b\"").count(), 1, "append must dedup");
+    }
+
+    #[test]
+    fn creates_nested_tables() {
+        let mut doc: toml_edit::DocumentMut = "".parse().unwrap();
+        toml_edit_set(&mut doc, &["a", "b", "c"], &toml::Value::Integer(5), false).unwrap();
+        assert_eq!(doc["a"]["b"]["c"].as_integer(), Some(5));
+    }
 }
 
 fn toml_state(sk: &SetKey) -> Result<FileState> {
@@ -635,7 +701,7 @@ fn toml_state(sk: &SetKey) -> Result<FileState> {
 
 fn toml_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
     let file = sk_file(sk)?;
-    let mut root = read_toml_root(&file)?;
+    let root = read_toml_root(&file)?;
     if !root.is_table() {
         bail!("setkey toml: {} root is not a table", file.display());
     }
@@ -643,9 +709,18 @@ fn toml_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
     if toml_satisfied(&root, &parts, &sk.value, sk.append) {
         return Ok(false);
     }
-    toml_set(&mut root, &parts, sk.value.clone(), sk.append)?;
-    let new = toml::to_string_pretty(&root)?;
-    journaled_write(&file, new.as_bytes(), journal)
+    // Edit through toml_edit so hand comments + formatting survive the write
+    // (the plain `toml` reserialize used to drop them).
+    let existing = if file.exists() {
+        fs::read_to_string(&file)?
+    } else {
+        String::new()
+    };
+    let mut doc: toml_edit::DocumentMut = existing
+        .parse()
+        .with_context(|| format!("parsing toml {}", file.display()))?;
+    toml_edit_set(&mut doc, &parts, &sk.value, sk.append)?;
+    journaled_write(&file, doc.to_string().as_bytes(), journal)
 }
 
 // --- setkey: ini / .desktop backend -------------------------------------------
