@@ -11,6 +11,32 @@ in this repository.
 - AI assistance is disclosed **once**, in the README's "AI disclosure" section —
   that is the only place it belongs. Keep it out of the commit history entirely.
 
+## Documentation is load-bearing — keep it in sync with the code
+
+`SPEC.md`, `WORKFLOWS.md`, `ARCHITECTURE.md`, `README.md`, and `PRINCIPLES.md`
+are **compiled into `temper --llm`** (see `crates/temper/src/main.rs`) — that
+guide is how humans *and* LLMs learn to operate and author a temper folder. Stale
+docs don't just read wrong; they actively mislead every downstream agent that
+builds a spec from them.
+
+So a change to behaviour ships with the doc change **in the same commit**:
+
+- **Touched the schema** (a serde struct / manifest field / allowed value /
+  `deny_unknown_fields`, a `setkey` backend, a primitive)? Update **`SPEC.md`** —
+  it is the **parser-of-record** and must match the serde structs *exactly*,
+  including the "Not in the schema" list. Add/adjust a worked example.
+- **Added/changed/removed a verb, flag, or its behaviour**? Update the clap
+  help (it renders into `--llm`), **`WORKFLOWS.md`** (the operating loops), and
+  the **`README.md`** if it changes what the tool is or how you start.
+- **Changed the model** (scopes, gating, lifecycle, journaling, a design
+  principle)? Update **`ARCHITECTURE.md`** / **`PRINCIPLES.md`**.
+
+Then **rebuild** so `--llm` reflects it (the docs are `include_str!`-embedded at
+compile time). When SPEC and the code disagree, the code wins and the doc is the
+bug — fix the doc. A quick self-check: could a fresh LLM author a correct folder
+from `temper --llm` alone? If your change would make it guess or fail, the doc
+isn't done.
+
 ## Releases & versioning — auto-incremented from commit type
 
 CI cuts a release on every push to `main`, and the version is **derived

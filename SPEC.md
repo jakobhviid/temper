@@ -109,17 +109,37 @@ block  = "assets/snippet"    # content to place inside the markers
 in     = "~/.ssh/config"     # the user-owned file
 marker = "ssh-include"       # marker label
 
-# setkey: set a key in a structured store, preserving siblings
+# setkey: set ONE key in a structured store, preserving siblings.
+# Exactly one `setkey` table per step. One worked example per backend:
 [[step]]
-setkey = { backend = "json", file = "~/.claude/settings.json", key = "env.X", value = "0", append = false }
-#   backend: "json" | "toml" | "ini" | "defaults" (macOS) | "dconf" (Linux)
-#            defaults/dconf report "unavailable" in drift (skip in apply) when
-#            their CLI is absent (e.g. dconf on a Mac) — degrade, never abort.
-#            json/toml refuse a file whose root isn't an object/table.
-#   file:    file backends → the file; defaults → a domain or plist path; dconf → key is absolute
-#   key:     dotted path (json/toml) | "Section.Key" (ini) | absolute dconf path
-#   value:   scalar or array — STATIC only ({{ … }} is NOT rendered for setkey)
-#   append:  true → list-union into an array-valued key
+setkey = { backend = "json",     file = "~/.config/app.json",        key = "ui.theme",           value = "dark" }
+[[step]]
+setkey = { backend = "toml",     file = "~/.config/starship.toml",   key = "add_newline",        value = false }
+[[step]]
+setkey = { backend = "ini",      file = "~/.local/share/x.desktop",  key = "Desktop Entry.Icon", value = "myicon" }
+[[step]]
+setkey = { backend = "defaults", file = "com.apple.dock",            key = "autohide",           value = true }        # macOS
+[[step]]
+setkey = { backend = "dconf",    key = "/org/gnome/desktop/interface/color-scheme", value = "prefer-dark" }             # Linux; NO file
+#
+#   backend: "json" | "toml" | "ini" (a.k.a. ".desktop") | "defaults" (macOS) | "dconf" (Linux)
+#   file:    REQUIRED for json/toml/ini (target file) and defaults (a domain like
+#            "com.apple.dock", or a plist path). OMIT for dconf — the key is the path.
+#   key:     json/toml → dotted path ("ui.theme"); ini → "Section.Key"; defaults →
+#            the key name; dconf → the ABSOLUTE dconf path ("/org/.../color-scheme").
+#   value:   STATIC scalar/array — {{ … }} is NOT rendered here. Write a NATIVE TOML
+#            value (string/int/bool/array); temper renders it for the backend. For
+#            dconf, DO NOT pre-quote: value = "prefer-dark" becomes GVariant
+#            'prefer-dark'; value = true → true; value = 42 → 42; value = ["a","b"]
+#            → ['a','b']. (GVariant types beyond scalar/string-array — uint32,
+#            tuples — aren't rendered; use `exec` for those.)
+#   append:  true → list-union into an array-valued key (json/toml only).
+#
+#   File backends CREATE the file + parent dirs if absent (drift shows `missing`
+#   until first apply); json/toml refuse a file whose root isn't an object/table.
+#   defaults/dconf report `unavailable` in drift (and skip in apply) when their CLI
+#   is absent (e.g. dconf on a Mac) — degrade, never abort. dconf writes are
+#   journaled/undoable; defaults writes are not.
 
 # exec: run a user script (the escape hatch)
 [[step]]
@@ -157,7 +177,9 @@ group   = "root"                              # drift compares content+mode+owne
 
 ## Not in the schema (rejected by `deny_unknown_fields`)
 
-These appear in older design notes but are **not** implemented; using them is a
-parse error: `when` / `needs` (presence-gating), `owner` (assert), `dict_add` /
-`domain` (setkey), `mode_lifecycle`. See the README status table for the
-built-vs-designed boundary.
+Unknown fields are a parse error. `when` / `needs` (step presence-gating) and
+`owner` / `group` (on a `sysfile` step) **are** valid — they're documented above.
+A few names from older design notes are **not** fields and will error: `dict_add`
+/ `domain` on `setkey`, `mode_lifecycle`, and `owner` as an *assert* check (owner
+is a `sysfile` field, not an assertion). When in doubt, the parser is the
+authority — an unknown field names itself in the error.
