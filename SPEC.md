@@ -187,7 +187,7 @@ group   = "root"                              # drift compares content+mode+owne
 [[assert]] mode = { path = "/etc/x", mode = "0644" }       # octal file mode
 [[assert]] executable_resolves = "git"                     # on PATH
 [[assert]] not_member = { group = "onepassword" }          # user NOT in group
-[[assert]] shell = "/bin/zsh"                              # login shell equals
+[[assert]] shell = "/bin/zsh"                              # login shell name (matches by basename: /usr/bin/zsh ok)
 [[assert]] json_semantic = { file = "~/deployed.json", against = "reference.json" }  # against: relative to the temper-home
 # each also accepts os = "mac"|"linux"
 ```

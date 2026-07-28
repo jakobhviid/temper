@@ -160,8 +160,15 @@ pub fn eval(home: &Path, a: &Assert) -> Result<(bool, String)> {
     }
 
     if let Some(want) = &a.shell {
+        // Match by shell name, not full path: `/bin/zsh`, `/usr/bin/zsh` (usrmerge),
+        // and a brew-installed zsh are all the same shell — only the final path
+        // component matters. Comparing raw paths would report perpetual drift on
+        // any machine whose login shell lives at a different (equivalent) path.
+        fn name(s: &str) -> &str {
+            s.rsplit('/').next().unwrap_or(s)
+        }
         return Ok(match login_shell() {
-            Some(have) if &have == want => (true, have),
+            Some(have) if name(&have) == name(want) => (true, have),
             Some(have) => (false, format!("shell {have}, want {want}")),
             None => (false, "could not read login shell".into()),
         });
