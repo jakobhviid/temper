@@ -18,11 +18,6 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 
 ## Deferred features (buildable — just not built yet)
 
-### Discovery auto-scan
-**Status:** deferred. Only `$TEMPER_DIR` + a cwd walk-up.
-**Sketch:** port dotsync's `discovery.rs` (scan common cloud-folder locations, a
-saved pointer, first-run prompt).
-
 ### Journaled system-side `setkey` (maybe)
 Low-value polish, only if the need shows up: snapshot the prior `defaults read` /
 `dconf read` value so those `setkey` backends become undoable. (The

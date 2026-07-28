@@ -55,7 +55,7 @@
 | providers: **gext** / **rpm-ostree** | ✅ | — (Linux/VM) |
 | `profile` (macOS .mobileconfig) | ✅ | — (manual/System Settings) |
 | `sysfile` (root-owned /etc file via `sudo install`; drift = content+mode+owner) | ✅ | ✅ drift live; apply = sudo (unit-tested argv) |
-| discovery (auto-scan cloud folders) beyond `$TEMPER_DIR` + cwd walk-up | ⏳ | — |
+| discovery: `$TEMPER_DIR` → cwd walk-up → saved pointer (`temper use`) → auto-scan | ✅ | ✅ pointer live |
 
 **VM run checklist** (things only a live *write* exercises): `brew bundle`
 formula converge is now **verified live on a Bazzite host** (install-missing of a

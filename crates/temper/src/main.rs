@@ -110,6 +110,12 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Save a temper-home location as your default (a pointer in
+    /// `$XDG_CONFIG_HOME/temper/home`), so `temper` finds it from anywhere.
+    Use {
+        /// The folder to remember (default: the current directory).
+        dir: Option<String>,
+    },
     /// Pull calibrated speaker profiles from the configured repo into the folder
     /// (`[eq_import]` in temper.toml), ready for the `speaker-eq` step. This is
     /// folder-authoring — it writes into your config folder, not a machine.
@@ -171,6 +177,25 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Reconcile { machine }) => cmd_reconcile(machine, json)?,
         Some(Cmd::Restore { machine, yes }) => cmd_restore(machine, yes, json)?,
         Some(Cmd::EqImport) => cmd_eq_import(json)?,
+        Some(Cmd::Use { dir }) => cmd_use(dir, json)?,
+    }
+    Ok(())
+}
+
+/// Save a temper-home as the default (a saved pointer discovery reads).
+fn cmd_use(dir: Option<String>, json: bool) -> Result<()> {
+    let target = match dir {
+        Some(d) => std::path::PathBuf::from(d),
+        None => std::env::current_dir()?,
+    };
+    let pointer = discovery::save_pointer(&target)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "home": target.display().to_string(), "pointer": pointer.display().to_string() })
+        );
+    } else {
+        println!("{} temper home set to {}", ui::green("✓"), target.display());
     }
     Ok(())
 }

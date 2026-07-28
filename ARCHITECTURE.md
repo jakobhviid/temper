@@ -54,9 +54,10 @@ not temper's concern. (An `exec` *step* may still shell out to `git`/`curl` for 
 specific job, e.g. cloning a tmux plugin manager — that's a step doing work, not
 temper managing the folder.)
 
-Folder discovery reuses `dotsync`'s model (`discovery.rs`): `$TEMPER_DIR` → a
-saved pointer in per-machine config → auto-scan common locations → prompt. First
-run on a fresh machine offers setup automatically.
+Folder discovery (built, `discovery.rs`): `$TEMPER_DIR` → walk up from the cwd →
+a saved pointer (`temper use <dir>` writes `$XDG_CONFIG_HOME/temper/home`) →
+auto-scan common locations (git checkout, `Nextcloud`/`Dropbox`/`CloudStorage`, a
+mounted disk).
 
 ### Humans and LLMs both compose it
 
