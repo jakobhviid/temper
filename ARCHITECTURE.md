@@ -305,7 +305,8 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
   degraded, not a failure); `manual` steps and image-baked items are
   status-only, never counted as drift.
 - **`prune`** — remove installed-but-not-declared (dependency-aware, honoring the
-  ignore/baseline list).
+  ignore/baseline list); previews and confirms first (`--yes` skips; under
+  `--json` it previews unless `--yes`).
 - **`backup [machine]`** — dump live package state into the folder
   (`brew bundle dump` → the machine's own `brewfile`, the file it reads; else
   `machines/<name>/Brewfile`), plus each declared
