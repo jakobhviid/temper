@@ -34,6 +34,11 @@ brewfile = "brewfiles/chronos"   # optional; a Brewfile whose lines join the set
 
 [machine.vars]              # optional; per-machine vars, merged OVER [vars]
 BREW_PREFIX = "/home/linuxbrew/.linuxbrew"   # e.g. override a Mac-valued global
+
+[[machine.dconf]]           # optional; whole-desktop dconf snapshots (Linux)
+path  = "/org/gnome/shell/"                 # subtree to dump/load (trailing /)
+file  = "assets/gnome/shell.chronos.dconf"  # backup writes here; restore reads
+strip = ["monitors/", "last-selected"]      # drop these key substrings on backup
 ```
 
 Template vars resolve as global `[vars]` overlaid by a machine's own

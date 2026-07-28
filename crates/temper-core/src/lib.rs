@@ -26,5 +26,6 @@ pub mod providers; // brew / flatpak / mas / gext / rpm-ostree: converge + probe
 pub mod drift; // assertions, exec-hooks, status-only reporting
 pub mod plan; // build a plan, then apply it (dry-run first)
 pub mod reconcile; // interactive spec←machine capture (adds/drops to the Brewfile)
+pub mod dconf; // whole-desktop dconf snapshots: backup (filtered) + restore
 pub mod journal; // content-addressed, after-hash-guarded undo (amdl model)
 pub mod ui; // stdout/stderr discipline + progress bars

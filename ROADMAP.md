@@ -73,22 +73,6 @@ fork + a config `install`/`undo` line, also in `--json`); `reconcile` is the
 interactive spec←machine verb; `install --packages-only` is install-missing.
 What remains below is the dconf snapshot/restore pair and `eq-import`.
 
-### Filtered dconf snapshot + targeted restore
-**Status:** snapshot designed, not built; the restore pair is absent entirely.
-`backup` does `brew bundle dump` only. RIS additionally has
-`gnome-backup`/`ptyxis-backup` (a *filtered* `dconf dump` → `assets/…`, the
-strip-keys `awk` that drops bookkeeping + per-monitor panel keys that would
-corrupt a round-trip) and `gnome-restore`/`ptyxis-restore` (load shared then
-per-machine snapshot into live dconf, `confirm`-gated).
-**Now:** no dconf capture and no targeted restore — the only way to reload desktop
-state is a full `install`, which re-runs everything. RIS's `update` deliberately
-**excludes** restore *because* reloading a snapshot clobbers live tweaks — so a
-targeted, opt-in restore verb (never in `update`) is exactly the point.
-**Sketch:** extend `backup` to also write the filtered dconf snapshot (the
-strip-keys filter is already an ARCHITECTURE manifest field, not tool-baked); add
-a `manual`-lifecycle `restore [machine]` that loads shared-then-per-machine with a
-confirm gate. Kept out of `update` by design.
-
 ### `eq-import` — pull calibrated profiles into the folder
 **Status:** deferred, **to replicate** (it's a working RIS recipe, so it's in).
 RIS `eq-import` (`Linux/justfile:1091-1110`) clones-or-`git pull --ff-only`s the

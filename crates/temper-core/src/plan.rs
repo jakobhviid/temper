@@ -498,10 +498,25 @@ pub fn run_prune(
     Ok(extras)
 }
 
-/// Backup: dump live package state into `machines/<name>/Brewfile`. Returns the
-/// written path. (dconf snapshot lands with the Linux slice.)
-pub fn run_backup(home: &Path, machine: &Machine) -> Result<std::path::PathBuf> {
-    providers::dump(home, &machine.name)
+/// What a `backup` wrote: the dumped Brewfile + any filtered dconf snapshots.
+pub struct BackupReport {
+    pub brewfile: std::path::PathBuf,
+    pub dconf: Vec<std::path::PathBuf>,
+}
+
+/// Backup: dump live package state into `machines/<name>/Brewfile`, plus each
+/// declared dconf snapshot (filtered) into its file. dconf is a no-op where the
+/// tool is absent (a Mac) or the machine declares none.
+pub fn run_backup(home: &Path, machine: &Machine) -> Result<BackupReport> {
+    let brewfile = providers::dump(home, &machine.name)?;
+    let dconf = crate::dconf::backup(home, machine)?;
+    Ok(BackupReport { brewfile, dconf })
+}
+
+/// Restore: load each declared dconf snapshot back into live dconf. The CLI
+/// confirms first — this clobbers live desktop state (never run by `update`).
+pub fn run_restore(home: &Path, machine: &Machine) -> Result<Vec<std::path::PathBuf>> {
+    crate::dconf::restore(home, machine)
 }
 
 /// Adopt (advisory v1): report the installed extras so they can be added to a

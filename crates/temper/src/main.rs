@@ -89,6 +89,16 @@ enum Cmd {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
     },
+    /// Load this machine's dconf snapshot(s) back into live dconf (spec→machine).
+    /// Confirm-gated — it clobbers live desktop tweaks, so it is never part of
+    /// `update`. Use after a reinstall, or to reset the desktop to the snapshot.
+    Restore {
+        /// Machine name (default: resolved from hostname).
+        machine: Option<String>,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Revert the last mutating run.
     Undo {
         /// Run id to revert (default: the most recent).
@@ -155,6 +165,7 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Backup { machine }) => cmd_backup(machine, json)?,
         Some(Cmd::Adopt) => cmd_adopt(json)?,
         Some(Cmd::Reconcile { machine }) => cmd_reconcile(machine, json)?,
+        Some(Cmd::Restore { machine, yes }) => cmd_restore(machine, yes, json)?,
     }
     Ok(())
 }
@@ -391,14 +402,21 @@ fn cmd_backup(machine: Option<String>, json: bool) -> Result<()> {
     let home = discovery::find_home()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
-    let path = plan::run_backup(&home, &m)?;
+    let r = plan::run_backup(&home, &m)?;
+    let dconf: Vec<String> = r.dconf.iter().map(|p| p.display().to_string()).collect();
     if json {
         println!(
             "{}",
-            serde_json::json!({ "machine": m.name, "brewfile": path.display().to_string() })
+            serde_json::json!({
+                "machine": m.name, "brewfile": r.brewfile.display().to_string(),
+                "dconf": dconf
+            })
         );
     } else {
-        println!("backup {}: dumped package state to {}", m.name, path.display());
+        println!("backup {}: dumped package state to {}", m.name, r.brewfile.display());
+        for d in &dconf {
+            println!("  dconf snapshot → {d}");
+        }
     }
     Ok(())
 }
@@ -536,6 +554,44 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
         chosen_drops.len(),
         chosen_ignores.len()
     );
+    Ok(())
+}
+
+/// Load dconf snapshots back into live dconf. Confirm-gated (clobbers live
+/// desktop state); `--yes` or `--json` skips the prompt.
+fn cmd_restore(machine: Option<String>, yes: bool, json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    let ft = manifest::load_fleet(&home)?;
+    let m = machine::resolve(&ft, machine.as_deref())?;
+
+    if m.dconf.is_empty() {
+        if json {
+            println!("{}", serde_json::json!({ "machine": m.name, "restored": [] }));
+        } else {
+            println!("restore {}: no dconf snapshots declared for this machine.", m.name);
+        }
+        return Ok(());
+    }
+
+    if !yes && !json {
+        println!("{}", ui::bold(&format!("restore {} — loads snapshots into LIVE dconf:", m.name)));
+        for snap in &m.dconf {
+            println!("  {} {}  {}", ui::cyan("→"), snap.path, ui::dim(&snap.file));
+        }
+        println!("{}", ui::yellow("This overwrites live desktop tweaks under those paths."));
+        if !prompt_no("apply?") {
+            println!("aborted — nothing changed.");
+            return Ok(());
+        }
+    }
+
+    let loaded = plan::run_restore(&home, &m)?;
+    let paths: Vec<String> = loaded.iter().map(|p| p.display().to_string()).collect();
+    if json {
+        println!("{}", serde_json::json!({ "machine": m.name, "restored": paths }));
+    } else {
+        println!("{} restore {}: loaded {} snapshot(s).", ui::green("✓"), m.name, paths.len());
+    }
     Ok(())
 }
 

@@ -343,6 +343,7 @@ mod gating_tests {
             packages: vec![],
             brewfile: None,
             vars: Default::default(),
+            dconf: vec![],
         }
     }
 

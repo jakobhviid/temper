@@ -75,6 +75,28 @@ pub struct Machine {
     /// `{{ var "NAME" }}` like the globals.
     #[serde(default)]
     pub vars: std::collections::BTreeMap<String, String>,
+    /// Whole-desktop dconf snapshots this machine owns: `backup` dumps each
+    /// (filtered by `strip`) to its `file`; `restore` loads them back. The
+    /// machine-scope GNOME/Ptyxis state RIS captured with gnome-backup/restore.
+    #[serde(default)]
+    pub dconf: Vec<DconfSnapshot>,
+}
+
+/// One whole-subtree dconf snapshot (e.g. `/org/gnome/shell/`).
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DconfSnapshot {
+    /// The dconf path prefix to dump/load (must end in `/`, e.g.
+    /// `/org/gnome/shell/`).
+    pub path: String,
+    /// Snapshot file, relative to the temper-home (`backup` writes, `restore`
+    /// reads).
+    pub file: String,
+    /// Substrings of a dumped `section/key` line to drop on backup — the
+    /// strip-keys filter (bookkeeping + per-monitor panel keys that would
+    /// corrupt a backup→restore round-trip).
+    #[serde(default)]
+    pub strip: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -321,6 +343,7 @@ mod tests {
             packages: vec![],
             brewfile: None,
             vars: vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            dconf: vec![],
         }
     }
 
@@ -352,6 +375,7 @@ mod tests {
             packages: vec![],
             brewfile: None,
             vars: Default::default(),
+            dconf: vec![],
         }
     }
 

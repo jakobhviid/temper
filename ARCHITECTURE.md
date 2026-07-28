@@ -295,8 +295,12 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
 - **`prune`** — remove installed-but-not-declared (dependency-aware, honoring the
   ignore/baseline list).
 - **`backup [machine]`** — dump live package state into the folder
-  (`brew bundle dump` → `machines/<name>/Brewfile`). *(A filtered dconf snapshot
-  is designed but not yet built — see the status table.)*
+  (`brew bundle dump` → `machines/<name>/Brewfile`), plus each declared
+  `[[machine.dconf]]` snapshot dumped through its strip-keys filter to its file.
+- **`restore [machine]`** — load the machine's dconf snapshot(s) back into live
+  dconf (confirm-gated, `--yes` to skip). Clobbers live desktop tweaks, so it is
+  a standalone verb, **never** part of `update` (RIS excludes gnome-restore from
+  its update for the same reason).
 - **`adopt`** — report installed extras not in the spec (advisory / non-mutating)
   so you can add each to a bundle, the machine loose list, or `[ignore]`. The
   read-only sibling of `reconcile`.
