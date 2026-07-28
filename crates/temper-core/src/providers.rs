@@ -88,12 +88,16 @@ pub fn probe(effective: &[Pkg]) -> Result<Installed> {
 /// installed by id. `dry_run` performs no mutation. Returns the number of
 /// declared packages considered.
 pub fn converge(effective: &[Pkg], dry_run: bool) -> Result<usize> {
+    // mas is converged SEPARATELY (below), not via the aggregate brew bundle:
+    // it is the flakiest provider (no App Store sign-in, an app not tied to the
+    // Apple ID), and riding brew bundle means one mas failure aborts the whole
+    // converge. Split out, its failures are warned and skipped (Principle #6).
     let brewish: Vec<&Pkg> = effective
         .iter()
         .filter(|p| {
             matches!(
                 p.manager,
-                Manager::Brew | Manager::Cask | Manager::Tap | Manager::Mas | Manager::Vscode
+                Manager::Brew | Manager::Cask | Manager::Tap | Manager::Vscode
             )
         })
         .collect();
@@ -126,6 +130,29 @@ pub fn converge(effective: &[Pkg], dry_run: bool) -> Result<usize> {
         }
         // best-effort: a missing remote or app shouldn't abort the whole run
         let _ = cmd.status();
+    }
+
+    // Forgiving mas: install each App Store app on its own; a failure is warned
+    // (to stderr, so `--json` stays clean) and skipped, never fatal.
+    let mas: Vec<&Pkg> = effective
+        .iter()
+        .filter(|p| p.manager == Manager::Mas)
+        .collect();
+    if !mas.is_empty() && have("mas") && !dry_run {
+        for p in &mas {
+            let id = p.id.as_deref().unwrap_or(&p.name);
+            let ok = Command::new("mas")
+                .args(["install", id])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !ok {
+                eprintln!(
+                    "⚠ mas install {} (id {id}) failed — skipped (sign in to the App Store?)",
+                    p.name
+                );
+            }
+        }
     }
 
     Ok(effective.len())

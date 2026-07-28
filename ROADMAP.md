@@ -9,7 +9,7 @@ This is planning — it is **not** embedded in `--llm`. *Current behavior*,
 including the limitations that are simply how temper works today
 (non-journaled `exec`/`setkey(defaults)`/`setkey(dconf)`, `setkey(toml)` dropping
 comments, `profile` being a manual install, `run = "ensure"` on a checkless
-`exec` being skipped, os/role-only gating, `mas` failures being fatal), is
+`exec` being skipped), is
 documented as **behavior** in `SPEC.md` / `ARCHITECTURE.md` / the README status
 table — which *do* ride `--llm`. This file is only the "what's coming" ledger.
 
@@ -23,14 +23,6 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 **Status:** deferred. Only `$TEMPER_DIR` + a cwd walk-up.
 **Sketch:** port dotsync's `discovery.rs` (scan common cloud-folder locations, a
 saved pointer, first-run prompt).
-
-### Forgiving `mas` converge
-**Status:** deferred. Today `mas` rides the aggregate `brew bundle`, which bails
-on any failure → a MAS failure (no App Store sign-in, an app not associated with
-the Apple ID) fails the whole run. MAS is the flakiest provider, so it *should*
-be reported-and-skipped.
-**Sketch:** converge mas separately from `brew bundle` (own `mas install` loop)
-so its failures are warned, not fatal.
 
 ### Declarative system-file primitive (the clean `/etc` path)
 **Status:** idea. Root-owned config (the 1Password `/etc` allowlist) is done via
