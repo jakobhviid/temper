@@ -45,6 +45,10 @@ file  = "assets/gnome/shell.chronos.dconf"  # backup writes here; restore reads
 strip = ["monitors/", "last-selected"]      # drop these key substrings on backup
 ```
 
+> **TOML ordering:** `[machine.vars]` and each `[[machine.dconf]]` bind to the
+> **preceding** `[[machine]]` — they must sit between that header and the next
+> `[[machine]]`. Put them right under the machine they belong to.
+
 Template vars resolve as global `[vars]` overlaid by a machine's own
 `[machine.vars]` (per-machine wins). For the common Homebrew-prefix split, prefer
 the live function `{{ brew_prefix }}` (§templating) over declaring `BREW_PREFIX`
@@ -57,10 +61,12 @@ Effective package set for a machine = union(each app's `packages`(+`_mac`/
 ## `apps/<name>.toml` (a bundle)
 
 ```toml
-os             = "linux"             # optional bundle-level gate: skip this
-role           = "desktop"           #   bundle's extensions/rpm unless the
-                                     #   machine's os/role match (enforces
-                                     #   "GNOME extensions are desktop-only")
+os             = "linux"             # optional bundle-level gate: skip this bundle's
+role           = "desktop"           #   `extensions`/`rpm` ONLY unless the machine's
+                                     #   os/role match. It does NOT gate the bundle's
+                                     #   [[step]]s — those gate on their own os/role/
+                                     #   when/needs (a server composing this still runs
+                                     #   its file/key steps).
 packages       = ["brew \"jq\""]     # Brewfile-grammar tokens (all-OS)
 packages_mac   = []                  # mac-only
 packages_linux = []                  # linux-only
@@ -146,7 +152,10 @@ setkey = { backend = "dconf",    key = "/org/gnome/desktop/interface/color-schem
 exec    = "assets/setup.sh"  # runs via sh AS YOU (not root); cwd = temper-home; env TEMPER_HOME/MACHINE/OS
 check   = "assets/check.sh"  # optional drift-hook: exit 0 = in sync; gates re-run
 sudo    = false              # deprecated no-op — escalate inside the script with sudo per-command
-secrets = ["ACOUSTID_KEY"]   # env vars that must be set; passed through (loud error if missing)
+secrets = ["ACOUSTID_KEY"]   # env vars that must be set; passed through. NOTE: the
+                             # `check` hook runs during drift too, so a declared
+                             # secret must be set even for `drift`/`install --dry-run`
+                             # (they error if it's missing), not just a live apply.
 # exec is NOT journaled (not reversible by undo).
 
 # profile: install a macOS .mobileconfig (opens System Settings; manual)
@@ -171,7 +180,7 @@ group   = "root"                              # drift compares content+mode+owne
 [[assert]] executable_resolves = "git"                     # on PATH
 [[assert]] not_member = { group = "onepassword" }          # user NOT in group
 [[assert]] shell = "/bin/zsh"                              # login shell equals
-[[assert]] json_semantic = { file = "~/deployed.json", against = "reference.json" }
+[[assert]] json_semantic = { file = "~/deployed.json", against = "reference.json" }  # against: relative to the temper-home
 # each also accepts os = "mac"|"linux"
 ```
 
