@@ -72,8 +72,9 @@ install is manual; presence-gating
 bundle-level `extensions`/`rpm`** now os/role-gate (a server can't layer a
 desktop bundle's extensions/rpm even if it composes it).
 
-`WORKFLOWS.md` (compiled into `--llm`) gets written once the VM run confirms the
-real-machine behavior.
+`WORKFLOWS.md` documents the day-to-day operating loops (drift → decide direction
+→ run the named command, etc.) and is compiled into `--llm`. It's inferred from
+ReinstallScripts + the verb set, pending confirmation of the actual habits.
 
 [`grove`]: https://github.com/jakobhviid/grove
 [`amdl`]: https://github.com/jakobhviid/amdl

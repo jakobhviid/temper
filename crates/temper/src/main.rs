@@ -75,7 +75,8 @@ enum Cmd {
         dry_run: bool,
     },
     /// Dump the machine's live package state to a Brewfile in the folder
-    /// (`brew bundle dump` → machines/<name>/Brewfile). (dconf snapshot: Linux/VM.)
+    /// (`brew bundle dump` → machines/<name>/Brewfile), plus each declared
+    /// `[[machine.dconf]]` snapshot (filtered). Spec←machine, wholesale.
     Backup {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
@@ -510,7 +511,8 @@ fn cmd_adopt(json: bool) -> Result<()> {
         }
         println!(
             "\nAdd the ones you want to a bundle or the machine's loose `packages`, \
-             and the rest to `[ignore].<manager>` in temper.toml."
+             and the rest to `[ignore].<manager>` in temper.toml — or run \
+             `temper reconcile` to add/drop them interactively."
         );
     }
     Ok(())
@@ -764,6 +766,8 @@ fn llm_guide() -> String {
 
     // Authoritative, matches-the-parser content first, so an agent can both
     // OPERATE (command reference) and AUTHOR (schema) a temper folder.
+    out.push_str("\n\n=== WORKFLOWS (how to OPERATE temper — the day-to-day loops) ===\n\n");
+    out.push_str(include_str!("../../../WORKFLOWS.md"));
     out.push_str("\n\n=== MANIFEST SCHEMA (authoritative — matches the parser; unknown fields error) ===\n\n");
     out.push_str(include_str!("../../../SPEC.md"));
     out.push_str("\n\n=== IMPLEMENTATION STATUS (what is built vs designed) ===\n\n");
