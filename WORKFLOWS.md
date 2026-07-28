@@ -44,6 +44,17 @@ skipped — run them by hand. On a fresh desktop, `restore` reloads GNOME/Ptyxis
 state from the snapshot (it's a separate, confirm-gated verb because it clobbers
 live tweaks). *(RIS: `bootstrap.sh` → `just install` → `just gnome-restore`.)*
 
+**How temper finds the folder (why it "just knows where steel is").** temper
+resolves its home in this order, first hit wins: `$TEMPER_DIR` → walk up from the
+cwd → a saved pointer (`temper use <dir>`) → **auto-scan** a folder named
+`steel`/`temper-home`/`.temper` under `~`, `~/Developer`, `~/Nextcloud`,
+`~/Dropbox`, `~/Library/CloudStorage`, `/media`, or `/run/media/$USER`. So on a
+fresh box you have three no-fuss options: clone/sync your folder to one of those
+locations (e.g. `~/Developer/steel`) and it's found automatically; or run
+`temper use ~/path/to/steel` once to record a pointer; or export `TEMPER_DIR`.
+temper only *locates* the folder — getting it onto the box (git clone, a synced
+cloud folder, a USB copy) is not temper's job.
+
 ## 2. Stay current (routine maintenance)
 
 **When:** periodically — the safe, boring upgrade.

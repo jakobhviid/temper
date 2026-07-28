@@ -54,10 +54,20 @@ not temper's concern. (An `exec` *step* may still shell out to `git`/`curl` for 
 specific job, e.g. cloning a tmux plugin manager — that's a step doing work, not
 temper managing the folder.)
 
-Folder discovery (built, `discovery.rs`): `$TEMPER_DIR` → walk up from the cwd →
-a saved pointer (`temper use <dir>` writes `$XDG_CONFIG_HOME/temper/home`) →
-auto-scan common locations (git checkout, `Nextcloud`/`Dropbox`/`CloudStorage`, a
-mounted disk).
+Folder discovery (built, `discovery.rs`) — first hit wins:
+
+1. **`$TEMPER_DIR`** — explicit override.
+2. **Walk up from the cwd** — you're inside the folder (or a subdir of it).
+3. **A saved pointer** — `temper use <dir>` writes `$XDG_CONFIG_HOME/temper/home`.
+4. **Auto-scan** — a directory named `steel`, `temper-home`, or `.temper` under
+   any of: `~`, `~/Developer`, `~/Nextcloud`, `~/Dropbox`,
+   `~/Library/CloudStorage`, `/media`, `/run/media/$USER`.
+
+So a folder cloned/synced to e.g. `~/steel` or `~/Developer/steel` is found with
+**no configuration** — that's why machines "just know where steel is." A fresh
+box with none of these errors with a message telling you to `temper use <dir>`
+or set `$TEMPER_DIR`. (Discovery only *locates* the folder — temper never clones
+or syncs it; that's git/Nextcloud/rsync's job.)
 
 ### Humans and LLMs both compose it
 
@@ -346,26 +356,27 @@ recipes too (a `bootstrap.sh`, an image tier), so this is parity, not a gap.
 
 ---
 
-## Folder layout (proposal)
+## Folder layout — building your own "steel"
+
+temper *requires* only `temper.toml` at the root; everything else is convention.
+The recommended shape (app-first recipes, real files under `assets/`):
 
 ```
-<temper-home>/                  git for Jakob · Nextcloud for his wife · USB for a stranger
-  temper.toml                   machines (name/os/role) + apps + loose packages + ignores
-  apps/
-    ghostty.toml               copy config (all OS) + setkey dconf shortcut (linux)
-    1password.toml             setkey keybinding + exec(sudo) NMH setup (linux)
-    base.toml                  the CLI baseline as a bundle
-  assets/                      the real files the recipes reference
-    ghostty.config  starship.toml  …
-  machines/
-    chronos/   loose Brewfile, dconf snapshot (+ strip-keys applied on backup)
-    kira/      his wife's machine — in HER folder
-  secrets/                     consumed by exec/keyset steps that declare it
+<your-steel>/            a git repo, a synced cloud folder, or a USB copy
+  temper.toml            machines (name/os/role) + apps + loose pkgs + [vars] + [ignore] + [brew] + [eq_import]
+  apps/                  one file per app — the composable, code-free recipes
+    shell.toml           copy/block/setkey/exec steps, os/role/when-gated
+    ghostty.toml
+    1password.toml       e.g. setkey keybinding + exec(sudo) NMH setup + a sysfile /etc write
+  assets/                the real files the recipes deploy
+    starship.toml  ghostty.config  gnome/shell.<machine>.dconf  …
+  brewfiles/             optional per-machine Brewfiles (a machine's `brewfile = "brewfiles/<name>"`)
+    <machine>
+  machines/              `temper backup` writes machines/<name>/Brewfile here
+  secrets/               git-ignored; consumed by exec/setkey steps that declare them
 ```
 
-> Organization is app-first for recipes (a file per app), tiered *assets*
-> referenced by path, machine-scope loose packages + dconf snapshots under
-> `machines/`.
-
-See `SPEC.md` for the concrete manifest schema and `PRINCIPLES.md` for the
-guardrails.
+Get the folder onto a box however you like, then let temper find it (§discovery:
+drop it at a scanned location like `~/steel` or `~/Developer/steel`, or run
+`temper use <dir>`). See `SPEC.md` for the schema of each file, `WORKFLOWS.md`
+for the day-to-day loops, and `PRINCIPLES.md` for the guardrails.
