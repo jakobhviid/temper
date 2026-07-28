@@ -126,7 +126,9 @@ temper backup      # rarely: wholesale dump of live state → Brewfile
 
 `reconcile` prompts per item (missing entries default to keep, extras default to
 skip; flatpak extras also offer "ignore") and edits only the machine's **own**
-Brewfile, never a shared bundle — so it's safe to run often. `adopt` is the
+Brewfile, never a shared bundle — so it's safe to run often. Absorbed entries are
+written back in canonical order (taps → brews → casks → mas, alphabetical within
+each group) so the Brewfile stays sorted instead of growing an unsorted tail. `adopt` is the
 read-only preview; `backup` is the blunt "just capture everything" fallback when
 you'd rather diff-then-trim than answer prompts.
 

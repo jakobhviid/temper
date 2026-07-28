@@ -366,11 +366,11 @@ pub fn run_drift(
                 status: "extra".into(),
             });
         }
-        for name in providers::brew_extras(&effective, ignore)? {
+        for (m, name) in providers::brew_extras(&effective, ignore)? {
             findings.push(Finding {
                 app: "packages".into(),
                 kind: "package-extra",
-                target: format!("brew {name}"),
+                target: format!("{} {}", m.as_str(), name),
                 ok: false,
                 status: "extra".into(),
             });

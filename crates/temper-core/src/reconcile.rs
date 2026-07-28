@@ -101,12 +101,19 @@ pub fn plan(home: &Path, machine: &Machine, ignore: &manifest::Ignore) -> Result
             _ => {} // brew-family handled dependency-aware below
         }
     }
-    for name in providers::brew_extras(&effective, ignore)? {
-        // Resolve the FULLY-QUALIFIED token (tap formulae → user/tap/name) so the
-        // add round-trips; a bare short token can be re-offered forever. Fall back
-        // to a classified short name if brew can't resolve it.
-        let (m, full) = providers::brew_identity(&name)
-            .unwrap_or_else(|| (classify_brew(&name, &installed), name.clone()));
+    for (kind, name) in providers::brew_extras(&effective, ignore)? {
+        // A tap orphan (its formulae migrated to core, so nothing uses it) is
+        // absorbed verbatim as a `tap "user/repo"` line — NOT split to a bogus
+        // short formula name. A formula/cask extra is resolved to its
+        // FULLY-QUALIFIED token via `brew info` so a tap formula round-trips (a
+        // bare short token can be re-offered forever); fall back to a classified
+        // short name if brew can't resolve it.
+        let (m, full) = if kind == Manager::Tap {
+            (Manager::Tap, name)
+        } else {
+            providers::brew_identity(&name)
+                .unwrap_or_else(|| (classify_brew(&name, &installed), name.clone()))
+        };
         adds.push(AddItem {
             manager: m,
             token: token_for(m, &full),
@@ -169,6 +176,104 @@ pub fn brewfile_without(content: &str, drop_lines: &[String]) -> String {
     out
 }
 
+/// Canonically re-sort a Brewfile: entries grouped by manager in brew-bundle's
+/// order (tap, brew, cask, mas, vscode, flatpak) and sorted case-insensitively
+/// by name within each group, one blank line between groups. Each entry keeps
+/// the comment line(s) directly above it (they move with it). A leading comment
+/// block set off from the first entry by a blank line is pinned at the top as a
+/// file header; comments after the last entry are kept at the end. Lines that
+/// don't parse are preserved (grouped last, original order) — nothing is dropped.
+pub fn sort_brewfile(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let Some(first) = lines.iter().position(|l| packages::parse(l).is_ok()) else {
+        return content.to_string(); // no package entries — leave it exactly as-is
+    };
+
+    // Comments directly above the first entry attach to it; everything before
+    // that (including blanks) is pinned at the top as the file header.
+    let mut a = first;
+    while a > 0 && lines[a - 1].trim_start().starts_with('#') {
+        a -= 1;
+    }
+    let mut header: Vec<&str> = lines[..a].to_vec();
+    while header.last().is_some_and(|l| l.trim().is_empty()) {
+        header.pop();
+    }
+
+    fn rank(m: Manager) -> u8 {
+        match m {
+            Manager::Tap => 0,
+            Manager::Brew => 1,
+            Manager::Cask => 2,
+            Manager::Mas => 3,
+            Manager::Vscode => 4,
+            Manager::Flatpak => 5,
+        }
+    }
+    struct Item<'a> {
+        comments: Vec<&'a str>,
+        line: &'a str,
+        rank: u8,
+        key: String,
+    }
+
+    let mut items: Vec<Item> = Vec::new();
+    let mut pending: Vec<&str> = Vec::new();
+    for &line in &lines[a..] {
+        let t = line.trim();
+        if t.is_empty() {
+            continue; // blanks are normalized away
+        }
+        if t.starts_with('#') {
+            pending.push(line);
+            continue;
+        }
+        let (rank, key) = match packages::parse(line) {
+            Ok(pkg) => (rank(pkg.manager), pkg.name.to_lowercase()),
+            Err(_) => (u8::MAX, String::new()), // unparseable → last, stable order
+        };
+        items.push(Item {
+            comments: std::mem::take(&mut pending),
+            line,
+            rank,
+            key,
+        });
+    }
+    let trailing = pending; // comments after the last entry
+
+    // Stable sort: equal (rank, key) keep input order; unparseable lines stay put.
+    items.sort_by(|x, y| x.rank.cmp(&y.rank).then_with(|| x.key.cmp(&y.key)));
+
+    let mut out = String::new();
+    for l in &header {
+        out.push_str(l);
+        out.push('\n');
+    }
+    let mut prev_rank: Option<u8> = None;
+    for it in &items {
+        match prev_rank {
+            Some(pr) if pr != it.rank => out.push('\n'), // blank between groups
+            None if !header.is_empty() => out.push('\n'), // header ↔ first group
+            _ => {}
+        }
+        prev_rank = Some(it.rank);
+        for c in &it.comments {
+            out.push_str(c);
+            out.push('\n');
+        }
+        out.push_str(it.line);
+        out.push('\n');
+    }
+    if !trailing.is_empty() {
+        out.push('\n');
+        for l in &trailing {
+            out.push_str(l);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Append `appid` to `[ignore].<manager>` in a `temper.toml`, preserving
 /// comments + formatting (toml_edit). Idempotent — a no-op if already present.
 pub fn append_ignore(temper_toml: &str, manager: &str, appid: &str) -> Result<String> {
@@ -227,6 +332,37 @@ mod tests {
             brewfile_without(content, &["brew \"gone\"".into()]),
             "brew \"a\"\ncask \"c\"\n"
         );
+    }
+
+    #[test]
+    fn sort_groups_taps_brews_casks_mas_alphabetically() {
+        let input = "cask \"zoom\"\nbrew \"jq\"\ntap \"a/b\"\nbrew \"bat\"\nmas \"App\", id: 1\ncask \"alfred\"\n";
+        assert_eq!(
+            sort_brewfile(input),
+            "tap \"a/b\"\n\nbrew \"bat\"\nbrew \"jq\"\n\ncask \"alfred\"\ncask \"zoom\"\n\nmas \"App\", id: 1\n"
+        );
+    }
+
+    #[test]
+    fn sort_keeps_a_comment_with_its_entry() {
+        let input = "brew \"zebra\"\n# my jq\nbrew \"jq\"\n";
+        assert_eq!(sort_brewfile(input), "# my jq\nbrew \"jq\"\nbrew \"zebra\"\n");
+    }
+
+    #[test]
+    fn sort_pins_leading_header_block() {
+        let input = "# machine header\n# line 2\n\nbrew \"zed\"\nbrew \"bat\"\n";
+        assert_eq!(
+            sort_brewfile(input),
+            "# machine header\n# line 2\n\nbrew \"bat\"\nbrew \"zed\"\n"
+        );
+    }
+
+    #[test]
+    fn sort_is_idempotent() {
+        let input = "cask \"zoom\"\nbrew \"jq\"\n# c\ntap \"a/b\"\nbrew \"bat\"\n";
+        let once = sort_brewfile(input);
+        assert_eq!(sort_brewfile(&once), once);
     }
 
     #[test]

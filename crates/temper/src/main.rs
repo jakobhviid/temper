@@ -894,10 +894,12 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
     // Write the Brewfile + [ignore] edits THROUGH the journal, so `temper undo`
     // can revert a reconcile (it edits real folder files, so it's journalable).
     let mut jrnl = journal::Journal::begin();
-    let new_bf = reconcile::brewfile_with_adds(
+    // Absorb adds/drops, then canonically re-sort so new entries land in their
+    // group (taps → brews → casks → mas …) instead of tacked onto the end.
+    let new_bf = reconcile::sort_brewfile(&reconcile::brewfile_with_adds(
         &reconcile::brewfile_without(&original, &chosen_drops),
         &chosen_adds,
-    );
+    ));
     if new_bf != original {
         jrnl.record_write(&bf_path, Some(original.as_bytes()), new_bf.as_bytes())?;
         std::fs::write(&bf_path, &new_bf)

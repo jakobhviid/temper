@@ -128,10 +128,10 @@ app-bundles it wants. Drift at app scope is per-file / per-key / per-assertion.
 | `setkey` | both | set one or more keys in a structured store, preserving siblings. **Backends:** `dconf`, macOS `defaults`, `ini`/`.desktop`, `json`, `toml`. Supports **list-append** (array-union, e.g. `custom-keybindings`). This is the generalization of the old standalone `dconf`. |
 | `brew` | machine | converge the aggregate Brewfile (`brew bundle`); internalizes tap-trust; knows the `vscode` sub-type |
 | `flatpak` | machine | converge the flatpak set (with ignore-list); `flatpak override` env/perms is a `setkey`-style op on the override store |
-| `mas` | machine | converge Mac App Store apps in a separate, **forgiving** `mas install` loop (a MAS failure is warned + skipped, never fatal — see below) |
+| `mas` | machine | converge Mac App Store apps in a separate, **forgiving** `mas install` loop — skips apps already installed (per `mas list`), mutes Spotlight-reindex noise (`MAS_NO_AUTO_INDEX`), and a MAS failure is warned + skipped, never fatal (see below) |
 | `gext` | machine | converge GNOME extensions (install from EGO + `gext update`); distinct from *enabling* them (a dconf key) |
 | `rpm-ostree` | machine | layer an rpm that can't be image-baked (proton-vpn); emits a **reboot-required** signal temper reports but never automates |
-| `profile` | app/machine | install a macOS `.mobileconfig` — **weaker contract** (apply is a GUI `open`; drift is a plist key-subset compare; not silently undoable) |
+| `profile` | app/machine | install a macOS `.mobileconfig` — **weaker contract** (apply is a GUI `open`; drift is status-only `manual`; not silently undoable). Idempotent across runs via a content stamp — re-opened only when the source `.mobileconfig` changed |
 | `sysfile` | app | write one **root-owned** system file (`/etc/…`) with mode/owner/group, escalating internally (`sudo install`) for just that write. Drift compares content + mode + owner; not journaled (system-side) |
 | `exec` | app | run a user-supplied script — the escape hatch (see "exec's contract") |
 

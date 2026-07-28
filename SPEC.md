@@ -166,7 +166,10 @@ secrets = ["ACOUSTID_KEY"]   # env vars passed through to the script. A live app
                              # status-only ("unavailable — secret …") — never aborts.
 # exec is NOT journaled (not reversible by undo).
 
-# profile: install a macOS .mobileconfig (opens System Settings; manual)
+# profile: install a macOS .mobileconfig (opens System Settings; manual).
+# Idempotent across runs: only re-opened when the source .mobileconfig changed
+# since the last apply (a content stamp), so `update` won't re-prompt for an
+# unchanged profile.
 [[step]]
 profile = "assets/x.mobileconfig"   # drift is status-only ("manual")
 

@@ -177,7 +177,9 @@ pub fn converge(effective: &[Pkg], dry_run: bool) -> Result<usize> {
         let tmp = std::env::temp_dir().join(format!("temper-Brewfile-{}", std::process::id()));
         std::fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
         let status = Command::new("brew")
-            .args(["bundle", "--file"])
+            // `--quiet` drops the per-package "Using <formula>" line printed for
+            // every already-installed dep — real warnings/errors still surface.
+            .args(["bundle", "--quiet", "--file"])
             .arg(&tmp)
             .status()
             .context("running brew bundle")?;
@@ -209,16 +211,37 @@ pub fn converge(effective: &[Pkg], dry_run: bool) -> Result<usize> {
         .filter(|p| p.manager == Manager::Mas)
         .collect();
     if !mas.is_empty() && have("mas") && !dry_run {
-        for p in &mas {
+        // Only install what's genuinely missing. Re-running `mas install` on an
+        // already-installed app (every id in `mas list`) just prints a redundant
+        // "Already installed" warning — and can trigger a bare password prompt.
+        let present = mas_names();
+        let todo: Vec<&Pkg> = mas
+            .iter()
+            .copied()
+            .filter(|p| !present.contains_key(p.id.as_deref().unwrap_or(&p.name)))
+            .collect();
+        if !todo.is_empty() {
+            // Heads-up: a `mas install` can surface a bare macOS "Password:" line
+            // with no context — say what it's for before it appears.
+            eprintln!(
+                "→ Installing {} App Store app(s) via mas — macOS may prompt for your \
+                 password to authorize the install.",
+                todo.len()
+            );
+        }
+        for p in todo {
             let id = p.id.as_deref().unwrap_or(&p.name);
             let ok = Command::new("mas")
+                // Silence mas's post-install "not indexed in Spotlight" warnings.
+                .env("MAS_NO_AUTO_INDEX", "1")
                 .args(["install", id])
                 .status()
                 .map(|s| s.success())
                 .unwrap_or(false);
             if !ok {
                 eprintln!(
-                    "⚠ mas install {} (id {id}) failed — skipped (sign in to the App Store?)",
+                    "⚠ mas install {} (id {id}) failed — skipped (App Store sign-in, or an \
+                     Apple/iWork app mas can't install — get it from the App Store directly).",
                     p.name
                 );
             }
@@ -512,9 +535,11 @@ pub fn rpm_converge(effective: &[String], dry_run: bool) -> Result<bool> {
 
 /// Formulae/casks/taps installed but not needed by the declared set, per
 /// `brew bundle cleanup` (no `--force`, so read-only). Dependency-aware: a kept
-/// package's transitive deps are NOT reported — unlike a naive set-diff. Names
-/// are returned as brew's short names; the machine's `[ignore]` is applied.
-pub fn brew_extras(effective: &[Pkg], ignore: &manifest::Ignore) -> Result<Vec<String>> {
+/// package's transitive deps are NOT reported — unlike a naive set-diff. Each
+/// extra is tagged with its manager: a `tap` orphan keeps its full `user/repo`
+/// name (it round-trips as a `tap` line); a formula/cask keeps brew's short name
+/// and is tagged `Brew` for the caller to reclassify/qualify. `[ignore]` applied.
+pub fn brew_extras(effective: &[Pkg], ignore: &manifest::Ignore) -> Result<Vec<(Manager, String)>> {
     if !have("brew") {
         return Ok(Vec::new());
     }
@@ -540,7 +565,6 @@ pub fn brew_extras(effective: &[Pkg], ignore: &manifest::Ignore) -> Result<Vec<S
         .context("running brew bundle cleanup")?;
     let _ = fs::remove_file(&tmp);
 
-    // Parse the "Would uninstall …" / "Would untap …" sections for bare names.
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
     let ignored: HashSet<&str> = ignore
@@ -550,15 +574,38 @@ pub fn brew_extras(effective: &[Pkg], ignore: &manifest::Ignore) -> Result<Vec<S
         .chain(&ignore.tap)
         .map(String::as_str)
         .collect();
+    Ok(parse_cleanup_extras(&text, &ignored))
+}
 
-    let mut in_section = false;
+/// Parse `brew bundle cleanup`'s "Would uninstall …" (formulae/casks) and
+/// "Would untap …" (taps) sections into manager-tagged extras. Pure → unit-tested.
+///
+/// The two sections need DIFFERENT name handling, and conflating them is the
+/// migrated-to-core tap loop: a formula line may carry a tap prefix
+/// (`user/tap/name`) that we strip to brew's short name, but a TAP line is itself
+/// `user/repo` and must be kept WHOLE. Stripping a tap to its last path segment
+/// (`joshmedeski/sesh` → `sesh`) mints a bogus formula name that collides with a
+/// real formula, is written as a bare `brew "sesh"` that `cleanup` can't match to
+/// the tap, and so is re-offered every run. So we track which section owns a line.
+fn parse_cleanup_extras(text: &str, ignored: &HashSet<&str>) -> Vec<(Manager, String)> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Sec {
+        None,
+        Uninstall,
+        Untap,
+    }
+    let mut sec = Sec::None;
     let mut extras = Vec::new();
     for line in text.lines() {
-        if line.starts_with("Would uninstall") || line.starts_with("Would untap") {
-            in_section = true;
+        if line.starts_with("Would uninstall") {
+            sec = Sec::Uninstall;
             continue;
         }
-        if !in_section {
+        if line.starts_with("Would untap") {
+            sec = Sec::Untap;
+            continue;
+        }
+        if sec == Sec::None {
             continue;
         }
         let first = line.chars().next();
@@ -567,13 +614,88 @@ pub fn brew_extras(effective: &[Pkg], ignore: &manifest::Ignore) -> Result<Vec<S
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '/' | '-'));
         if is_name {
-            let name = line.rsplit('/').next().unwrap_or(line);
-            if !ignored.contains(name) && !ignored.contains(line) {
-                extras.push(name.to_string());
+            if sec == Sec::Untap {
+                // A tap `user/repo`, kept whole and matched against `[ignore].tap`.
+                if !ignored.contains(line) {
+                    extras.push((Manager::Tap, line.to_string()));
+                }
+            } else {
+                // A formula/cask: strip any tap prefix to brew's short name. Tagged
+                // `Brew`; the caller reclassifies cask-vs-formula and qualifies it.
+                let name = line.rsplit('/').next().unwrap_or(line);
+                if !ignored.contains(name) && !ignored.contains(line) {
+                    extras.push((Manager::Brew, name.to_string()));
+                }
             }
         } else if matches!(first, Some(c) if c.is_ascii_uppercase()) {
-            in_section = false;
+            sec = Sec::None;
         }
     }
-    Ok(extras)
+    extras
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+
+    fn ignored<'a>(items: &[&'a str]) -> HashSet<&'a str> {
+        items.iter().copied().collect()
+    }
+
+    #[test]
+    fn untap_line_kept_whole_not_split_to_a_formula() {
+        // Regression: when a formula migrates into homebrew-core its old tap is
+        // orphaned, and `brew bundle cleanup` reports it under "Would untap" as
+        // `user/repo`. Splitting that to the last segment (`sesh`) minted a bogus
+        // `brew "sesh"` add that cleanup could never match — an infinite reconcile
+        // loop. A tap must be kept whole and tagged as a tap.
+        let text = "Would untap:\njoshmedeski/sesh\n";
+        assert_eq!(
+            parse_cleanup_extras(text, &ignored(&[])),
+            vec![(Manager::Tap, "joshmedeski/sesh".to_string())]
+        );
+    }
+
+    #[test]
+    fn uninstall_formula_stripped_to_short_name() {
+        // Under "Would uninstall", a tap-qualified formula IS stripped to brew's
+        // short name (the caller re-qualifies it) — the opposite of a tap line.
+        let text = "Would uninstall these formulae:\nowner/tap/foo\nbar\n";
+        assert_eq!(
+            parse_cleanup_extras(text, &ignored(&[])),
+            vec![
+                (Manager::Brew, "foo".to_string()),
+                (Manager::Brew, "bar".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn sections_classified_independently() {
+        let text = "Would uninstall these formulae:\nripgrep\nWould untap:\njoshmedeski/sesh\n";
+        assert_eq!(
+            parse_cleanup_extras(text, &ignored(&[])),
+            vec![
+                (Manager::Brew, "ripgrep".to_string()),
+                (Manager::Tap, "joshmedeski/sesh".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn ignore_suppresses_tap_by_full_name_and_formula_by_short() {
+        let text = "Would untap:\njoshmedeski/sesh\nWould uninstall these formulae:\nbar\n";
+        assert!(parse_cleanup_extras(text, &ignored(&["joshmedeski/sesh", "bar"])).is_empty());
+    }
+
+    #[test]
+    fn uppercase_summary_line_ends_a_section() {
+        // A trailing summary ("Untapped …") starts uppercase and must not be read
+        // as a name.
+        let text = "Would untap:\njoshmedeski/sesh\nUntapped 1 tap\n";
+        assert_eq!(
+            parse_cleanup_extras(text, &ignored(&[])),
+            vec![(Manager::Tap, "joshmedeski/sesh".to_string())]
+        );
+    }
 }

@@ -1131,8 +1131,37 @@ mod sysfile_tests {
 // --- profile: install a macOS .mobileconfig -----------------------------------
 // Apply opens it in System Settings for the user to approve — installation
 // can't be silently scripted without MDM, so drift is status-only ("manual").
+//
+// Idempotent across runs via a content stamp: the profile is only re-opened when
+// it was never applied or its source changed. So `update` stops re-prompting for
+// unchanged profiles every run. (A profile the user removes by hand outside
+// temper isn't re-detected — that would need root to query installed profiles —
+// but any change to the source `.mobileconfig` re-triggers the apply.)
+
+/// The applied-stamp path for `file`: under the state root, keyed by a hash of
+/// the source path so two distinct profiles never collide.
+fn profile_stamp(state_root: &Path, file: &Path) -> PathBuf {
+    let key = blake3::hash(file.to_string_lossy().as_bytes()).to_hex().to_string();
+    state_root.join("profiles").join(key)
+}
+
+/// Whether `file` needs (re)installing: `true` if it was never applied or its
+/// content differs from the last-applied stamp. Pure w.r.t. the given state root.
+fn profile_needs_apply(state_root: &Path, file: &Path) -> Result<bool> {
+    let content = fs::read(file).with_context(|| format!("reading profile {}", file.display()))?;
+    let want = blake3::hash(&content).to_hex().to_string();
+    match fs::read_to_string(profile_stamp(state_root, file)) {
+        Ok(prev) => Ok(prev.trim() != want),
+        Err(_) => Ok(true), // no stamp yet → never applied
+    }
+}
 
 pub fn profile_apply(file: &Path) -> Result<bool> {
+    let state_root = crate::journal::state_root();
+    // Unchanged since the last apply → no-op (don't re-open System Settings).
+    if !profile_needs_apply(&state_root, file)? {
+        return Ok(false);
+    }
     if which("open").is_none() {
         bail!("profile install needs macOS `open`");
     }
@@ -1143,5 +1172,42 @@ pub fn profile_apply(file: &Path) -> Result<bool> {
     if !status.success() {
         bail!("open {} failed", file.display());
     }
+    // Stamp the applied content so an unchanged profile is skipped next run.
+    let content = fs::read(file).with_context(|| format!("reading profile {}", file.display()))?;
+    let stamp = profile_stamp(&state_root, file);
+    if let Some(parent) = stamp.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    fs::write(&stamp, blake3::hash(&content).to_hex().to_string())
+        .with_context(|| format!("writing profile stamp {}", stamp.display()))?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    #[test]
+    fn needs_apply_tracks_content_changes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let state = dir.path().join("state");
+        let prof = dir.path().join("x.mobileconfig");
+        fs::write(&prof, b"<plist>v1</plist>").unwrap();
+
+        // Never applied → needs apply.
+        assert!(profile_needs_apply(&state, &prof).unwrap());
+
+        // Simulate an apply by writing the stamp for the current content.
+        let stamp = profile_stamp(&state, &prof);
+        fs::create_dir_all(stamp.parent().unwrap()).unwrap();
+        let h = blake3::hash(&fs::read(&prof).unwrap()).to_hex().to_string();
+        fs::write(&stamp, &h).unwrap();
+
+        // Unchanged → no re-apply.
+        assert!(!profile_needs_apply(&state, &prof).unwrap());
+
+        // Content changed → needs re-apply.
+        fs::write(&prof, b"<plist>v2</plist>").unwrap();
+        assert!(profile_needs_apply(&state, &prof).unwrap());
+    }
 }
