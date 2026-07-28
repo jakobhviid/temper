@@ -7,8 +7,10 @@
 //! document.
 //!
 //! Status: all verbs are live. Read-only paths (drift, dry-run, package probe)
-//! are verified against a real machine; the writing paths of the platform
-//! providers (dconf/defaults/gext/rpm-ostree, live package converge) await a VM.
+//! are verified against a real machine, and many write paths are now verified
+//! live on a Bazzite host (brew-bundle converge, dconf snapshot/restore, dconf
+//! setkey journaling+undo, sysfile drift). `defaults`/mas and full flatpak
+//! converge await a Mac / a fuller run.
 
 use std::io;
 use std::process::ExitCode;
@@ -508,8 +510,7 @@ fn cmd_adopt(json: bool) -> Result<()> {
         }
         println!(
             "\nAdd the ones you want to a bundle or the machine's loose `packages`, \
-             and the rest to `[ignore].{}` in temper.toml.",
-            "<manager>"
+             and the rest to `[ignore].<manager>` in temper.toml."
         );
     }
     Ok(())

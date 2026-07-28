@@ -3,14 +3,16 @@
 //! A mutating run writes `runs/<id>/manifest.json` + a content-addressed
 //! `objects/` store under the state dir (`$TEMPER_STATE_DIR`, else the platform
 //! state dir). Each entry is a minimal inverse:
-//!   - `Create`  — temper created the file; undo deletes it if it still hashes
-//!                 to what temper wrote.
-//!   - `Restore` — temper overwrote an existing file; undo restores the prior
-//!                 bytes if the file still hashes to what temper left.
-//! Every revert is guarded by an after-hash check: if the file changed since,
-//! the entry is skipped, never clobbered.
 //!
-//! Slice 1 reverts the newest run; run selection / listing / GC land later.
+//! - `Create` — temper created the file; undo deletes it if it still hashes to
+//!   what temper wrote.
+//! - `Restore` — temper overwrote an existing file; undo restores the prior
+//!   bytes if the file still hashes to what temper left.
+//! - `DconfKey` — a `setkey(dconf)` write; undo restores the prior value (or
+//!   resets a previously-unset key), guarded on the live value.
+//!
+//! Every revert is guarded by an after check: if the target changed since, the
+//! entry is skipped, never clobbered.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -171,7 +173,7 @@ fn newest_run(runs: &Path) -> Result<PathBuf> {
             continue;
         }
         let mtime = entry.metadata()?.modified()?;
-        if best.as_ref().map_or(true, |(t, _)| mtime > *t) {
+        if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
             best = Some((mtime, p));
         }
     }
@@ -195,7 +197,7 @@ pub fn list_runs() -> Result<Vec<String>> {
             entry.file_name().to_string_lossy().into_owned(),
         ));
     }
-    v.sort_by(|a, b| b.0.cmp(&a.0));
+    v.sort_by_key(|b| std::cmp::Reverse(b.0));
     Ok(v.into_iter().map(|(_, id)| id).collect())
 }
 

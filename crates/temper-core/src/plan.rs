@@ -1,9 +1,9 @@
 //! Build the ordered steps + assertions for a machine, then evaluate (drift) or
-//! apply (install) them. Live step primitives: `copy`, `block`, `setkey(json)`,
-//! `exec`. Assertions are drift-only.
-//!
-//! Flows: `install` applies every step (with a `dry_run` preview); `update` /
-//! `ensure` / `adopt` land later.
+//! apply (install/update) them, with presence-gating (`when`/`needs`) and a
+//! both-direction remediation summary. Step primitives: `copy`, `block`,
+//! `setkey` (all backends), `exec`, `profile`, `sysfile`; assertions are
+//! drift-only. Flows `install` / `update` / `prune` / `backup` / `restore` /
+//! `adopt` / `reconcile` are all live.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -68,7 +68,7 @@ fn is_step(step: &Step) -> bool {
 }
 
 /// `sysfile` options from a step.
-fn sysfile_opts(step: &Step) -> primitives::SysfileOpts {
+fn sysfile_opts(step: &Step) -> primitives::SysfileOpts<'_> {
     primitives::SysfileOpts {
         mode: step.mode.as_deref(),
         owner: step.owner.as_deref(),
@@ -461,7 +461,7 @@ fn step_would_change(
             None => Ok(true),
         };
     }
-    Ok(step_finding(home, machine, "", step, vars)?.map_or(false, |f| !f.ok))
+    Ok(step_finding(home, machine, "", step, vars)?.is_some_and(|f| !f.ok))
 }
 
 /// Outcome of an install run.

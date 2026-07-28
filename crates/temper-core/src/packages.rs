@@ -186,7 +186,7 @@ impl Installed {
     }
 }
 
-fn ignore_list<'a>(ignore: &'a Ignore, m: Manager) -> &'a [String] {
+fn ignore_list(ignore: &Ignore, m: Manager) -> &[String] {
     match m {
         Manager::Brew => &ignore.brew,
         Manager::Cask => &ignore.cask,
