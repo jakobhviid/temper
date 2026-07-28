@@ -328,6 +328,7 @@ pub fn run_install(
     vars: &BTreeMap<String, String>,
     brew_trust: &[String],
     dry_run: bool,
+    packages_only: bool,
 ) -> Result<InstallReport> {
     // Never apply one machine's config to a different-OS host (drift/dry-run
     // from anywhere is fine — only a live converge is refused).
@@ -349,6 +350,16 @@ pub fn run_install(
     let packages = providers::converge(&effective, dry_run)?;
     providers::gext_converge(&providers::effective_extensions(home, machine)?, dry_run)?;
     let reboot = providers::rpm_converge(&providers::effective_rpm(home, machine)?, dry_run)?;
+
+    // `install-missing`: packages only — skip the config-step phase entirely.
+    if packages_only {
+        return Ok(InstallReport {
+            packages,
+            steps_changed: 0,
+            steps_total: 0,
+            reboot,
+        });
+    }
 
     // Phase 2 — config steps.
     let resolved = resolve(home, machine)?;

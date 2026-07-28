@@ -51,6 +51,10 @@ enum Cmd {
         /// Show what would change without touching anything.
         #[arg(long)]
         dry_run: bool,
+        /// Converge only packages (add missing; never remove), skipping the
+        /// config-step phase — the additive, no-churn "install-missing" flow.
+        #[arg(long)]
+        packages_only: bool,
     },
     /// Re-apply the `always` config steps and upgrade declared packages
     /// (`brew upgrade` + `flatpak update`). Does not add newly-declared apps.
@@ -133,7 +137,9 @@ fn run(cli: Cli) -> Result<()> {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "temper", &mut io::stdout());
         }
-        Some(Cmd::Install { machine, dry_run }) => cmd_install(machine, dry_run, json)?,
+        Some(Cmd::Install { machine, dry_run, packages_only }) => {
+            cmd_install(machine, dry_run, packages_only, json)?
+        }
         Some(Cmd::Update) => cmd_update(json)?,
         Some(Cmd::Drift { machine }) => cmd_drift(machine, json)?,
         Some(Cmd::Undo { run, list, dry_run }) => cmd_undo(run, list, dry_run, json)?,
@@ -144,21 +150,32 @@ fn run(cli: Cli) -> Result<()> {
     Ok(())
 }
 
-fn cmd_install(machine: Option<String>, dry_run: bool, json: bool) -> Result<()> {
+fn cmd_install(
+    machine: Option<String>,
+    dry_run: bool,
+    packages_only: bool,
+    json: bool,
+) -> Result<()> {
     let home = discovery::find_home()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
     let vars = manifest::effective_vars(&ft.vars, &m);
-    let r = plan::run_install(&home, &m, &vars, &ft.brew.trust, dry_run)?;
+    let r = plan::run_install(&home, &m, &vars, &ft.brew.trust, dry_run, packages_only)?;
     if json {
         println!(
             "{}",
             serde_json::json!({
                 "machine": m.name, "packages": r.packages,
                 "changed": r.steps_changed, "total": r.steps_total,
-                "reboot": r.reboot, "dry_run": dry_run
+                "reboot": r.reboot, "dry_run": dry_run, "packages_only": packages_only
             })
         );
+    } else if packages_only {
+        let verb = if dry_run { "would converge" } else { "converged" };
+        println!("install-missing {}: {verb} {} declared package(s), config skipped", m.name, r.packages);
+        if r.reboot {
+            println!("  ⚠ reboot required (rpm-ostree layered a package)");
+        }
     } else {
         let verb = if dry_run { "would apply" } else { "applied" };
         println!(

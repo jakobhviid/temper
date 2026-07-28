@@ -115,18 +115,6 @@ for extras, `ignore` flatpak-only), preview the resulting TOML/Brewfile edit,
 confirm once, write. This is the absorb-direction verb the remediation summary
 above points at.
 
-### `install-missing` — additive, packages-only converge
-**Status:** deferred. RIS `install-missing` (`Linux/justfile:905-917`) is a thin,
-**additive** wrapper over `brew bundle install` (+ tap-trust): add
-declared-but-absent packages, never remove, never run config or one-time setup.
-**Now:** `install` takes only a machine + `--dry-run`, so the full converge
-(packages + all config + one-time setup + dconf reload) is the *only* path to add
-a single missing package. There is no "just the additions, just the packages"
-step.
-**Sketch:** an `install --packages-only` flag (or a dedicated verb) that runs only
-the aggregate package converge in add-only mode — no prune, no config phase. It's
-a subset of what `install` already does.
-
 ### Filtered dconf snapshot + targeted restore
 **Status:** snapshot designed, not built; the restore pair is absent entirely.
 `backup` does `brew bundle dump` only. RIS additionally has

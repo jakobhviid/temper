@@ -47,16 +47,19 @@
 | presence-gating (`when`/`needs` probes) | ❌ design | — (only os/role gating today) |
 | packages: parse · effective-set · missing/extras | ✅ | ✅ unit + **real brew drift** |
 | providers: brew / cask / tap / flatpak / mas / vscode — probe | ✅ | ✅ real (drift) |
-| providers: … converge (`brew bundle` / `flatpak install`) | ✅ | ⏳ **VM** (writes) |
+| providers: … converge (`brew bundle` / `flatpak install`) | ✅ | ✅ **brew bundle live on Bazzite**; flatpak ⏳ |
+| `install --packages-only` (additive "install-missing" — packages, no config) | ✅ | ✅ live (brew) |
 | providers: **gext** / **rpm-ostree** | ✅ | — (Linux/VM) |
 | `profile` (macOS .mobileconfig) | ✅ | — (manual/System Settings) |
 | discovery (auto-scan cloud folders) beyond `$TEMPER_DIR` + cwd walk-up | ⏳ | — |
 
-**VM run checklist** (things only a live *write* exercises): package converge
-(`brew bundle`, `flatpak install`), `brew upgrade` on `update`, dependency-aware
-`prune`, `brew bundle dump` on `backup`, dconf/`defaults` writes, and
-`gext`/`rpm-ostree` layering. The read-only paths (all of `drift`, package
-probing, `install --dry-run`) are verified against a real machine. Known
+**VM run checklist** (things only a live *write* exercises): `brew bundle`
+formula converge is now **verified live on a Bazzite host** (install-missing of a
+throwaway formula); still pending a full run: `flatpak install`, `brew upgrade`
+on `update`, dependency-aware `prune`, `brew bundle dump` on `backup`,
+dconf/`defaults` writes, and `gext`/`rpm-ostree` layering. The read-only paths
+(all of `drift`, package probing, `install --dry-run`) are verified against a
+real machine. Known
 limitations: `setkey` toml reserializes (drops comments); `defaults`/`dconf`
 writes aren't journaled; `profile` install is manual; presence-gating
 (`when`/`needs`) is unbuilt (os/role gating only). Steps, asserts, **and
