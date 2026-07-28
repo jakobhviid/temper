@@ -388,17 +388,20 @@ fn json_satisfied(root: &Json, parts: &[&str], value: &Json, append: bool) -> bo
     }
 }
 
-/// `append` (array-union) is implemented only for the structured json/toml
-/// backends. On ini/defaults/dconf it would be a silent no-op, so reject it
-/// loudly instead (Principle #6 — no silent skips).
+/// `append` (array-union) is implemented for json/toml and dconf (a GVariant
+/// `as` list). On ini/defaults it has no array model, so reject it loudly rather
+/// than silently no-op (Principle #6 — no silent skips).
 fn ensure_append_supported(sk: &SetKey) -> Result<()> {
-    if sk.append && !matches!(sk.backend.as_str(), "json" | "toml") {
-        bail!(
-            "setkey `append = true` is only supported on the json/toml backends, not `{}`",
-            sk.backend
-        );
+    if !sk.append {
+        return Ok(());
     }
-    Ok(())
+    match sk.backend.as_str() {
+        "json" | "toml" => Ok(()),
+        // dconf unions into a flat GVariant string array (`as`), so the value's
+        // members must be strings — validate the shape up front.
+        "dconf" => dconf_append_members(&sk.value).map(|_| ()),
+        other => bail!("setkey `append = true` is only supported on json/toml/dconf, not `{other}`"),
+    }
 }
 
 /// Render `{{ … }}` in every string leaf of a toml value (recursing arrays and
@@ -977,9 +980,103 @@ fn gvariant(v: &toml::Value) -> String {
     }
 }
 
+/// Members to union into a dconf `as` array, from a (rendered) value: a string
+/// is one member; an array must be all strings (a flat `as` list). Non-string
+/// values are rejected — union is only well-defined for `as`.
+fn dconf_append_members(v: &toml::Value) -> Result<Vec<String>> {
+    match v {
+        toml::Value::String(s) => Ok(vec![s.clone()]),
+        toml::Value::Array(a) => a
+            .iter()
+            .map(|x| match x {
+                toml::Value::String(s) => Ok(s.clone()),
+                _ => bail!("setkey(dconf) append: array members must be strings (an `as` list)"),
+            })
+            .collect(),
+        _ => bail!("setkey(dconf) append: value must be a string or array of strings (`as`)"),
+    }
+}
+
+/// Parse a GVariant string array — `['a', 'b']`, an optional `@as` prefix, or
+/// empty — into its members. The inverse of `gvariant` for `as`: members are
+/// single-quoted with `\\` and `\'` escapes.
+fn parse_gvariant_as(s: &str) -> Result<Vec<String>> {
+    let t = s.trim();
+    let t = t.strip_prefix("@as").map(|r| r.trim()).unwrap_or(t);
+    let inner = t
+        .strip_prefix('[')
+        .and_then(|r| r.strip_suffix(']'))
+        .ok_or_else(|| anyhow!("not a GVariant string array: `{s}`"))?;
+    let mut out = Vec::new();
+    let mut chars = inner.chars().peekable();
+    loop {
+        while matches!(chars.peek(), Some(c) if c.is_whitespace() || *c == ',') {
+            chars.next();
+        }
+        match chars.next() {
+            None => break,
+            Some('\'') => {
+                let mut member = String::new();
+                loop {
+                    match chars.next() {
+                        Some('\\') => match chars.next() {
+                            Some(c) => member.push(c),
+                            None => bail!("unterminated escape in GVariant array `{s}`"),
+                        },
+                        Some('\'') => break,
+                        Some(c) => member.push(c),
+                        None => bail!("unterminated string in GVariant array `{s}`"),
+                    }
+                }
+                out.push(member);
+            }
+            Some(c) => bail!("unexpected `{c}` in GVariant string array `{s}`"),
+        }
+    }
+    Ok(out)
+}
+
+/// Union `members` into GVariant `as` `current` (absent = empty), preserving
+/// existing members and order; idempotent. Returns the rendered array.
+fn union_gvariant_as(current: Option<&str>, members: &[String]) -> Result<String> {
+    let mut cur = match current {
+        Some(s) => parse_gvariant_as(s)?,
+        None => Vec::new(),
+    };
+    for m in members {
+        if !cur.contains(m) {
+            cur.push(m.clone());
+        }
+    }
+    let arr = toml::Value::Array(cur.into_iter().map(toml::Value::String).collect());
+    Ok(gvariant(&arr))
+}
+
 fn dconf_state(sk: &SetKey) -> Result<FileState> {
     if which("dconf").is_none() {
         return Ok(FileState::Unavailable); // degrade, don't abort (e.g. on Mac)
+    }
+    if sk.append {
+        // Union drift: in sync iff the array already contains every declared
+        // member (subset), like json/toml append.
+        let want = dconf_append_members(&sk.value)?;
+        return Ok(match dconf_read(&sk.key) {
+            None => {
+                if want.is_empty() {
+                    FileState::InSync
+                } else {
+                    FileState::Missing
+                }
+            }
+            Some(have) => {
+                let cur = parse_gvariant_as(&have)?;
+                if want.iter().all(|m| cur.contains(m)) {
+                    FileState::InSync
+                } else {
+                    FileState::Drifted
+                }
+            }
+        });
     }
     let want = gvariant(&sk.value);
     Ok(match dconf_read(&sk.key) {
@@ -997,7 +1094,13 @@ fn dconf_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
     // reset the key when it was previously unset). dconf values round-trip
     // cleanly, unlike `defaults`, so this backend is journaled.
     let before = dconf_read(&sk.key);
-    let after = gvariant(&sk.value);
+    let after = if sk.append {
+        // Union declared members into the existing array (idempotent), never
+        // clobbering the user's other entries.
+        union_gvariant_as(before.as_deref(), &dconf_append_members(&sk.value)?)?
+    } else {
+        gvariant(&sk.value)
+    };
     let status = std::process::Command::new("dconf")
         .args(["write", &sk.key, &after])
         .status()
@@ -1256,16 +1359,61 @@ mod setkey_tests {
     }
 
     #[test]
-    fn append_only_allowed_on_json_and_toml() {
-        // Supported backends accept it …
+    fn append_allowed_on_json_toml_dconf_not_ini_defaults() {
+        // Backends with an array model accept it (dconf value is a string → a
+        // valid `as` member) …
         assert!(ensure_append_supported(&sk("json", true)).is_ok());
         assert!(ensure_append_supported(&sk("toml", true)).is_ok());
-        // … the others reject it loudly rather than silently ignoring it.
+        assert!(ensure_append_supported(&sk("dconf", true)).is_ok());
+        // … a non-string dconf append value is rejected up front (`as` is flat).
+        let mut bad = sk("dconf", true);
+        bad.value = toml::Value::Integer(1);
+        assert!(ensure_append_supported(&bad).is_err());
+        // … the array-less backends reject it loudly rather than silently no-op.
         assert!(ensure_append_supported(&sk("ini", true)).is_err());
         assert!(ensure_append_supported(&sk("defaults", true)).is_err());
-        assert!(ensure_append_supported(&sk("dconf", true)).is_err());
         // append = false is fine everywhere.
         assert!(ensure_append_supported(&sk("dconf", false)).is_ok());
+    }
+
+    #[test]
+    fn dconf_as_parse_render_round_trip() {
+        for members in [vec![], vec!["a".to_string()], vec!["a".into(), "b".into()]] {
+            let rendered = union_gvariant_as(None, &members).unwrap();
+            assert_eq!(parse_gvariant_as(&rendered).unwrap(), members);
+        }
+        // escaping (quote, backslash) + utf8 survive a round trip
+        let tricky = vec!["it's".to_string(), "a\\b".into(), "æøå".into()];
+        let r = union_gvariant_as(None, &tricky).unwrap();
+        assert_eq!(parse_gvariant_as(&r).unwrap(), tricky);
+        // tolerate an @as prefix, tight spacing, and empty
+        assert_eq!(parse_gvariant_as("@as ['x','y']").unwrap(), vec!["x", "y"]);
+        assert_eq!(parse_gvariant_as("[]").unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn dconf_union_is_idempotent_and_preserves_others() {
+        let cur = "['a', 'b']";
+        let parse = |s: &str| parse_gvariant_as(s).unwrap();
+        // a new member is appended, the user's others kept
+        assert_eq!(parse(&union_gvariant_as(Some(cur), &["c".into()]).unwrap()), vec!["a", "b", "c"]);
+        // an already-present member → unchanged (idempotent)
+        assert_eq!(parse(&union_gvariant_as(Some(cur), &["a".into()]).unwrap()), vec!["a", "b"]);
+        // absent key → the array is created
+        assert_eq!(parse(&union_gvariant_as(None, &["x".into()]).unwrap()), vec!["x"]);
+    }
+
+    #[test]
+    fn dconf_append_members_shape_is_enforced() {
+        assert_eq!(dconf_append_members(&toml::Value::String("x".into())).unwrap(), vec!["x"]);
+        let arr = toml::Value::Array(vec![
+            toml::Value::String("a".into()),
+            toml::Value::String("b".into()),
+        ]);
+        assert_eq!(dconf_append_members(&arr).unwrap(), vec!["a", "b"]);
+        // non-`as` values are rejected
+        assert!(dconf_append_members(&toml::Value::Integer(1)).is_err());
+        assert!(dconf_append_members(&toml::Value::Array(vec![toml::Value::Integer(1)])).is_err());
     }
 
     #[test]

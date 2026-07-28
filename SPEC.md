@@ -153,7 +153,11 @@ setkey = { backend = "json", file = "~/.config/x.json", key = "bin", value = "{{
 #            'prefer-dark'; value = true → true; value = 42 → 42; value = ["a","b"]
 #            → ['a','b']. (GVariant types beyond scalar/string-array — uint32,
 #            tuples — aren't rendered; use `exec` for those.)
-#   append:  true → list-union into an array-valued key (json/toml only).
+#   append:  true → idempotent list-union into an array key. json/toml, and
+#            dconf for a GVariant `as` list (the custom-keybindings /
+#            enabled-extensions / favorite-apps shape). On dconf the value is a
+#            string (one member) or array-of-strings (each a member); drift is
+#            subset ("the array contains the declared member(s)"). NOT ini/defaults.
 #   template: true → render {{ which "x" }} / {{ brew_prefix }} / {{ env "X" }} /
 #            {{ var "X" }} in the value's string leaves at apply time (like copy's
 #            `template`; works on ALL backends). Default false. Drift re-renders +
