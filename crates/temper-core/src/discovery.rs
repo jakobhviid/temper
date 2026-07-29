@@ -172,13 +172,24 @@ fn scan_in(home: &Path) -> Vec<PathBuf> {
         PathBuf::from("/media"),
         PathBuf::from("/run/media").join(std::env::var("USER").unwrap_or_default()),
     ]);
+    // Dedup by *canonical* path, not the path string: on a case-insensitive FS
+    // (macOS) `~/Developer/steel` and `~/developer/steel` are the same directory,
+    // and `/home` → `/var/home` symlinks alias too — string-equality would list
+    // one real home several times and make `find_home` cry "several homes".
     let mut out = Vec::new();
+    let mut seen: Vec<PathBuf> = Vec::new();
     for root in roots {
         for name in names {
             let cand = root.join(name);
-            if has_manifest(&cand) && !out.contains(&cand) {
-                out.push(cand);
+            if !has_manifest(&cand) {
+                continue;
             }
+            let key = cand.canonicalize().unwrap_or_else(|_| cand.clone());
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            out.push(cand);
         }
     }
     out
@@ -224,6 +235,22 @@ mod tests {
                 steel.display()
             );
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn scan_dedups_aliased_roots() {
+        // Two roots that resolve to the SAME directory (a case-insensitive macOS
+        // FS aliases `Developer`/`developer`; here a symlink stands in) must yield
+        // ONE candidate — not "several homes". Regression for the macOS dup bug.
+        let home = tempfile::TempDir::new().unwrap();
+        let steel = home.path().join("Developer").join("steel");
+        fs::create_dir_all(&steel).unwrap();
+        fs::write(steel.join("temper.toml"), "").unwrap();
+        std::os::unix::fs::symlink(home.path().join("Developer"), home.path().join("developer"))
+            .unwrap();
+        let found = scan_in(home.path());
+        assert_eq!(found.len(), 1, "aliased roots must dedup to one: {found:?}");
     }
 
     #[test]
