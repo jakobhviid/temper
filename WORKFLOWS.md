@@ -223,6 +223,11 @@ you persist those changes so it doesn't silently drift:
   auto-generated message (`reconcile chronos-redux: +2 -1 ~0`) unless you pass
   `-m "…"`. `--no-push` to hold. Works after hand edits too (message from the
   changed paths).
+- **`temper refresh`** (alias `pull`) = `git pull` in the home — the pull-side
+  counterpart to `save`. Run it from **anywhere**: temper resolves the folder, so
+  you never have to find it or `cd` in just to grab a fleet change. Explicit, so
+  it pulls even when `auto_pull` is off; `--rebase` (or `[git].auto_rebase`)
+  rebases instead of fast-forward. A non-git home just says so.
 - Prefer hands-off? **`temper git enable [--push] [--pull] [--rebase]`** writes
   `[git]` in temper.toml so temper auto-commits (and optionally pushes, and pulls
   before a run). `--rebase` pulls with `--rebase` instead of `--ff-only` (so a

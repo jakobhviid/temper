@@ -173,6 +173,18 @@ enum Cmd {
         #[arg(long)]
         no_push: bool,
     },
+    /// Pull the latest spec into the git-backed home (from anywhere).
+    ///
+    /// `git pull` in your temper-home — the pull-side counterpart to `save`, so
+    /// you can grab a fleet change without hunting for where the folder lives or
+    /// `cd`-ing into it. `--rebase` (or `[git].auto_rebase`) rebases instead of
+    /// fast-forward-only. A no-op that just says so if the home isn't a git repo.
+    #[command(alias = "pull")]
+    Refresh {
+        /// Pull with `--rebase` instead of `--ff-only` (overrides `[git].auto_rebase`).
+        #[arg(long)]
+        rebase: bool,
+    },
     /// Show or configure git automation for the home.
     ///
     /// With no subcommand: show whether the home is git, its branch/ahead-behind,
@@ -263,6 +275,7 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Restore { machine, yes }) => cmd_restore(machine, yes, json)?,
         Some(Cmd::EqImport) => cmd_eq_import(json)?,
         Some(Cmd::Save { message, no_push }) => cmd_save(message, no_push, json)?,
+        Some(Cmd::Refresh { rebase }) => cmd_refresh(rebase, json)?,
         Some(Cmd::Git { action }) => cmd_git(action, json)?,
         Some(Cmd::Setup { dir }) => cmd_setup(dir, json)?,
     }
@@ -369,6 +382,50 @@ fn cmd_save(message: Option<String>, no_push: bool, json: bool) -> Result<()> {
         if let Some(w) = r.warning {
             eprintln!("{} {w}", ui::yellow("⚠"));
         }
+    }
+    Ok(())
+}
+
+/// Pull the latest spec into the home — the pull-side counterpart to `save`, run
+/// from anywhere (temper resolves the folder, so you never `cd` to it). Explicit,
+/// so it pulls regardless of `[git].auto_pull`; strategy follows `--rebase` /
+/// `[git].auto_rebase`. A non-git home just reports that (nothing to pull).
+fn cmd_refresh(rebase: bool, json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    if !git::is_repo(&home) {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({ "refreshed": false, "reason": "not a git repo" })
+            );
+        } else {
+            println!(
+                "{} is not a git repo — nothing to refresh (syncing a Nextcloud/USB/plain \
+                 folder is that tool's job, not temper's).",
+                home.display()
+            );
+        }
+        return Ok(());
+    }
+    let rebase = rebase || manifest::peek_auto_rebase(&home);
+    let (ok, warning) = match git::pull(&home, rebase) {
+        git::Pull::Ok => (true, None),
+        git::Pull::Warn(w) => (false, Some(w)),
+        git::Pull::NotRepo => (false, Some("not a git repo".into())), // unreachable (checked above)
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "refreshed": ok, "home": home.display().to_string(), "warning": warning })
+        );
+    } else if ok {
+        println!("{} refreshed {}", ui::green("✓"), home.display());
+    } else if let Some(w) = warning {
+        eprintln!(
+            "{} couldn't refresh {}: {w}",
+            ui::yellow("⚠"),
+            home.display()
+        );
     }
     Ok(())
 }
