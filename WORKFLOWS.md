@@ -240,6 +240,17 @@ you persist those changes so it doesn't silently drift:
 spec; if it can't pull (offline, diverged) it warns and continues — never blocks.
 With `auto_rebase` a diverged local is replayed on top instead of warned past.
 
+**Per-run override.** `auto_pull` is the persistent default; two global flags
+override it for a single run on **any** verb: **`--pull`** forces a pull even
+when `auto_pull` is off (handy after a known fleet change), and **`--no-pull`**
+skips it even when on (handy offline). **`temper status`** (= `temper git` with
+no subcommand) shows the home's git state + `[git]` settings.
+
+The whole git surface, then, is symmetric: **pull** = `auto_pull` (default) ·
+`--pull`/`--no-pull` (per-run) · `temper refresh` (explicit); **push** =
+`auto_commit`/`auto_push` (default) · `temper save` (explicit); **status** =
+`temper status`.
+
 ## Fleet: author once, run per-machine
 
 temper acts on the **machine it runs on**. The machine *argument* selects which

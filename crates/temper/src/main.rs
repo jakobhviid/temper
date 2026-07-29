@@ -45,6 +45,16 @@ struct Cli {
     #[arg(short = 'v', long, global = true)]
     verbose: bool,
 
+    /// Force a `git pull` of the home before this run, even if `[git].auto_pull`
+    /// is off (uses `--rebase` when `[git].auto_rebase`). Applies to any verb.
+    #[arg(long, global = true, conflicts_with = "no_pull")]
+    pull: bool,
+
+    /// Skip the pre-run `git pull` for this run, even if `[git].auto_pull` is on
+    /// (e.g. you're offline). Applies to any verb.
+    #[arg(long, global = true)]
+    no_pull: bool,
+
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -195,6 +205,8 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<GitAction>,
     },
+    /// Show the home's git state + settings (alias for `git` with no subcommand).
+    Status,
     /// Print a shell completion script.
     Completions {
         /// The shell to generate for.
@@ -247,9 +259,21 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The per-run pull override from the global `--pull`/`--no-pull` flags:
+/// `Some(true)` = force, `Some(false)` = skip, `None` = follow `[git].auto_pull`.
+/// Set once in `run` (a CLI parses args once at startup) and read by
+/// `find_home_pulling`, so the flags reach the pull without threading an extra
+/// parameter through every verb.
+static PULL_OVERRIDE: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
+
 fn run(cli: Cli) -> Result<()> {
     let json = cli.json;
     let verbose = cli.verbose;
+    let _ = PULL_OVERRIDE.set(match (cli.pull, cli.no_pull) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
+    });
     match cli.cmd {
         None => {
             Cli::command().print_help()?;
@@ -277,6 +301,7 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Save { message, no_push }) => cmd_save(message, no_push, json)?,
         Some(Cmd::Refresh { rebase }) => cmd_refresh(rebase, json)?,
         Some(Cmd::Git { action }) => cmd_git(action, json)?,
+        Some(Cmd::Status) => cmd_git(None, json)?,
         Some(Cmd::Setup { dir }) => cmd_setup(dir, json)?,
     }
     Ok(())
@@ -288,7 +313,14 @@ fn run(cli: Cli) -> Result<()> {
 /// pull failure only warns.
 fn find_home_pulling() -> Result<std::path::PathBuf> {
     let home = discovery::find_home()?;
-    let mode = manifest::peek_pull_mode(&home);
+    // `--pull` forces a pull (honoring auto_rebase) even when auto_pull is off;
+    // `--no-pull` skips it even when on; otherwise follow `[git]`.
+    let mode = match PULL_OVERRIDE.get().copied().flatten() {
+        Some(false) => manifest::PullMode::Off,
+        Some(true) if manifest::peek_auto_rebase(&home) => manifest::PullMode::Rebase,
+        Some(true) => manifest::PullMode::FastForward,
+        None => manifest::peek_pull_mode(&home),
+    };
     if mode != manifest::PullMode::Off {
         if let git::Pull::Warn(w) = git::pull(&home, mode == manifest::PullMode::Rebase) {
             eprintln!(
