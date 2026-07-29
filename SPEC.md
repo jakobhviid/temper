@@ -199,6 +199,12 @@ secrets = ["ACOUSTID_KEY"]   # env vars passed through to the script. A live app
                              # `drift`/`install --dry-run` DEGRADES that step to
                              # status-only ("unavailable — secret …") — never aborts.
 # exec is NOT journaled (not reversible by undo).
+# exec output is QUIET by default (like `brew upgrade --quiet`): its stdout/stderr
+# is captured and stays hidden on success, surfaced only if the script fails (or
+# always under `--verbose`). So an idempotent script's chatter never masquerades
+# as temper's own reporting. To keep an idempotent `exec` from re-running (and
+# re-printing) every `update`, give it a `check` — a passing check skips the run
+# entirely.
 
 # profile: install a macOS .mobileconfig (opens System Settings; manual).
 # Idempotent across runs: only re-opened when the source .mobileconfig changed

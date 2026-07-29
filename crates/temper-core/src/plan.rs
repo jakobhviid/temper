@@ -461,6 +461,7 @@ fn apply_step(
     step: &Step,
     vars: &BTreeMap<String, String>,
     journal: &mut Journal,
+    verbose: bool,
 ) -> Result<bool> {
     if let (Some(copy), Some(to)) = (&step.copy, &step.to) {
         return primitives::copy_apply(
@@ -480,7 +481,7 @@ fn apply_step(
     if let Some(exec) = &step.exec {
         let opts = exec_opts(home, machine, step);
         let check = step.check.as_ref().map(|c| home.join(c));
-        return primitives::exec_apply(&home.join(exec), check.as_deref(), &opts);
+        return primitives::exec_apply(&home.join(exec), check.as_deref(), &opts, verbose);
     }
     if let Some(profile) = &step.profile {
         return primitives::profile_apply(&home.join(profile));
@@ -614,7 +615,7 @@ pub fn run_install(
             if step_would_change(home, machine, step, vars)? {
                 changed += 1;
             }
-        } else if apply_step(home, machine, step, vars, &mut journal)? {
+        } else if apply_step(home, machine, step, vars, &mut journal, verbose)? {
             changed += 1;
         }
     }
@@ -828,7 +829,7 @@ pub fn run_update(
             Gate::Apply => {}
         }
         total += 1;
-        if apply_step(home, machine, step, vars, &mut journal)? {
+        if apply_step(home, machine, step, vars, &mut journal, verbose)? {
             changed += 1;
         }
     }

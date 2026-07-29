@@ -531,28 +531,56 @@ pub fn exec_missing_secret(opts: &ExecOpts) -> Option<String> {
         .cloned()
 }
 
-/// Run a drift-hook: true if it exits 0 (in sync).
+/// Run a drift-hook: true if it exits 0 (in sync). A check is a yes/no probe, so
+/// its output is captured (never leaked to the terminal) — only the exit code
+/// matters, and probe chatter would masquerade as temper's own reporting.
 pub fn exec_check(check: &Path, opts: &ExecOpts) -> Result<bool> {
-    let status = exec_command(check, opts)?
-        .status()
+    let out = exec_command(check, opts)?
+        .output()
         .with_context(|| format!("running check {}", check.display()))?;
-    Ok(status.success())
+    Ok(out.status.success())
 }
 
 /// Apply an `exec` step. If a `check` is given and already passes, the script is
 /// skipped (in sync). Otherwise the script runs; a non-zero exit is an error.
 /// Returns whether the script ran. Not journaled — exec is imperative.
-pub fn exec_apply(script: &Path, check: Option<&Path>, opts: &ExecOpts) -> Result<bool> {
+///
+/// Quiet by default (like `brew upgrade --quiet`): an up-to-date machine stays
+/// near-silent, so an idempotent script's chatter never masquerades as temper's
+/// own verdict. `verbose` streams the script live; otherwise its output is
+/// captured and surfaced only on failure, so an error is still debuggable.
+pub fn exec_apply(
+    script: &Path,
+    check: Option<&Path>,
+    opts: &ExecOpts,
+    verbose: bool,
+) -> Result<bool> {
     if let Some(check) = check {
         if exec_check(check, opts)? {
             return Ok(false);
         }
     }
-    let status = exec_command(script, opts)?
-        .status()
-        .with_context(|| format!("running {}", script.display()))?;
-    if !status.success() {
-        bail!("exec {} failed ({})", script.display(), status);
+    let mut cmd = exec_command(script, opts)?;
+    if verbose {
+        // The caller asked to see it — stream live (no buffering delay).
+        let status = cmd
+            .status()
+            .with_context(|| format!("running {}", script.display()))?;
+        if !status.success() {
+            bail!("exec {} failed ({})", script.display(), status);
+        }
+    } else {
+        // Capture and stay silent on success; on failure, replay the captured
+        // output (attributed to the failing script) before bailing.
+        let out = cmd
+            .output()
+            .with_context(|| format!("running {}", script.display()))?;
+        if !out.status.success() {
+            use std::io::Write;
+            let _ = std::io::stdout().write_all(&out.stdout);
+            let _ = std::io::stderr().write_all(&out.stderr);
+            bail!("exec {} failed ({})", script.display(), out.status);
+        }
     }
     Ok(true)
 }

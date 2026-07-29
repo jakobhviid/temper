@@ -47,8 +47,13 @@ live tweaks). *(RIS: `bootstrap.sh` → `just install` → `just gnome-restore`.
 `install`/`update` are **quiet by default** — the underlying tools are hushed
 (`brew bundle`/`brew upgrade` `--quiet`, mas's Spotlight-reindex noise muted, and
 already-installed App Store apps skipped) so you see installs, changes, warnings,
-and errors, not a wall of "already OK". Pass **`-v`/`--verbose`** (a global flag,
-like `--json`) to see every tool's full output when debugging.
+and errors, not a wall of "already OK". Your own **`exec` scripts are hushed the
+same way**: their output is captured and stays hidden on success (so an
+idempotent script's "nothing to do" chatter can't masquerade as temper's own
+verdict), and is surfaced only if the script fails. Pass **`-v`/`--verbose`** (a
+global flag, like `--json`) to stream every tool's — and every `exec`'s — full
+output when debugging. (An idempotent `exec` that re-runs each `update` should
+carry a `check` hook so it's skipped, not just hushed, when already in sync.)
 
 **How temper finds the folder (why it "just knows where steel is").** temper
 resolves its home in this order, first hit wins: `$TEMPER_DIR` → walk up from the

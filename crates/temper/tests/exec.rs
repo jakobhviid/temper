@@ -5,6 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use tempfile::TempDir;
 
 fn os() -> &'static str {
@@ -112,4 +113,60 @@ fn exec_check_secret_and_failure() {
         .assert()
         .failure()
         .stderr(predicates::str::contains("MY_SECRET"));
+}
+
+/// exec output is quiet by default (its chatter must not masquerade as temper's
+/// own reporting), streamed under `--verbose`, and replayed on failure so the
+/// error stays debuggable.
+#[test]
+fn exec_output_is_quiet_unless_verbose_or_failing() {
+    let home = TempDir::new().unwrap();
+    let fake_home = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    let h = home.path();
+
+    fs::create_dir_all(h.join("apps")).unwrap();
+    fs::create_dir_all(h.join("scripts")).unwrap();
+    // No check hook → runs on every install; echoes a distinctive marker.
+    fs::write(h.join("scripts/chatty.sh"), "echo NOTHING_TO_UPDATE\n").unwrap();
+    fs::write(
+        h.join("temper.toml"),
+        format!(
+            "[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n",
+            os()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        h.join("apps/demo.toml"),
+        "[[step]]\nexec = \"scripts/chatty.sh\"\n",
+    )
+    .unwrap();
+
+    // quiet by default → the script's chatter is captured, not shown.
+    temper(h, fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("NOTHING_TO_UPDATE").not());
+
+    // --verbose → the script streams live.
+    temper(h, fake_home.path(), state.path())
+        .args(["install", "--verbose"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("NOTHING_TO_UPDATE"));
+
+    // A failing exec replays its captured output even when quiet, so the error
+    // is debuggable, and the run fails loudly.
+    fs::write(
+        h.join("scripts/chatty.sh"),
+        "echo BOOM_DETAIL\nexit 3\n",
+    )
+    .unwrap();
+    temper(h, fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .failure()
+        .stdout(predicates::str::contains("BOOM_DETAIL"));
 }

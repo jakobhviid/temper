@@ -42,8 +42,10 @@ struct Cli {
     #[arg(long, global = true)]
     llm: bool,
 
-    /// Show the underlying tools' full output (brew/mas/…). Runs are quiet by
-    /// default — only real installs, changes, warnings, and errors are shown.
+    /// Show the underlying tools' full output (brew/mas/…) and stream `exec`
+    /// scripts live. Runs are quiet by default — only real installs, changes,
+    /// warnings, and errors are shown; an idempotent `exec`'s chatter is
+    /// captured and surfaced only if the script fails.
     #[arg(short = 'v', long, global = true)]
     verbose: bool,
 
