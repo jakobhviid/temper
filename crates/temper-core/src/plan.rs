@@ -352,7 +352,16 @@ pub fn run_drift(
                 status: "missing".into(),
             });
         }
-        for (m, name) in packages::extras(&effective, &installed, ignore) {
+        let extras = packages::extras(&effective, &installed, ignore);
+        // mas extras come back as bare numeric ids (that's what a mas probe
+        // yields). Resolve them to app names so a drifted App Store item is
+        // legible — only shelling out to `mas list` when there's one to name.
+        let mas_names = if extras.iter().any(|(m, _)| *m == packages::Manager::Mas) {
+            providers::mas_names()
+        } else {
+            std::collections::BTreeMap::new()
+        };
+        for (m, name) in extras {
             // brew-family extras are computed dependency-aware below (a naive
             // set-diff wrongly flags every installed transitive dependency).
             if matches!(
@@ -361,10 +370,17 @@ pub fn run_drift(
             ) {
                 continue;
             }
+            let target = match m {
+                packages::Manager::Mas => match mas_names.get(&name) {
+                    Some(app) => format!("mas \"{app}\" (id {name})"),
+                    None => format!("mas {name}"), // not in `mas list` — id is all we have
+                },
+                _ => format!("{} {}", m.as_str(), name),
+            };
             findings.push(Finding {
                 app: "packages".into(),
                 kind: "package-extra",
-                target: format!("{} {}", m.as_str(), name),
+                target,
                 ok: false,
                 status: "extra".into(),
             });
