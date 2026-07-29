@@ -434,19 +434,47 @@ pub fn effective_git(fleet: &Option<GitConfig>, machine: &Option<GitConfig>) -> 
         .unwrap_or_default()
 }
 
-/// Cheap pre-load peek at fleet `[git].auto_pull` — read before the full,
-/// validated load so a pull can happen *before* any spec file is read. Any
-/// parse trouble → false (pull is opt-in; never let a peek error block a run).
+/// Cheap pre-load peek at `auto_pull` — read before the full, validated load so
+/// a pull can happen *before* any spec file is read. A `[machine.git]` for this
+/// machine wholly overrides the fleet `[git]` (same precedence as
+/// `effective_git`): the pull decision must match what the resolved config would
+/// say, or a machine that sets `auto_pull` only under `[machine.git]` would
+/// never pull. Any parse trouble → false (pull is opt-in; never let a peek error
+/// block a run).
 pub fn peek_auto_pull(home: &Path) -> bool {
     std::fs::read_to_string(home.join("temper.toml"))
         .ok()
         .and_then(|s| s.parse::<toml::Value>().ok())
-        .and_then(|v| {
-            v.get("git")
-                .and_then(|g| g.get("auto_pull"))
-                .and_then(|b| b.as_bool())
-        })
+        .map(|v| auto_pull_from(&v, crate::machine::hostname().as_deref()))
         .unwrap_or(false)
+}
+
+/// Pure `auto_pull` decision over the raw doc + this host's name. A
+/// `[machine.git]` for the resolved machine replaces the fleet `[git]` outright
+/// (so we do NOT fall back to fleet when it's present) — matching `effective_git`.
+fn auto_pull_from(v: &toml::Value, host: Option<&str>) -> bool {
+    let git = peek_current_machine(v, host)
+        .and_then(|m| m.get("git"))
+        .or_else(|| v.get("git"));
+    git.and_then(|g| g.get("auto_pull"))
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false)
+}
+
+/// The `[[machine]]` table for this host, resolved the way `machine::resolve`
+/// would with no explicit name: by hostname, else the sole machine. Peek-only —
+/// works on the raw `toml::Value` before the validated load.
+fn peek_current_machine<'a>(v: &'a toml::Value, host: Option<&str>) -> Option<&'a toml::Value> {
+    let machines = v.get("machine")?.as_array()?;
+    if let Some(h) = host {
+        if let Some(m) = machines
+            .iter()
+            .find(|m| m.get("name").and_then(|n| n.as_str()) == Some(h))
+        {
+            return Some(m);
+        }
+    }
+    (machines.len() == 1).then(|| &machines[0])
 }
 
 /// Whether an os/role-gated item should be **skipped** for this machine. A
@@ -523,6 +551,41 @@ mod tests {
         global.insert("A".to_string(), "1".to_string());
         let m = machine_with_vars(&[]);
         assert_eq!(effective_vars(&global, &m), global);
+    }
+
+    fn doc(s: &str) -> toml::Value {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn auto_pull_reads_fleet_git() {
+        let v = doc("[git]\nauto_pull = true\n[[machine]]\nname=\"kira\"\nos=\"linux\"\n");
+        assert!(auto_pull_from(&v, Some("kira")));
+        assert!(!auto_pull_from(&doc("[git]\nauto_pull = false\n"), Some("kira")));
+        assert!(!auto_pull_from(&doc("[[machine]]\nname=\"kira\"\nos=\"linux\"\n"), Some("kira")));
+    }
+
+    #[test]
+    fn machine_git_wholly_overrides_fleet_for_auto_pull() {
+        // Machine sets it on though the fleet is off (or silent) → pulls.
+        let on = "[git]\nauto_pull = false\n[[machine]]\nname=\"kira\"\nos=\"linux\"\n\
+                  [machine.git]\nauto_pull = true\n";
+        assert!(auto_pull_from(&doc(on), Some("kira")));
+        // …and a matching machine whose `[machine.git]` omits auto_pull is OFF
+        // even when the fleet turns it on — the override replaces wholesale.
+        // (Two machines so the sole-machine fallback doesn't mask the match.)
+        let off = "[git]\nauto_pull = true\n\
+                   [[machine]]\nname=\"kira\"\nos=\"linux\"\n[machine.git]\nremind = false\n\
+                   [[machine]]\nname=\"other\"\nos=\"linux\"\n";
+        assert!(!auto_pull_from(&doc(off), Some("kira")));
+        // A *different* host with no override of its own falls to the fleet.
+        assert!(auto_pull_from(&doc(off), Some("other")));
+    }
+
+    #[test]
+    fn auto_pull_sole_machine_fallback_when_host_unknown() {
+        let v = doc("[[machine]]\nname=\"only\"\nos=\"linux\"\n[machine.git]\nauto_pull = true\n");
+        assert!(auto_pull_from(&v, None)); // no hostname → sole machine wins
     }
 
     fn machine(os: &str, role: Option<&str>) -> Machine {
