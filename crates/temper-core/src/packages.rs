@@ -49,9 +49,12 @@ impl Pkg {
     /// tap prefix, vscode is case-insensitive, mas is its numeric id.
     pub fn match_name(&self) -> String {
         match self.manager {
-            Manager::Brew | Manager::Cask => {
-                self.name.rsplit('/').next().unwrap_or(&self.name).to_string()
-            }
+            Manager::Brew | Manager::Cask => self
+                .name
+                .rsplit('/')
+                .next()
+                .unwrap_or(&self.name)
+                .to_string(),
             Manager::Vscode => self.name.to_lowercase(),
             Manager::Mas => self.id.clone().unwrap_or_default(),
             Manager::Flatpak | Manager::Tap => self.name.clone(),
@@ -244,10 +247,16 @@ mod tests {
         let mas = parse("mas \"Xcode\", id: 497799835").unwrap();
         assert_eq!(mas.manager, Manager::Mas);
         assert_eq!(mas.match_name(), "497799835");
-        assert_eq!(parse("vscode \"Rust-Lang.Rust\"").unwrap().match_name(), "rust-lang.rust");
+        assert_eq!(
+            parse("vscode \"Rust-Lang.Rust\"").unwrap().match_name(),
+            "rust-lang.rust"
+        );
         assert!(parse("bogus \"x\"").is_err());
         // `id:` inside the quoted name must not be mistaken for the id.
-        assert_eq!(parse("mas \"Bid: 5 stars\", id: 999").unwrap().match_name(), "999");
+        assert_eq!(
+            parse("mas \"Bid: 5 stars\", id: 999").unwrap().match_name(),
+            "999"
+        );
     }
 
     #[test]
@@ -258,11 +267,17 @@ mod tests {
             parse("flatpak \"org.x.App\"").unwrap(),
         ];
         let mut installed = Installed::default();
-        installed.set(Manager::Brew, [String::from("wget"), String::from("extra-tool")]);
+        installed.set(
+            Manager::Brew,
+            [String::from("wget"), String::from("extra-tool")],
+        );
         installed.set(Manager::Flatpak, [String::from("org.x.App")]);
         // flatpak not… actually declared+installed match → not missing
 
-        let miss: Vec<_> = missing(&declared, &installed).iter().map(|p| p.name.clone()).collect();
+        let miss: Vec<_> = missing(&declared, &installed)
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
         assert_eq!(miss, vec!["jq"]); // declared brew jq not installed
 
         let ignore = Ignore::default();
@@ -270,7 +285,10 @@ mod tests {
         assert_eq!(ex, vec![(Manager::Brew, "extra-tool".to_string())]);
 
         // ignoring it removes it from extras
-        let ignore = Ignore { brew: vec!["extra-tool".into()], ..Default::default() };
+        let ignore = Ignore {
+            brew: vec!["extra-tool".into()],
+            ..Default::default()
+        };
         assert!(extras(&declared, &installed, &ignore).is_empty());
     }
 

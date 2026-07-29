@@ -81,7 +81,10 @@ pub fn plan(home: &Path, machine: &Machine, ignore: &manifest::Ignore) -> Result
     for (m, name) in packages::extras(&effective, &installed, ignore) {
         match m {
             Manager::Mas => {
-                let app = mas_names.get(&name).cloned().unwrap_or_else(|| name.clone());
+                let app = mas_names
+                    .get(&name)
+                    .cloned()
+                    .unwrap_or_else(|| name.clone());
                 adds.push(AddItem {
                     manager: m,
                     // `mas "App Name", id: 12345` — the Brewfile grammar mas needs.
@@ -134,7 +137,8 @@ pub fn plan(home: &Path, machine: &Machine, ignore: &manifest::Ignore) -> Result
             continue;
         }
         if let Ok(pkg) = packages::parse(l) {
-            if installed.probed(pkg.manager) && !installed.contains(pkg.manager, &pkg.match_name()) {
+            if installed.probed(pkg.manager) && !installed.contains(pkg.manager, &pkg.match_name())
+            {
                 drops.push(line.to_string());
             }
         }
@@ -307,7 +311,10 @@ mod tests {
     #[test]
     fn token_grammar() {
         assert_eq!(token_for(Manager::Brew, "jq"), "brew \"jq\"");
-        assert_eq!(token_for(Manager::Flatpak, "org.x.App"), "flatpak \"org.x.App\"");
+        assert_eq!(
+            token_for(Manager::Flatpak, "org.x.App"),
+            "flatpak \"org.x.App\""
+        );
     }
 
     #[test]
@@ -346,7 +353,10 @@ mod tests {
     #[test]
     fn sort_keeps_a_comment_with_its_entry() {
         let input = "brew \"zebra\"\n# my jq\nbrew \"jq\"\n";
-        assert_eq!(sort_brewfile(input), "# my jq\nbrew \"jq\"\nbrew \"zebra\"\n");
+        assert_eq!(
+            sort_brewfile(input),
+            "# my jq\nbrew \"jq\"\nbrew \"zebra\"\n"
+        );
     }
 
     #[test]
@@ -393,7 +403,12 @@ mod tests {
 
     #[test]
     fn ignore_edit_creates_missing_section() {
-        let out = append_ignore("[[machine]]\nname = \"m\"\nos = \"linux\"\n", "flatpak", "org.x").unwrap();
+        let out = append_ignore(
+            "[[machine]]\nname = \"m\"\nos = \"linux\"\n",
+            "flatpak",
+            "org.x",
+        )
+        .unwrap();
         let doc: toml_edit::DocumentMut = out.parse().unwrap();
         assert_eq!(doc["ignore"]["flatpak"][0].as_str(), Some("org.x"));
     }

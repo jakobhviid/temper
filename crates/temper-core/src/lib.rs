@@ -16,19 +16,19 @@
 //! The ReinstallScripts migration this crate grew out of is complete: every
 //! module below is implemented and exercised end-to-end (see ../../README.md).
 
-pub mod discovery; // find the temper-home folder across any delivery backend
-pub mod manifest; // parse temper.toml + apps/*.toml (machines, apps, ignore)
-pub mod packages; // package model: parse, effective set, drift (pure)
-pub mod machine; // machine identity (hostname) + role derivation
-pub mod primitives; // copy / block / setkey / profile / exec
-mod jsonc; // comment-preserving JSONC edits for the setkey(json) backend
-pub mod providers; // brew / flatpak / mas / gext / rpm-ostree: converge + probe
-pub mod drift; // assertions, exec-hooks, status-only reporting
-pub mod plan; // build a plan, then apply it (dry-run first)
-pub mod reconcile; // interactive spec←machine capture (adds/drops to the Brewfile)
 pub mod dconf; // whole-desktop dconf snapshots: backup (filtered) + restore
-pub mod probe; // presence probes for when/needs step gating
+pub mod discovery; // find the temper-home folder across any delivery backend
+pub mod drift; // assertions, exec-hooks, status-only reporting
 pub mod eq_import; // folder-authoring: pull calibrated speaker profiles into the folder
 pub mod git; // optional convenience: persist temper's own writes to a git home
 pub mod journal; // content-addressed, after-hash-guarded undo (amdl model)
+mod jsonc; // comment-preserving JSONC edits for the setkey(json) backend
+pub mod machine; // machine identity (hostname) + role derivation
+pub mod manifest; // parse temper.toml + apps/*.toml (machines, apps, ignore)
+pub mod packages; // package model: parse, effective set, drift (pure)
+pub mod plan; // build a plan, then apply it (dry-run first)
+pub mod primitives; // copy / block / setkey / profile / exec
+pub mod probe; // presence probes for when/needs step gating
+pub mod providers; // brew / flatpak / mas / gext / rpm-ostree: converge + probe
+pub mod reconcile; // interactive spec←machine capture (adds/drops to the Brewfile)
 pub mod ui; // stdout/stderr discipline + progress bars

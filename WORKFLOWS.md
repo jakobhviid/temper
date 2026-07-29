@@ -202,7 +202,9 @@ This is folder-authoring: it writes *into* the folder, then you review + commit.
 temper-home *folder*, not a machine. If that folder is a git repo, temper helps
 you persist those changes so it doesn't silently drift:
 
-- After a repo-writing verb it **hints**:
+- Whenever the folder is left dirty, **any** command hints — the spec-writing
+  verbs above *and* the read/apply ones (`drift`, `install`, `update`, `prune`,
+  `adopt`, `restore`), so a stray hand edit surfaces whatever you run next:
   `ⓘ steel has uncommitted spec changes — temper save …`.
 - **`temper save`** = `pull --ff-only → add -A → commit → push`, with an
   auto-generated message (`reconcile chronos-redux: +2 -1 ~0`) unless you pass

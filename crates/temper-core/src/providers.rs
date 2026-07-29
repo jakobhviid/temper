@@ -340,7 +340,8 @@ pub fn prune_apply(effective: &[Pkg], extras: &[(Manager, String)]) -> Result<()
             })
             .map(|p| format!("{}\n", p.raw))
             .collect();
-        let tmp = std::env::temp_dir().join(format!("temper-Brewfile-prune-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("temper-Brewfile-prune-{}", std::process::id()));
         fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
         let status = Command::new("brew")
             .args(["bundle", "cleanup", "--force", "--file"])
@@ -504,7 +505,10 @@ mod mas_tests {
             Some(("1234".into(), "The Unarchiver".into()))
         );
         // no trailing version
-        assert_eq!(parse_mas_line("55  Bear"), Some(("55".into(), "Bear".into())));
+        assert_eq!(
+            parse_mas_line("55  Bear"),
+            Some(("55".into(), "Bear".into()))
+        );
         assert_eq!(parse_mas_line(""), None);
         assert_eq!(parse_mas_line("justoneword"), None);
     }
@@ -541,12 +545,20 @@ mod gating_tests {
 
         // Desktop composes it → extensions + rpm are aggregated.
         let desktop = machine("d", "linux", "desktop", &["gnome"]);
-        assert_eq!(effective_extensions(home.path(), &desktop).unwrap(), vec!["a@x", "b@y"]);
-        assert_eq!(effective_rpm(home.path(), &desktop).unwrap(), vec!["proton-vpn"]);
+        assert_eq!(
+            effective_extensions(home.path(), &desktop).unwrap(),
+            vec!["a@x", "b@y"]
+        );
+        assert_eq!(
+            effective_rpm(home.path(), &desktop).unwrap(),
+            vec!["proton-vpn"]
+        );
 
         // Server composes the SAME bundle → gated off (empty), the ROADMAP footgun.
         let server = machine("s", "linux", "server", &["gnome"]);
-        assert!(effective_extensions(home.path(), &server).unwrap().is_empty());
+        assert!(effective_extensions(home.path(), &server)
+            .unwrap()
+            .is_empty());
         assert!(effective_rpm(home.path(), &server).unwrap().is_empty());
     }
 }
@@ -595,7 +607,14 @@ pub fn brew_extras(effective: &[Pkg], ignore: &manifest::Ignore) -> Result<Vec<(
     let tmp = std::env::temp_dir().join(format!("temper-Brewfile-drift-{}", std::process::id()));
     fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
     let out = Command::new("brew")
-        .args(["bundle", "cleanup", "--formula", "--cask", "--tap", "--file"])
+        .args([
+            "bundle",
+            "cleanup",
+            "--formula",
+            "--cask",
+            "--tap",
+            "--file",
+        ])
         .arg(&tmp)
         .output()
         .context("running brew bundle cleanup")?;
@@ -646,9 +665,9 @@ fn parse_cleanup_extras(text: &str, ignored: &HashSet<&str>) -> Vec<(Manager, St
         }
         let first = line.chars().next();
         let is_name = matches!(first, Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
-            && line
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '/' | '-'));
+            && line.chars().all(|c| {
+                c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '/' | '-')
+            });
         if is_name {
             if sec == Sec::Untap {
                 // A tap `user/repo`, kept whole and matched against `[ignore].tap`.

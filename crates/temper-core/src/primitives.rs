@@ -356,9 +356,11 @@ fn toml_to_json(v: &toml::Value) -> Json {
         toml::Value::Boolean(b) => Json::from(*b),
         toml::Value::Datetime(d) => Json::from(d.to_string()),
         toml::Value::Array(a) => Json::Array(a.iter().map(toml_to_json).collect()),
-        toml::Value::Table(t) => {
-            Json::Object(t.iter().map(|(k, v)| (k.clone(), toml_to_json(v))).collect())
-        }
+        toml::Value::Table(t) => Json::Object(
+            t.iter()
+                .map(|(k, v)| (k.clone(), toml_to_json(v)))
+                .collect(),
+        ),
     }
 }
 
@@ -400,7 +402,9 @@ fn ensure_append_supported(sk: &SetKey) -> Result<()> {
         // dconf unions into a flat GVariant string array (`as`), so the value's
         // members must be strings — validate the shape up front.
         "dconf" => dconf_append_members(&sk.value).map(|_| ()),
-        other => bail!("setkey `append = true` is only supported on json/toml/dconf, not `{other}`"),
+        other => {
+            bail!("setkey `append = true` is only supported on json/toml/dconf, not `{other}`")
+        }
     }
 }
 
@@ -410,9 +414,11 @@ fn render_toml_value(v: &toml::Value, vars: &BTreeMap<String, String>) -> Result
     use toml::Value;
     Ok(match v {
         Value::String(s) => Value::String(render(s, vars)?),
-        Value::Array(a) => {
-            Value::Array(a.iter().map(|x| render_toml_value(x, vars)).collect::<Result<_>>()?)
-        }
+        Value::Array(a) => Value::Array(
+            a.iter()
+                .map(|x| render_toml_value(x, vars))
+                .collect::<Result<_>>()?,
+        ),
         Value::Table(t) => {
             let mut out = toml::Table::new();
             for (k, x) in t {
@@ -508,8 +514,8 @@ fn exec_command(script: &Path, opts: &ExecOpts) -> Result<std::process::Command>
     cmd.env("TEMPER_MACHINE", opts.machine);
     cmd.env("TEMPER_OS", opts.os);
     for s in opts.secrets {
-        let v = std::env::var(s)
-            .map_err(|_| anyhow!("exec: required secret env `{s}` is not set"))?;
+        let v =
+            std::env::var(s).map_err(|_| anyhow!("exec: required secret env `{s}` is not set"))?;
         cmd.env(s, v);
     }
     Ok(cmd)
@@ -571,7 +577,11 @@ pub fn exec_state(check: Option<&Path>, opts: &ExecOpts) -> Result<(bool, String
     }
 }
 
-pub fn setkey_apply(sk: &SetKey, vars: &BTreeMap<String, String>, journal: &mut Journal) -> Result<bool> {
+pub fn setkey_apply(
+    sk: &SetKey,
+    vars: &BTreeMap<String, String>,
+    journal: &mut Journal,
+) -> Result<bool> {
     ensure_append_supported(sk)?;
     let resolved = resolve_setkey(sk, vars)?;
     let sk = resolved.as_ref();
@@ -685,9 +695,11 @@ fn toml_edit_set(
     }
     let last = parts[parts.len() - 1];
     if append {
-        let item = tbl.entry(last).or_insert(toml_edit::Item::Value(
-            toml_edit::Value::Array(toml_edit::Array::new()),
-        ));
+        let item = tbl
+            .entry(last)
+            .or_insert(toml_edit::Item::Value(toml_edit::Value::Array(
+                toml_edit::Array::new(),
+            )));
         let arr = item
             .as_array_mut()
             .ok_or_else(|| anyhow!("setkey append: `{last}` is not an array"))?;
@@ -710,7 +722,13 @@ mod toml_edit_tests {
     fn preserves_comments_on_set() {
         let src = "# top comment\n[tool]\nname = \"a\" # inline note\nother = 1\n";
         let mut doc: toml_edit::DocumentMut = src.parse().unwrap();
-        toml_edit_set(&mut doc, &["tool", "name"], &toml::Value::String("b".into()), false).unwrap();
+        toml_edit_set(
+            &mut doc,
+            &["tool", "name"],
+            &toml::Value::String("b".into()),
+            false,
+        )
+        .unwrap();
         let out = doc.to_string();
         assert!(out.contains("# top comment"), "lost top comment: {out}");
         assert!(out.contains("other = 1"), "lost sibling: {out}");
@@ -722,7 +740,11 @@ mod toml_edit_tests {
         let mut doc: toml_edit::DocumentMut = "list = [\"a\"]\n".parse().unwrap();
         toml_edit_set(&mut doc, &["list"], &toml::Value::String("b".into()), true).unwrap();
         toml_edit_set(&mut doc, &["list"], &toml::Value::String("b".into()), true).unwrap();
-        assert_eq!(doc.to_string().matches("\"b\"").count(), 1, "append must dedup");
+        assert_eq!(
+            doc.to_string().matches("\"b\"").count(),
+            1,
+            "append must dedup"
+        );
     }
 
     #[test]
@@ -860,11 +882,13 @@ fn ini_state(sk: &SetKey) -> Result<FileState> {
     }
     let content = fs::read_to_string(&file)?;
     let (section, key) = ini_split(&sk.key);
-    Ok(if ini_current(&content, section, key) == Some(scalar_str(&sk.value).as_str()) {
-        FileState::InSync
-    } else {
-        FileState::Drifted
-    })
+    Ok(
+        if ini_current(&content, section, key) == Some(scalar_str(&sk.value).as_str()) {
+            FileState::InSync
+        } else {
+            FileState::Drifted
+        },
+    )
 }
 
 fn ini_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
@@ -900,7 +924,9 @@ fn defaults_target(sk: &SetKey) -> Result<String> {
         .ok_or_else(|| anyhow!("setkey(defaults) needs `file` (a domain or plist path)"))?;
     // A path target (~/… or /…) is expanded; a bare domain (com.foo.bar) is left as-is.
     Ok(if raw.starts_with("~/") || raw.starts_with('/') {
-        crate::manifest::expand_tilde(&raw).to_string_lossy().into_owned()
+        crate::manifest::expand_tilde(&raw)
+            .to_string_lossy()
+            .into_owned()
     } else {
         raw
     })
@@ -928,7 +954,10 @@ fn defaults_state(sk: &SetKey) -> Result<FileState> {
 }
 
 fn defaults_apply(sk: &SetKey) -> Result<bool> {
-    if matches!(defaults_state(sk)?, FileState::InSync | FileState::Unavailable) {
+    if matches!(
+        defaults_state(sk)?,
+        FileState::InSync | FileState::Unavailable
+    ) {
         return Ok(false);
     }
     let target = defaults_target(sk)?;
@@ -1126,7 +1155,10 @@ pub struct SysfileOpts<'a> {
 /// The `sudo install` argv for an escalated system-file write. `-D` creates
 /// parent dirs; mode/owner/group are applied atomically by `install` itself.
 fn sysfile_install_argv(src: &Path, dest: &Path, opts: &SysfileOpts) -> Vec<String> {
-    let mut a: Vec<String> = ["sudo", "install", "-D"].iter().map(|s| s.to_string()).collect();
+    let mut a: Vec<String> = ["sudo", "install", "-D"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     if let Some(m) = opts.mode {
         a.push("-m".into());
         a.push(m.to_string());
@@ -1231,14 +1263,22 @@ mod sysfile_tests {
 
     #[test]
     fn install_argv_shape() {
-        let opts = SysfileOpts { mode: Some("0755"), owner: Some("root"), group: Some("root") };
+        let opts = SysfileOpts {
+            mode: Some("0755"),
+            owner: Some("root"),
+            group: Some("root"),
+        };
         let argv = sysfile_install_argv(&PathBuf::from("/s"), &PathBuf::from("/etc/x"), &opts);
         assert_eq!(
             argv,
             vec!["sudo", "install", "-D", "-m", "0755", "-o", "root", "-g", "root", "/s", "/etc/x"]
         );
         // minimal (no mode/owner/group)
-        let bare = SysfileOpts { mode: None, owner: None, group: None };
+        let bare = SysfileOpts {
+            mode: None,
+            owner: None,
+            group: None,
+        };
         let argv = sysfile_install_argv(&PathBuf::from("/s"), &PathBuf::from("/d"), &bare);
         assert_eq!(argv, vec!["sudo", "install", "-D", "/s", "/d"]);
     }
@@ -1250,12 +1290,25 @@ mod sysfile_tests {
         let src = dir.path().join("src");
         let dest = dir.path().join("dest");
         fs::write(&src, b"policy\n").unwrap();
-        let opts = SysfileOpts { mode: None, owner: None, group: None };
-        assert_eq!(sysfile_state(&src, &dest, &opts).unwrap(), FileState::Missing);
+        let opts = SysfileOpts {
+            mode: None,
+            owner: None,
+            group: None,
+        };
+        assert_eq!(
+            sysfile_state(&src, &dest, &opts).unwrap(),
+            FileState::Missing
+        );
         fs::write(&dest, b"policy\n").unwrap();
-        assert_eq!(sysfile_state(&src, &dest, &opts).unwrap(), FileState::InSync);
+        assert_eq!(
+            sysfile_state(&src, &dest, &opts).unwrap(),
+            FileState::InSync
+        );
         fs::write(&dest, b"tampered\n").unwrap();
-        assert_eq!(sysfile_state(&src, &dest, &opts).unwrap(), FileState::Drifted);
+        assert_eq!(
+            sysfile_state(&src, &dest, &opts).unwrap(),
+            FileState::Drifted
+        );
     }
 }
 
@@ -1272,7 +1325,9 @@ mod sysfile_tests {
 /// The applied-stamp path for `file`: under the state root, keyed by a hash of
 /// the source path so two distinct profiles never collide.
 fn profile_stamp(state_root: &Path, file: &Path) -> PathBuf {
-    let key = blake3::hash(file.to_string_lossy().as_bytes()).to_hex().to_string();
+    let key = blake3::hash(file.to_string_lossy().as_bytes())
+        .to_hex()
+        .to_string();
     state_root.join("profiles").join(key)
 }
 
@@ -1396,16 +1451,28 @@ mod setkey_tests {
         let cur = "['a', 'b']";
         let parse = |s: &str| parse_gvariant_as(s).unwrap();
         // a new member is appended, the user's others kept
-        assert_eq!(parse(&union_gvariant_as(Some(cur), &["c".into()]).unwrap()), vec!["a", "b", "c"]);
+        assert_eq!(
+            parse(&union_gvariant_as(Some(cur), &["c".into()]).unwrap()),
+            vec!["a", "b", "c"]
+        );
         // an already-present member → unchanged (idempotent)
-        assert_eq!(parse(&union_gvariant_as(Some(cur), &["a".into()]).unwrap()), vec!["a", "b"]);
+        assert_eq!(
+            parse(&union_gvariant_as(Some(cur), &["a".into()]).unwrap()),
+            vec!["a", "b"]
+        );
         // absent key → the array is created
-        assert_eq!(parse(&union_gvariant_as(None, &["x".into()]).unwrap()), vec!["x"]);
+        assert_eq!(
+            parse(&union_gvariant_as(None, &["x".into()]).unwrap()),
+            vec!["x"]
+        );
     }
 
     #[test]
     fn dconf_append_members_shape_is_enforced() {
-        assert_eq!(dconf_append_members(&toml::Value::String("x".into())).unwrap(), vec!["x"]);
+        assert_eq!(
+            dconf_append_members(&toml::Value::String("x".into())).unwrap(),
+            vec!["x"]
+        );
         let arr = toml::Value::Array(vec![
             toml::Value::String("a".into()),
             toml::Value::String("b".into()),
@@ -1422,7 +1489,8 @@ mod setkey_tests {
         vars.insert("APP".to_string(), "opencode".to_string());
 
         // scalar string
-        let s = render_toml_value(&toml::Value::String("x/{{ var \"APP\" }}".into()), &vars).unwrap();
+        let s =
+            render_toml_value(&toml::Value::String("x/{{ var \"APP\" }}".into()), &vars).unwrap();
         assert_eq!(s.as_str(), Some("x/opencode"));
 
         // array: each string element renders; a literal stays literal
@@ -1437,13 +1505,18 @@ mod setkey_tests {
 
         // table leaves render; non-string leaves pass through untouched
         let mut t = toml::Table::new();
-        t.insert("cmd".into(), toml::Value::String("{{ var \"APP\" }}".into()));
+        t.insert(
+            "cmd".into(),
+            toml::Value::String("{{ var \"APP\" }}".into()),
+        );
         t.insert("n".into(), toml::Value::Integer(42));
         let rt = render_toml_value(&toml::Value::Table(t), &vars).unwrap();
         assert_eq!(rt["cmd"].as_str(), Some("opencode"));
         assert_eq!(rt["n"].as_integer(), Some(42));
 
         // an unknown var errors (like copy) rather than rendering empty
-        assert!(render_toml_value(&toml::Value::String("{{ var \"NOPE\" }}".into()), &vars).is_err());
+        assert!(
+            render_toml_value(&toml::Value::String("{{ var \"NOPE\" }}".into()), &vars).is_err()
+        );
     }
 }

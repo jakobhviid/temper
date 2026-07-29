@@ -10,7 +10,11 @@ use assert_cmd::Command;
 use tempfile::TempDir;
 
 fn os() -> &'static str {
-    if cfg!(target_os = "macos") { "mac" } else { "linux" }
+    if cfg!(target_os = "macos") {
+        "mac"
+    } else {
+        "linux"
+    }
 }
 
 fn temper(home: &Path) -> Command {
@@ -20,7 +24,14 @@ fn temper(home: &Path) -> Command {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let ok = Proc::new("git").arg("-C").arg(dir).args(args).output().unwrap().status.success();
+    let ok = Proc::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap()
+        .status
+        .success();
     assert!(ok, "git {args:?} failed");
 }
 
@@ -42,7 +53,10 @@ fn git_home() -> TempDir {
 #[test]
 fn git_enable_writes_config_then_disable_clears() {
     let h = git_home();
-    temper(h.path()).args(["git", "enable", "--push"]).assert().success();
+    temper(h.path())
+        .args(["git", "enable", "--push"])
+        .assert()
+        .success();
     let toml = fs::read_to_string(h.path().join("temper.toml")).unwrap();
     assert!(toml.contains("[git]"));
     assert!(toml.contains("auto_commit = true"));

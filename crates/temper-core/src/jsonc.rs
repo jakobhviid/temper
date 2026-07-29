@@ -63,7 +63,10 @@ pub fn set(text: &str, path: &[&str], value: &Json, append: bool) -> Result<Stri
                     obj = child;
                     depth += 1;
                 }
-                None => bail!("setkey json: intermediate key `{}` is not an object", path[depth]),
+                None => bail!(
+                    "setkey json: intermediate key `{}` is not an object",
+                    path[depth]
+                ),
             },
             None => break, // the rest of the path must be created under `obj`
         }
@@ -154,16 +157,31 @@ fn line_indent(src: &str, pos: usize) -> String {
 /// Append `item` after the last element of a sequence, matching its formatting
 /// (multiline indentation, and any existing trailing comma). `last_start`/
 /// `last_end` bracket the last item; `close` is the closing `]`/`}`.
-fn append_item(src: &str, last_start: usize, last_end: usize, close: usize, multiline: bool, item: &str) -> String {
+fn append_item(
+    src: &str,
+    last_start: usize,
+    last_end: usize,
+    close: usize,
+    multiline: bool,
+    item: &str,
+) -> String {
     let indent = line_indent(src, last_start);
     let tail = &src[last_end..close];
     if let Some(rel) = tail.find(',') {
         // A trailing comma already separates us from the previous item.
         let at = last_end + rel + 1;
-        let sep = if multiline { format!("\n{indent}") } else { " ".to_string() };
+        let sep = if multiline {
+            format!("\n{indent}")
+        } else {
+            " ".to_string()
+        };
         splice(src, at, &format!("{sep}{item}"))
     } else {
-        let sep = if multiline { format!(",\n{indent}") } else { ", ".to_string() };
+        let sep = if multiline {
+            format!(",\n{indent}")
+        } else {
+            ", ".to_string()
+        };
         splice(src, last_end, &format!("{sep}{item}"))
     }
 }
@@ -174,7 +192,14 @@ fn insert_property(src: &str, obj: &Object<'_>, item: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("could not locate the end of the JSON object"))?;
     let multiline = src[obj.range.start..close].contains('\n');
     Ok(match obj.properties.last() {
-        Some(last) => append_item(src, last.range.start, last.range.end, close, multiline, item),
+        Some(last) => append_item(
+            src,
+            last.range.start,
+            last.range.end,
+            close,
+            multiline,
+            item,
+        ),
         None if multiline => splice(src, obj.range.start + 1, &format!("\n  {item}\n")),
         None => splice(src, obj.range.start + 1, &format!(" {item} ")),
     })
@@ -187,7 +212,14 @@ fn insert_into_array(src: &str, arr: &Array<'_>, value: &Json) -> Result<String>
     let multiline = src[arr.range.start..close].contains('\n');
     let item = serialize(value);
     Ok(match arr.elements.last() {
-        Some(last) => append_item(src, last.range().start, last.range().end, close, multiline, &item),
+        Some(last) => append_item(
+            src,
+            last.range().start,
+            last.range().end,
+            close,
+            multiline,
+            &item,
+        ),
         None => splice(src, arr.range.start + 1, &item),
     })
 }
@@ -224,7 +256,13 @@ mod tests {
     #[test]
     fn create_deep_path_when_parents_absent() {
         let src = "{\n  // header\n  \"share\": \"disabled\"\n}\n";
-        let out = set(src, &["mcp", "searxng", "type"], &Json::from("local"), false).unwrap();
+        let out = set(
+            src,
+            &["mcp", "searxng", "type"],
+            &Json::from("local"),
+            false,
+        )
+        .unwrap();
         assert!(out.contains("// header"), "comment lost:\n{out}");
         assert_eq!(at(&out, &["mcp", "searxng", "type"]), Json::from("local"));
         assert_eq!(at(&out, &["share"]), Json::from("disabled"));

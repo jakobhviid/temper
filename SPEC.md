@@ -30,7 +30,7 @@ dest = "assets/speaker-eq"  # default; each <x>.calibrated.conf lands as <x>.con
 
 [git]                       # optional; convenience for a GIT-backed home (no-op
                             #   on a non-git folder). Toggle via `temper git enable/disable`.
-remind      = true          # hint after a repo-writing verb leaves the folder dirty
+remind      = true          # hint whenever any command finds the folder dirty (unless auto_commit)
 auto_commit = false         # commit right after reconcile/backup/eq-import (auto message)
 auto_push   = false         # …and push
 auto_pull   = true          # `git pull --ff-only` before a run; warn (never abort) if it can't

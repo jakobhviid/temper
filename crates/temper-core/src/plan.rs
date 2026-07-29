@@ -205,11 +205,7 @@ pub struct Remediation {
 /// hostname, and you run these on the machine they apply to — so the name is
 /// noise (and passing it would trip the not-this-host confirm).
 pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
-    let drifted = |kinds: &[&str]| {
-        items
-            .iter()
-            .any(|f| !f.ok && kinds.contains(&f.kind))
-    };
+    let drifted = |kinds: &[&str]| items.iter().any(|f| !f.ok && kinds.contains(&f.kind));
     let missing_pkg = drifted(&["package", "extension", "rpm"]);
     let extra_pkg = drifted(&["package-extra"]);
     let config_drift = items
@@ -225,20 +221,44 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
     };
     // Machine → spec (converge the machine toward the declared state).
     if missing_pkg {
-        push(&mut out, "install declared packages that are missing", "temper install --packages-only");
+        push(
+            &mut out,
+            "install declared packages that are missing",
+            "temper install --packages-only",
+        );
     }
     if extra_pkg {
-        push(&mut out, "uninstall packages not in the spec (asks first)", "temper prune");
+        push(
+            &mut out,
+            "uninstall packages not in the spec (asks first)",
+            "temper prune",
+        );
     }
     // Spec ← machine (absorb the machine's state into the spec).
     if missing_pkg || extra_pkg {
-        push(&mut out, "interactively add extras / drop missing entries", "temper reconcile");
-        push(&mut out, "overwrite the machine Brewfile with live state", "temper backup");
+        push(
+            &mut out,
+            "interactively add extras / drop missing entries",
+            "temper reconcile",
+        );
+        push(
+            &mut out,
+            "overwrite the machine Brewfile with live state",
+            "temper backup",
+        );
     }
     // Config drift: re-apply, or revert the last run.
     if config_drift {
-        push(&mut out, "re-apply configuration to fix the drift above", "temper install");
-        push(&mut out, "revert the most recent run instead", "temper undo");
+        push(
+            &mut out,
+            "re-apply configuration to fix the drift above",
+            "temper install",
+        );
+        push(
+            &mut out,
+            "revert the most recent run instead",
+            "temper undo",
+        );
     }
     out
 }
@@ -394,7 +414,11 @@ fn apply_step(
         return primitives::profile_apply(&home.join(profile));
     }
     if let (Some(sysfile), Some(to)) = (&step.sysfile, &step.to) {
-        return primitives::sysfile_apply(&home.join(sysfile), &expand_tilde(to), &sysfile_opts(step));
+        return primitives::sysfile_apply(
+            &home.join(sysfile),
+            &expand_tilde(to),
+            &sysfile_opts(step),
+        );
     }
     bail!("step names no known primitive (copy / block / setkey / exec / profile / sysfile)")
 }
@@ -609,7 +633,10 @@ pub fn run_backup(home: &Path, machine: &Machine) -> Result<BackupReport> {
     journal.record_write(&dest, before.as_deref(), &after)?;
     let dconf = crate::dconf::backup(home, machine, &mut journal)?;
     journal.commit()?;
-    Ok(BackupReport { brewfile: dest, dconf })
+    Ok(BackupReport {
+        brewfile: dest,
+        dconf,
+    })
 }
 
 /// Restore: load each declared dconf snapshot back into live dconf. The CLI
@@ -676,7 +703,7 @@ pub fn run_update(
             continue;
         }
         match lifecycle(step) {
-            "always" => {}                                    // re-apply (fixes drift)
+            "always" => {} // re-apply (fixes drift)
             "ensure" => {
                 if !ensure_should_apply(home, machine, step, vars)? {
                     continue; // present already → don't overwrite
@@ -713,30 +740,46 @@ mod remediation_tests {
     use super::*;
 
     fn f(kind: &'static str, ok: bool) -> Finding {
-        Finding { app: "a".into(), kind, target: "t".into(), ok, status: "s".into() }
+        Finding {
+            app: "a".into(),
+            kind,
+            target: "t".into(),
+            ok,
+            status: "s".into(),
+        }
     }
 
     #[test]
     fn missing_and_extra_offer_both_directions() {
         let items = vec![f("package", false), f("package-extra", false)];
-        let cmds: Vec<String> = remediations(&items).iter().map(|r| r.command.clone()).collect();
+        let cmds: Vec<String> = remediations(&items)
+            .iter()
+            .map(|r| r.command.clone())
+            .collect();
         // Bare commands — no machine name (default resolves this host).
         assert!(cmds.contains(&"temper install --packages-only".to_string())); // add missing
         assert!(cmds.contains(&"temper prune".to_string())); // remove extras
         assert!(cmds.contains(&"temper reconcile".to_string())); // absorb (surgical)
         assert!(cmds.contains(&"temper backup".to_string())); // absorb (wholesale)
-        // never a machine name baked into a suggested command
-        assert!(!cmds.iter().any(|c| c.split_whitespace().count() > 3 && !c.contains("--")));
+                                                              // never a machine name baked into a suggested command
+        assert!(!cmds
+            .iter()
+            .any(|c| c.split_whitespace().count() > 3 && !c.contains("--")));
     }
 
     #[test]
     fn config_drift_offers_reapply_and_undo() {
         let items = vec![f("copy", false)];
-        let cmds: Vec<String> = remediations(&items).iter().map(|r| r.command.clone()).collect();
+        let cmds: Vec<String> = remediations(&items)
+            .iter()
+            .map(|r| r.command.clone())
+            .collect();
         assert!(cmds.contains(&"temper install".to_string()));
         assert!(cmds.contains(&"temper undo".to_string()));
         // no package direction when only config drifted
-        assert!(!cmds.iter().any(|c| c.contains("prune") || c.contains("reconcile")));
+        assert!(!cmds
+            .iter()
+            .any(|c| c.contains("prune") || c.contains("reconcile")));
     }
 
     #[test]

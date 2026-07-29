@@ -153,7 +153,10 @@ clock-format='24h'
         let out = strip_dump(dump, &["last-selected".into(), "monitors/".into()]);
         assert!(out.contains("enabled-extensions"), "kept real key: {out}");
         assert!(out.contains("clock-format"));
-        assert!(!out.contains("last-selected"), "stripped bookkeeping: {out}");
+        assert!(
+            !out.contains("last-selected"),
+            "stripped bookkeeping: {out}"
+        );
         assert!(!out.contains("panel-1"), "stripped monitor key: {out}");
         // The now-empty monitors section header is gone too.
         assert!(!out.contains("monitors"), "empty section dropped: {out}");

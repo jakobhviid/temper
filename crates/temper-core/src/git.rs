@@ -97,16 +97,19 @@ pub fn status_line(home: &Path) -> String {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_else(|| "?".into());
-    let ahead_behind = git(home, &["rev-list", "--left-right", "--count", "@{u}...HEAD"])
-        .filter(|o| o.status.success())
-        .map(|o| {
-            let s = String::from_utf8_lossy(&o.stdout);
-            let mut it = s.split_whitespace();
-            let behind: u32 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
-            let ahead: u32 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
-            format!("↓{behind} ↑{ahead}")
-        })
-        .unwrap_or_else(|| "no upstream".into());
+    let ahead_behind = git(
+        home,
+        &["rev-list", "--left-right", "--count", "@{u}...HEAD"],
+    )
+    .filter(|o| o.status.success())
+    .map(|o| {
+        let s = String::from_utf8_lossy(&o.stdout);
+        let mut it = s.split_whitespace();
+        let behind: u32 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+        let ahead: u32 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+        format!("↓{behind} ↑{ahead}")
+    })
+    .unwrap_or_else(|| "no upstream".into());
     let dirty = if is_dirty(home) { "dirty" } else { "clean" };
     format!("{branch} ({ahead_behind}) — {dirty}")
 }
@@ -160,11 +163,18 @@ pub fn save(home: &Path, message: &str, push: bool) -> Result<SaveReport> {
             }
             let _ = git(home, &["push"]);
         }
-        return Ok(SaveReport { committed: false, pushed: push, message: message.to_string(), warning });
+        return Ok(SaveReport {
+            committed: false,
+            pushed: push,
+            message: message.to_string(),
+            warning,
+        });
     }
 
     // Stage + commit.
-    let added = git(home, &["add", "-A"]).map(|o| o.status.success()).unwrap_or(false);
+    let added = git(home, &["add", "-A"])
+        .map(|o| o.status.success())
+        .unwrap_or(false);
     if !added {
         bail!("git add failed in {}", home.display());
     }
@@ -189,7 +199,12 @@ pub fn save(home: &Path, message: &str, push: bool) -> Result<SaveReport> {
             None => warning = Some("committed, but could not run git push".into()),
         }
     }
-    Ok(SaveReport { committed, pushed, message: message.to_string(), warning })
+    Ok(SaveReport {
+        committed,
+        pushed,
+        message: message.to_string(),
+        warning,
+    })
 }
 
 /// Build a commit message from the changed paths (for a `save` with no verb

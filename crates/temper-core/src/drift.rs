@@ -203,7 +203,10 @@ mod tests {
     fn shell_matches_by_basename_across_equivalent_paths() {
         // usrmerge / brew put the same shell at different paths — all match.
         assert_eq!(shell_basename("/usr/bin/zsh"), shell_basename("/bin/zsh"));
-        assert_eq!(shell_basename("/opt/homebrew/bin/zsh"), shell_basename("/bin/zsh"));
+        assert_eq!(
+            shell_basename("/opt/homebrew/bin/zsh"),
+            shell_basename("/bin/zsh")
+        );
         // a bare name is its own basename
         assert_eq!(shell_basename("zsh"), "zsh");
         // different shells must NOT match — guards against a raw-path regression

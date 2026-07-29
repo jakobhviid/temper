@@ -33,12 +33,19 @@ fn exec_check_secret_and_failure() {
     fs::create_dir_all(h.join("apps")).unwrap();
     fs::create_dir_all(h.join("scripts")).unwrap();
     // setup writes the secret into a marker file under $HOME
-    fs::write(h.join("scripts/setup.sh"), "echo \"$MY_SECRET\" > \"$HOME/.exec-ran\"\n").unwrap();
+    fs::write(
+        h.join("scripts/setup.sh"),
+        "echo \"$MY_SECRET\" > \"$HOME/.exec-ran\"\n",
+    )
+    .unwrap();
     // check passes once the marker file exists
     fs::write(h.join("scripts/check.sh"), "test -f \"$HOME/.exec-ran\"\n").unwrap();
     fs::write(
         h.join("temper.toml"),
-        format!("[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
+        format!(
+            "[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n",
+            os()
+        ),
     )
     .unwrap();
     fs::write(
@@ -73,7 +80,11 @@ fn exec_check_secret_and_failure() {
         .arg("install")
         .assert()
         .success();
-    assert_eq!(fs::read_to_string(&marker).unwrap(), "hunter2\n", "exec re-ran despite passing check");
+    assert_eq!(
+        fs::read_to_string(&marker).unwrap(),
+        "hunter2\n",
+        "exec re-ran despite passing check"
+    );
 
     // drift with the secret UNSET → read-only must NOT abort; the exec check
     // degrades to status-only ("unavailable — secret …"), 0 out of sync.

@@ -9,7 +9,7 @@
 
 use anyhow::{anyhow, bail, Result};
 
-use crate::manifest::{TemperToml, Machine};
+use crate::manifest::{Machine, TemperToml};
 
 /// This build's OS in manifest terms.
 pub fn current_os() -> &'static str {

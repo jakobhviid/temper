@@ -36,7 +36,10 @@ fn deploy_drift_redeploy_undo() {
     fs::write(h.join("assets/starship.toml"), "content-X\n").unwrap();
     fs::write(
         h.join("temper.toml"),
-        format!("[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
+        format!(
+            "[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n",
+            os()
+        ),
     )
     .unwrap();
     fs::write(
@@ -101,7 +104,10 @@ fn undo_preserves_a_post_install_hand_edit() {
     fs::write(h.join("assets/starship.toml"), "content-X\n").unwrap();
     fs::write(
         h.join("temper.toml"),
-        format!("[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
+        format!(
+            "[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n",
+            os()
+        ),
     )
     .unwrap();
     fs::write(
@@ -113,7 +119,10 @@ fn undo_preserves_a_post_install_hand_edit() {
     let target = fake_home.path().join(".config/starship.toml");
 
     // install → creates the file (a Create journal entry, hash = content-X).
-    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
+    temper(h, fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .success();
     assert_eq!(fs::read_to_string(&target).unwrap(), "content-X\n");
 
     // The user hand-edits the deployed file AFTER the install.
@@ -121,7 +130,10 @@ fn undo_preserves_a_post_install_hand_edit() {
 
     // undo → the file no longer hashes to what temper wrote, so the entry is
     // skipped and the edit survives (never deleted/clobbered).
-    temper(h, fake_home.path(), state.path()).arg("undo").assert().success();
+    temper(h, fake_home.path(), state.path())
+        .arg("undo")
+        .assert()
+        .success();
     assert_eq!(
         fs::read_to_string(&target).unwrap(),
         "my-hand-edit\n",

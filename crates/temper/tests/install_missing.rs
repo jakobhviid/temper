@@ -36,7 +36,10 @@ fn packages_only_skips_config_steps() {
     fs::write(h.join("assets/x.conf"), "managed\n").unwrap();
     fs::write(
         h.join("temper.toml"),
-        format!("[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
+        format!(
+            "[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"demo\"]\n",
+            os()
+        ),
     )
     .unwrap();
     fs::write(
@@ -53,12 +56,18 @@ fn packages_only_skips_config_steps() {
         .assert()
         .success()
         .stdout(predicates::str::contains("config skipped"));
-    assert!(!target.exists(), "packages-only should not have applied the copy step");
+    assert!(
+        !target.exists(),
+        "packages-only should not have applied the copy step"
+    );
 
     // full install: the config step runs → the file is created.
     temper(h, fake_home.path(), state.path())
         .args(["install", "t", "--yes"])
         .assert()
         .success();
-    assert!(target.exists(), "full install should have applied the copy step");
+    assert!(
+        target.exists(),
+        "full install should have applied the copy step"
+    );
 }

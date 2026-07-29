@@ -33,10 +33,17 @@ fn block_setkey_assert() {
 
     fs::create_dir_all(h.join("apps")).unwrap();
     fs::create_dir_all(h.join("assets")).unwrap();
-    fs::write(h.join("assets/ssh-include"), "Include config.d/shared.conf\n").unwrap();
+    fs::write(
+        h.join("assets/ssh-include"),
+        "Include config.d/shared.conf\n",
+    )
+    .unwrap();
     fs::write(
         h.join("temper.toml"),
-        format!("[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
+        format!(
+            "[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n",
+            os()
+        ),
     )
     .unwrap();
     fs::write(
@@ -71,11 +78,20 @@ contains_line = { file = "~/.ssh/config", line = "Include config.d/shared.conf" 
     fs::write(&settings, "{ \"other\": true }\n").unwrap();
 
     // install → block appended, setkey merged
-    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
+    temper(h, fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .success();
 
     let ssh_body = fs::read_to_string(&ssh).unwrap();
-    assert!(ssh_body.contains("Host example"), "user content lost: {ssh_body:?}");
-    assert!(ssh_body.contains("# >>> temper:ssh >>>"), "marker missing: {ssh_body:?}");
+    assert!(
+        ssh_body.contains("Host example"),
+        "user content lost: {ssh_body:?}"
+    );
+    assert!(
+        ssh_body.contains("# >>> temper:ssh >>>"),
+        "marker missing: {ssh_body:?}"
+    );
     assert!(ssh_body.contains("Include config.d/shared.conf"));
 
     let v: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
@@ -91,12 +107,22 @@ contains_line = { file = "~/.ssh/config", line = "Include config.d/shared.conf" 
 
     // block region update: change the source; re-install replaces the region,
     // preserves the user's Host block, and drops the old line.
-    fs::write(h.join("assets/ssh-include"), "Include config.d/other.conf\n").unwrap();
-    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
+    fs::write(
+        h.join("assets/ssh-include"),
+        "Include config.d/other.conf\n",
+    )
+    .unwrap();
+    temper(h, fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .success();
     let ssh_body = fs::read_to_string(&ssh).unwrap();
     assert!(ssh_body.contains("Host example"));
     assert!(ssh_body.contains("Include config.d/other.conf"));
-    assert!(!ssh_body.contains("shared.conf"), "old region not replaced: {ssh_body:?}");
+    assert!(
+        !ssh_body.contains("shared.conf"),
+        "old region not replaced: {ssh_body:?}"
+    );
 
     // assert violation: the forbidden file appears → drift flags it
     fs::write(fake_home.path().join(".zshrc.local"), "oops\n").unwrap();

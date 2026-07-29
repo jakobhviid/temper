@@ -32,7 +32,10 @@ fn setkey_toml_and_ini() {
     fs::create_dir_all(h.join("apps")).unwrap();
     fs::write(
         h.join("temper.toml"),
-        format!("[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
+        format!(
+            "[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"demo\"]\n",
+            os()
+        ),
     )
     .unwrap();
     fs::write(
@@ -52,7 +55,10 @@ setkey = { backend = "ini", file = "~/.local/share/applications/x.desktop", key 
     fs::create_dir_all(desktop.parent().unwrap()).unwrap();
     fs::write(&desktop, "[Desktop Entry]\nName=X\nIcon=old-icon\n").unwrap();
 
-    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
+    temper(h, fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .success();
 
     // toml: nested key set
     let cfg = fs::read_to_string(fake_home.path().join(".config/amdl/config.toml")).unwrap();
@@ -96,11 +102,20 @@ fn setkey_template_renders_a_var_and_stays_in_sync() {
     )
     .unwrap();
 
-    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
+    temper(h, fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .success();
 
     let cfg = fs::read_to_string(fake_home.path().join(".config/x.json")).unwrap();
-    assert!(cfg.contains("/opt/x/bin/app"), "template not rendered: {cfg}");
-    assert!(!cfg.contains("{{"), "unrendered template leaked into the file: {cfg}");
+    assert!(
+        cfg.contains("/opt/x/bin/app"),
+        "template not rendered: {cfg}"
+    );
+    assert!(
+        !cfg.contains("{{"),
+        "unrendered template leaked into the file: {cfg}"
+    );
 
     // Second run: the value re-renders to the same path and matches the file, so
     // a dynamic value doesn't report permanent false drift.
@@ -119,7 +134,11 @@ fn setkey_defaults_against_temp_plist() {
     let state = TempDir::new().unwrap();
     let h = home.path();
     fs::create_dir_all(h.join("apps")).unwrap();
-    fs::write(h.join("temper.toml"), "[[machine]]\nname = \"t\"\nos = \"mac\"\napps = [\"demo\"]\n").unwrap();
+    fs::write(
+        h.join("temper.toml"),
+        "[[machine]]\nname = \"t\"\nos = \"mac\"\napps = [\"demo\"]\n",
+    )
+    .unwrap();
     // target is a temp plist path (~/prefs -> $HOME/prefs.plist), never a real domain
     fs::write(
         h.join("apps/demo.toml"),
@@ -127,11 +146,18 @@ fn setkey_defaults_against_temp_plist() {
     )
     .unwrap();
 
-    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
+    temper(h, fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .success();
 
     // verify via the real `defaults` tool against the temp plist
     let out = std::process::Command::new("defaults")
-        .args(["read", &format!("{}/prefs", fake_home.path().display()), "TemperTestKey"])
+        .args([
+            "read",
+            &format!("{}/prefs", fake_home.path().display()),
+            "TemperTestKey",
+        ])
         .output()
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hello");

@@ -93,7 +93,10 @@ fn saved_pointer() -> Option<PathBuf> {
 /// file written.
 fn save_pointer_in(base: &Path, dir: &Path) -> Result<PathBuf> {
     if !has_manifest(dir) {
-        bail!("{} has no temper.toml — not saving it as the temper home", dir.display());
+        bail!(
+            "{} has no temper.toml — not saving it as the temper home",
+            dir.display()
+        );
     }
     let p = pointer_in(base);
     if let Some(parent) = p.parent() {

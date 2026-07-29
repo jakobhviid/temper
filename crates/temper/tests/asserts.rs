@@ -32,7 +32,10 @@ fn assert_not_member_shell_json_semantic() {
     fs::create_dir_all(h.join("apps")).unwrap();
     fs::write(
         h.join("temper.toml"),
-        format!("[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
+        format!(
+            "[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"demo\"]\n",
+            os()
+        ),
     )
     .unwrap();
     // reference json files (in the temper-home)
@@ -67,7 +70,10 @@ shell = "/bin/nonexistent-shell"                          # violated
     // the order-independent json match) are collapsed, so their status text is
     // intentionally absent here — see the --json check below for those.
     temper(h, fake_home.path(), state.path())
-        .env("USER", std::env::var("USER").unwrap_or_else(|_| "runner".into()))
+        .env(
+            "USER",
+            std::env::var("USER").unwrap_or_else(|_| "runner".into()),
+        )
         .arg("drift")
         .assert()
         .success()
@@ -77,7 +83,10 @@ shell = "/bin/nonexistent-shell"                          # violated
     // --json carries every finding (flat, uncollapsed) — assert the in-sync
     // not_member check is present and ok there.
     temper(h, fake_home.path(), state.path())
-        .env("USER", std::env::var("USER").unwrap_or_else(|_| "runner".into()))
+        .env(
+            "USER",
+            std::env::var("USER").unwrap_or_else(|_| "runner".into()),
+        )
         .args(["--json", "drift"])
         .assert()
         .success()

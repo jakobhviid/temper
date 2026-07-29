@@ -78,7 +78,12 @@ fn default_true() -> bool {
 
 impl Default for GitConfig {
     fn default() -> Self {
-        Self { remind: true, auto_commit: false, auto_push: false, auto_pull: false }
+        Self {
+            remind: true,
+            auto_commit: false,
+            auto_push: false,
+            auto_pull: false,
+        }
     }
 }
 
@@ -402,8 +407,7 @@ pub struct JsonSemantic {
 pub fn load_fleet(home: &Path) -> Result<TemperToml> {
     let p = home.join("temper.toml");
     let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
-    let ft: TemperToml =
-        toml::from_str(&s).with_context(|| format!("parsing {}", p.display()))?;
+    let ft: TemperToml = toml::from_str(&s).with_context(|| format!("parsing {}", p.display()))?;
     // Reject duplicate machine names — otherwise the second silently shadows.
     let mut seen = std::collections::HashSet::new();
     for m in &ft.machine {
@@ -416,15 +420,18 @@ pub fn load_fleet(home: &Path) -> Result<TemperToml> {
 
 pub fn load_bundle(home: &Path, name: &str) -> Result<Bundle> {
     let p = home.join("apps").join(format!("{name}.toml"));
-    let s = std::fs::read_to_string(&p)
-        .with_context(|| format!("reading bundle {}", p.display()))?;
+    let s =
+        std::fs::read_to_string(&p).with_context(|| format!("reading bundle {}", p.display()))?;
     toml::from_str(&s).with_context(|| format!("parsing {}", p.display()))
 }
 
 /// A machine's effective git settings: a `[machine.git]` wholly overrides the
 /// fleet `[git]`; otherwise the fleet setting; otherwise defaults (remind on).
 pub fn effective_git(fleet: &Option<GitConfig>, machine: &Option<GitConfig>) -> GitConfig {
-    machine.clone().or_else(|| fleet.clone()).unwrap_or_default()
+    machine
+        .clone()
+        .or_else(|| fleet.clone())
+        .unwrap_or_default()
 }
 
 /// Cheap pre-load peek at fleet `[git].auto_pull` — read before the full,
@@ -490,7 +497,10 @@ mod tests {
             apps: vec![],
             packages: vec![],
             brewfile: None,
-            vars: vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            vars: vars
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
             dconf: vec![],
             git: None,
         }
@@ -540,7 +550,7 @@ mod tests {
         // A desktop-Linux bundle is skipped on a server and on a Mac...
         assert!(gated(&os_l, &role_d, &server)); // role mismatch
         assert!(gated(&os_l, &role_d, &mac)); // os mismatch
-        // ...and applies on a Linux desktop.
+                                              // ...and applies on a Linux desktop.
         assert!(!gated(&os_l, &role_d, &desktop));
         // Unset gates never skip.
         assert!(!gated(&None, &None, &server));

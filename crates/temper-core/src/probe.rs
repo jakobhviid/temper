@@ -49,7 +49,8 @@ pub fn passes(home: &Path, p: &Probe) -> bool {
             .unwrap_or(false);
     }
     if let Some(uuid) = &p.gext {
-        return which("gnome-extensions").is_some() && succeeds("gnome-extensions", &["info", uuid]);
+        return which("gnome-extensions").is_some()
+            && succeeds("gnome-extensions", &["info", uuid]);
     }
     if let Some(x) = &p.rpm {
         return which("rpm").is_some() && succeeds("rpm", &["-q", x]);

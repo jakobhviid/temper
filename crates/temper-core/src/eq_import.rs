@@ -84,7 +84,10 @@ mod tests {
 
     #[test]
     fn calibrated_rename() {
-        assert_eq!(dest_name("living-room.calibrated.conf").as_deref(), Some("living-room.conf"));
+        assert_eq!(
+            dest_name("living-room.calibrated.conf").as_deref(),
+            Some("living-room.conf")
+        );
         assert_eq!(dest_name("readme.md"), None);
         assert_eq!(dest_name("plain.conf"), None);
     }

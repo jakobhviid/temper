@@ -42,8 +42,15 @@ pub fn state_root() -> PathBuf {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "op")]
 enum Entry {
-    Create { path: String, hash: String },
-    Restore { path: String, before: String, after: String },
+    Create {
+        path: String,
+        hash: String,
+    },
+    Restore {
+        path: String,
+        before: String,
+        after: String,
+    },
     /// A `setkey(dconf)` write. `before` = prior `dconf read` (None if the key
     /// was unset), `after` = the value temper wrote (the revert guard). Undo
     /// re-writes `before`, or resets the key when it was previously unset.
@@ -55,7 +62,10 @@ enum Entry {
 }
 
 fn dconf_read(key: &str) -> Option<String> {
-    let out = std::process::Command::new("dconf").args(["read", key]).output().ok()?;
+    let out = std::process::Command::new("dconf")
+        .args(["read", key])
+        .output()
+        .ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !s.is_empty()).then_some(s)
 }
@@ -94,7 +104,9 @@ fn hash(bytes: &[u8]) -> String {
 
 impl Journal {
     pub fn begin() -> Journal {
-        let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+        let d = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
         Journal {
             root: state_root(),
             id: format!("{}-{:09}", d.as_secs(), d.subsec_nanos()),
@@ -177,7 +189,8 @@ fn newest_run(runs: &Path) -> Result<PathBuf> {
             best = Some((mtime, p));
         }
     }
-    best.map(|(_, p)| p).ok_or_else(|| anyhow!("nothing to undo"))
+    best.map(|(_, p)| p)
+        .ok_or_else(|| anyhow!("nothing to undo"))
 }
 
 /// Revertible run ids, newest first.
@@ -253,7 +266,10 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
         let p = PathBuf::from(path);
         let current = if p.is_file() { fs::read(&p).ok() } else { None };
         // Only revert if the file still hashes to what temper left it as.
-        if !current.as_deref().is_some_and(|b| hash(b).as_str() == expect_after.as_str()) {
+        if !current
+            .as_deref()
+            .is_some_and(|b| hash(b).as_str() == expect_after.as_str())
+        {
             skipped += 1;
             continue;
         }

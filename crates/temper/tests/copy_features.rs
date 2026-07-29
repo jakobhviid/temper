@@ -32,7 +32,11 @@ fn template_seed_mode_and_dry_run() {
 
     fs::create_dir_all(h.join("apps")).unwrap();
     fs::create_dir_all(h.join("assets")).unwrap();
-    fs::write(h.join("assets/rendered.conf"), "prefix={{ var \"BREW_PREFIX\" }} sh={{ which \"sh\" }}\n").unwrap();
+    fs::write(
+        h.join("assets/rendered.conf"),
+        "prefix={{ var \"BREW_PREFIX\" }} sh={{ which \"sh\" }}\n",
+    )
+    .unwrap();
     fs::write(h.join("assets/seeded.conf"), "seed-default\n").unwrap();
     fs::write(h.join("assets/secret.conf"), "token\n").unwrap();
     fs::write(
@@ -57,12 +61,21 @@ fn template_seed_mode_and_dry_run() {
     let secret = fake_home.path().join(".secret.conf");
 
     // install → all three land
-    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
+    temper(h, fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .success();
 
     // template: var substituted, {{ which }} resolved to a real path, no braces left
     let r = fs::read_to_string(&rendered).unwrap();
-    assert!(r.contains("prefix=/opt/homebrew"), "var not substituted: {r:?}");
-    assert!(r.contains("sh=/") && !r.contains("{{"), "which not resolved: {r:?}");
+    assert!(
+        r.contains("prefix=/opt/homebrew"),
+        "var not substituted: {r:?}"
+    );
+    assert!(
+        r.contains("sh=/") && !r.contains("{{"),
+        "which not resolved: {r:?}"
+    );
 
     // seed: created with the default
     assert_eq!(fs::read_to_string(&seeded).unwrap(), "seed-default\n");
@@ -77,7 +90,10 @@ fn template_seed_mode_and_dry_run() {
 
     // seed is hands-off: user edits it, a re-install must NOT clobber it
     fs::write(&seeded, "user-edited\n").unwrap();
-    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
+    temper(h, fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .success();
     assert_eq!(fs::read_to_string(&seeded).unwrap(), "user-edited\n");
 
     // dry-run: tamper the templated file, preview reports a change but writes nothing
@@ -87,9 +103,18 @@ fn template_seed_mode_and_dry_run() {
         .assert()
         .success()
         .stdout(predicates::str::contains("would apply"));
-    assert_eq!(fs::read_to_string(&rendered).unwrap(), "tampered\n", "dry-run must not write");
+    assert_eq!(
+        fs::read_to_string(&rendered).unwrap(),
+        "tampered\n",
+        "dry-run must not write"
+    );
 
     // real install → fixes it
-    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
-    assert!(fs::read_to_string(&rendered).unwrap().contains("prefix=/opt/homebrew"));
+    temper(h, fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .success();
+    assert!(fs::read_to_string(&rendered)
+        .unwrap()
+        .contains("prefix=/opt/homebrew"));
 }

@@ -37,7 +37,10 @@ fn update_reapplies_always_not_install_only() {
     fs::write(h.join("assets/once.conf"), "seed-default\n").unwrap();
     fs::write(
         h.join("temper.toml"),
-        format!("[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
+        format!(
+            "[[machine]]\nname = \"test\"\nos = \"{}\"\napps = [\"demo\"]\n",
+            os()
+        ),
     )
     .unwrap();
     // one always-managed copy, one seed (install-only)
@@ -52,7 +55,10 @@ fn update_reapplies_always_not_install_only() {
     let once = fake_home.path().join(".config/once.conf");
 
     // install → both land
-    temper(h, fake_home.path(), state.path()).arg("install").assert().success();
+    temper(h, fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .success();
     assert_eq!(fs::read_to_string(&always).unwrap(), "managed\n");
     assert_eq!(fs::read_to_string(&once).unwrap(), "seed-default\n");
 
@@ -66,6 +72,14 @@ fn update_reapplies_always_not_install_only() {
         .assert()
         .success()
         .stdout(predicates::str::contains("re-applied 1 of 1"));
-    assert_eq!(fs::read_to_string(&always).unwrap(), "managed\n", "always step not re-applied");
-    assert_eq!(fs::read_to_string(&once).unwrap(), "user-edited\n", "install-only step wrongly re-applied");
+    assert_eq!(
+        fs::read_to_string(&always).unwrap(),
+        "managed\n",
+        "always step not re-applied"
+    );
+    assert_eq!(
+        fs::read_to_string(&once).unwrap(),
+        "user-edited\n",
+        "install-only step wrongly re-applied"
+    );
 }

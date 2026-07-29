@@ -244,9 +244,12 @@ fn run(cli: Cli) -> Result<()> {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "temper", &mut io::stdout());
         }
-        Some(Cmd::Install { machine, dry_run, packages_only, yes }) => {
-            cmd_install(machine, dry_run, packages_only, yes, json, verbose)?
-        }
+        Some(Cmd::Install {
+            machine,
+            dry_run,
+            packages_only,
+            yes,
+        }) => cmd_install(machine, dry_run, packages_only, yes, json, verbose)?,
         Some(Cmd::Update) => cmd_update(json, verbose)?,
         Some(Cmd::Drift { machine }) => cmd_drift(machine, json)?,
         Some(Cmd::Undo { run, list, dry_run }) => cmd_undo(run, list, dry_run, json)?,
@@ -270,7 +273,10 @@ fn find_home_pulling() -> Result<std::path::PathBuf> {
     let home = discovery::find_home()?;
     if manifest::peek_auto_pull(&home) {
         if let git::Pull::Warn(w) = git::pull_ff(&home) {
-            eprintln!("{} couldn't pull — working on a possibly-stale spec: {w}", ui::yellow("⚠"));
+            eprintln!(
+                "{} couldn't pull — working on a possibly-stale spec: {w}",
+                ui::yellow("⚠")
+            );
         }
     }
     Ok(home)
@@ -297,17 +303,30 @@ fn after_repo_change(home: &std::path::Path, gc: &manifest::GitConfig, auto_msg:
             }
             Err(e) => eprintln!("{} auto-commit failed: {e:#}", ui::yellow("⚠")),
         }
-    } else if gc.remind && git::is_dirty(home) {
-        let name = home
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| home.display().to_string());
-        eprintln!(
-            "{} {name} has uncommitted spec changes — {} to commit + push (or edit + commit yourself).",
-            ui::cyan("ⓘ"),
-            ui::bold("temper save")
-        );
+    } else {
+        remind_if_dirty(home, gc);
     }
+}
+
+/// Nudge to run `temper save` when the git-backed home has uncommitted spec
+/// changes. A no-op on a non-git home, when reminders are off, or when
+/// auto-commit handles committing instead. Every verb that reads or applies a
+/// spec calls this (not just the spec-writing verbs), so any hand-edit sitting
+/// uncommitted is surfaced whichever command you happen to run. Goes to stderr
+/// so `--json` stdout stays clean.
+fn remind_if_dirty(home: &std::path::Path, gc: &manifest::GitConfig) {
+    if !git::is_repo(home) || gc.auto_commit || !gc.remind || !git::is_dirty(home) {
+        return;
+    }
+    let name = home
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| home.display().to_string());
+    eprintln!(
+        "{} {name} has uncommitted spec changes — {} to commit + push (or edit + commit yourself).",
+        ui::cyan("ⓘ"),
+        ui::bold("temper save")
+    );
 }
 
 /// Commit (and push) the home's pending spec changes.
@@ -315,7 +334,10 @@ fn cmd_save(message: Option<String>, no_push: bool, json: bool) -> Result<()> {
     let home = discovery::find_home()?;
     if !git::is_repo(&home) {
         if json {
-            println!("{}", serde_json::json!({ "saved": false, "reason": "not a git repo" }));
+            println!(
+                "{}",
+                serde_json::json!({ "saved": false, "reason": "not a git repo" })
+            );
             return Ok(());
         }
         anyhow::bail!("{} is not a git repo — nothing to save", home.display());
@@ -371,7 +393,10 @@ fn cmd_git(action: Option<GitAction>, json: bool) -> Result<()> {
                     gc.remind, gc.auto_commit, gc.auto_push, gc.auto_pull
                 );
             } else {
-                println!("{} not a git repo — git automation is dormant.", home.display());
+                println!(
+                    "{} not a git repo — git automation is dormant.",
+                    home.display()
+                );
             }
         }
         Some(GitAction::Enable { push, pull }) => {
@@ -410,7 +435,11 @@ fn cmd_setup(dir: Option<String>, json: bool) -> Result<()> {
         let found = if candidates.is_empty() {
             "none discovered".to_string()
         } else {
-            candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+            candidates
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         };
         anyhow::bail!("not a terminal — run `temper setup <dir>` with an explicit path ({found})");
     }
@@ -473,7 +502,10 @@ fn cmd_eq_import(json: bool) -> Result<()> {
     let written = temper_core::eq_import::run(&home, &cfg)?;
     let paths: Vec<String> = written.iter().map(|p| p.display().to_string()).collect();
     if json {
-        println!("{}", serde_json::json!({ "repo": cfg.repo, "imported": paths }));
+        println!(
+            "{}",
+            serde_json::json!({ "repo": cfg.repo, "imported": paths })
+        );
     } else {
         for p in &paths {
             println!("{} imported {}", ui::green("✓"), p);
@@ -485,7 +517,11 @@ fn cmd_eq_import(json: bool) -> Result<()> {
         );
     }
     let gc = manifest::effective_git(&ft.git, &None);
-    after_repo_change(&home, &gc, &format!("eq-import: {} profile(s)", paths.len()));
+    after_repo_change(
+        &home,
+        &gc,
+        &format!("eq-import: {} profile(s)", paths.len()),
+    );
     Ok(())
 }
 
@@ -507,7 +543,9 @@ fn cmd_install(
     // renamed box), but confirm first. Read-only/dry-run paths never gate.
     if !dry_run && machine.is_some() {
         let host = machine::hostname();
-        let is_this_host = host.as_deref().is_some_and(|h| m.name.eq_ignore_ascii_case(h));
+        let is_this_host = host
+            .as_deref()
+            .is_some_and(|h| m.name.eq_ignore_ascii_case(h));
         if !is_this_host {
             let host_label = host.as_deref().unwrap_or("an unknown hostname");
             let warn = format!(
@@ -530,7 +568,15 @@ fn cmd_install(
     }
 
     let vars = manifest::effective_vars(&ft.vars, &m);
-    let r = plan::run_install(&home, &m, &vars, &ft.brew.trust, dry_run, packages_only, verbose)?;
+    let r = plan::run_install(
+        &home,
+        &m,
+        &vars,
+        &ft.brew.trust,
+        dry_run,
+        packages_only,
+        verbose,
+    )?;
     if json {
         println!(
             "{}",
@@ -542,8 +588,15 @@ fn cmd_install(
             })
         );
     } else if packages_only {
-        let verb = if dry_run { "would converge" } else { "converged" };
-        println!("install-missing {}: {verb} {} declared package(s), config skipped", m.name, r.packages);
+        let verb = if dry_run {
+            "would converge"
+        } else {
+            "converged"
+        };
+        println!(
+            "install-missing {}: {verb} {} declared package(s), config skipped",
+            m.name, r.packages
+        );
         if r.reboot {
             println!("  ⚠ reboot required (rpm-ostree layered a package)");
         }
@@ -558,6 +611,7 @@ fn cmd_install(
             println!("  ⚠ reboot required (rpm-ostree layered a package)");
         }
     }
+    remind_if_dirty(&home, &manifest::effective_git(&ft.git, &m.git));
     Ok(())
 }
 
@@ -590,6 +644,7 @@ fn cmd_update(json: bool, verbose: bool) -> Result<()> {
         );
         announce_skipped(&r.skipped);
     }
+    remind_if_dirty(&home, &manifest::effective_git(&ft.git, &m.git));
     Ok(())
 }
 
@@ -625,6 +680,7 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
     } else {
         render_drift(&m.name, &items);
     }
+    remind_if_dirty(&home, &manifest::effective_git(&ft.git, &m.git));
     Ok(())
 }
 
@@ -705,7 +761,11 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
                 }
             })
             .collect();
-        println!("  {} {}", ui::cyan("ℹ status-only:"), ui::dim(&labels.join(", ")));
+        println!(
+            "  {} {}",
+            ui::cyan("ℹ status-only:"),
+            ui::dim(&labels.join(", "))
+        );
     }
 
     // Footer — always carries the literal "<n> out of sync".
@@ -744,51 +804,62 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
     let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
-    // Compute the plan WITHOUT removing anything, so we can preview + confirm.
-    let extras = plan::run_prune(&home, &m, &ft.ignore)?;
+    let gc = manifest::effective_git(&ft.git, &m.git);
+    // Inner body has several early returns; the closure lets the dirty-spec nudge
+    // fire once on every one of them (below), regardless of which path we take.
+    let result = (|| -> Result<()> {
+        // Compute the plan WITHOUT removing anything, so we can preview + confirm.
+        let extras = plan::run_prune(&home, &m, &ft.ignore)?;
 
-    if json {
-        // No tty to confirm on: JSON is a preview unless `--yes` explicitly opts
-        // into the (destructive) removal.
-        let removed = yes && !dry_run && !extras.is_empty();
-        if removed {
-            plan::commit_prune(&home, &m, &extras)?;
+        if json {
+            // No tty to confirm on: JSON is a preview unless `--yes` explicitly opts
+            // into the (destructive) removal.
+            let removed = yes && !dry_run && !extras.is_empty();
+            if removed {
+                plan::commit_prune(&home, &m, &extras)?;
+            }
+            let arr: Vec<_> = extras
+                .iter()
+                .map(|(mgr, name)| serde_json::json!({ "manager": mgr.as_str(), "name": name }))
+                .collect();
+            println!(
+                "{}",
+                serde_json::json!({ "machine": m.name, "extras": arr, "removed": removed })
+            );
+            return Ok(());
         }
-        let arr: Vec<_> = extras
-            .iter()
-            .map(|(mgr, name)| serde_json::json!({ "manager": mgr.as_str(), "name": name }))
-            .collect();
-        println!(
-            "{}",
-            serde_json::json!({ "machine": m.name, "extras": arr, "removed": removed })
-        );
-        return Ok(());
-    }
 
-    for (mgr, name) in &extras {
-        println!("  - {} {}", mgr.as_str(), name);
-    }
-    if extras.is_empty() {
-        println!("prune {}: nothing to remove.", m.name);
-        return Ok(());
-    }
-    if dry_run {
-        println!("prune {}: {} extra(s) (dry-run, nothing removed)", m.name, extras.len());
-        return Ok(());
-    }
-    // Removal is destructive (dependency-aware uninstall) — confirm first.
-    if !yes
-        && !prompt_no(&format!(
-            "remove {} extra(s) listed above? this uninstalls them",
-            extras.len()
-        ))
-    {
-        println!("aborted — nothing removed.");
-        return Ok(());
-    }
-    plan::commit_prune(&home, &m, &extras)?;
-    println!("prune {}: {} extra(s) removed", m.name, extras.len());
-    Ok(())
+        for (mgr, name) in &extras {
+            println!("  - {} {}", mgr.as_str(), name);
+        }
+        if extras.is_empty() {
+            println!("prune {}: nothing to remove.", m.name);
+            return Ok(());
+        }
+        if dry_run {
+            println!(
+                "prune {}: {} extra(s) (dry-run, nothing removed)",
+                m.name,
+                extras.len()
+            );
+            return Ok(());
+        }
+        // Removal is destructive (dependency-aware uninstall) — confirm first.
+        if !yes
+            && !prompt_no(&format!(
+                "remove {} extra(s) listed above? this uninstalls them",
+                extras.len()
+            ))
+        {
+            println!("aborted — nothing removed.");
+            return Ok(());
+        }
+        plan::commit_prune(&home, &m, &extras)?;
+        println!("prune {}: {} extra(s) removed", m.name, extras.len());
+        Ok(())
+    })();
+    remind_if_dirty(&home, &gc);
+    result
 }
 
 fn cmd_backup(machine: Option<String>, json: bool) -> Result<()> {
@@ -806,13 +877,21 @@ fn cmd_backup(machine: Option<String>, json: bool) -> Result<()> {
             })
         );
     } else {
-        println!("backup {}: dumped package state to {}", m.name, r.brewfile.display());
+        println!(
+            "backup {}: dumped package state to {}",
+            m.name,
+            r.brewfile.display()
+        );
         for d in &dconf {
             println!("  dconf snapshot → {d}");
         }
     }
     let gc = manifest::effective_git(&ft.git, &m.git);
-    let msg = format!("backup {}: Brewfile + {} dconf snapshot(s)", m.name, r.dconf.len());
+    let msg = format!(
+        "backup {}: Brewfile + {} dconf snapshot(s)",
+        m.name,
+        r.dconf.len()
+    );
     after_repo_change(&home, &gc, &msg);
     Ok(())
 }
@@ -827,11 +906,21 @@ fn cmd_adopt(json: bool) -> Result<()> {
             .iter()
             .map(|(mgr, name)| serde_json::json!({ "manager": mgr.as_str(), "name": name }))
             .collect();
-        println!("{}", serde_json::json!({ "machine": m.name, "adoptable": arr }));
+        println!(
+            "{}",
+            serde_json::json!({ "machine": m.name, "adoptable": arr })
+        );
     } else if extras.is_empty() {
-        println!("adopt {}: nothing to adopt — machine matches its spec", m.name);
+        println!(
+            "adopt {}: nothing to adopt — machine matches its spec",
+            m.name
+        );
     } else {
-        println!("adopt {}: {} installed package(s) not in the spec:", m.name, extras.len());
+        println!(
+            "adopt {}: {} installed package(s) not in the spec:",
+            m.name,
+            extras.len()
+        );
         for (mgr, name) in &extras {
             println!("  {} \"{}\"", mgr.as_str(), name);
         }
@@ -841,6 +930,7 @@ fn cmd_adopt(json: bool) -> Result<()> {
              `temper reconcile` to add/drop them interactively."
         );
     }
+    remind_if_dirty(&home, &manifest::effective_git(&ft.git, &m.git));
     Ok(())
 }
 
@@ -869,7 +959,10 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
     }
 
     if plan.adds.is_empty() && plan.drops.is_empty() {
-        println!("reconcile {}: already in sync — nothing to absorb or drop.", m.name);
+        println!(
+            "reconcile {}: already in sync — nothing to absorb or drop.",
+            m.name
+        );
         return Ok(());
     }
 
@@ -880,7 +973,10 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
     // Missing → keep/drop (default KEEP).
     let mut chosen_drops = Vec::new();
     if !plan.drops.is_empty() {
-        println!("\n{}", ui::bold("Declared in the Brewfile but not installed:"));
+        println!(
+            "\n{}",
+            ui::bold("Declared in the Brewfile but not installed:")
+        );
         for line in &plan.drops {
             if !prompt_yes(&format!("  keep {:?} in the Brewfile?", line.trim())) {
                 chosen_drops.push(line.clone());
@@ -910,13 +1006,28 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
     // Preview.
     println!("\n{}", ui::bold("Proposed changes"));
     for t in &chosen_adds {
-        println!("  {} {}  {}", ui::green("+"), t, ui::dim(&format!("→ {}", plan.brewfile_rel)));
+        println!(
+            "  {} {}  {}",
+            ui::green("+"),
+            t,
+            ui::dim(&format!("→ {}", plan.brewfile_rel))
+        );
     }
     for d in &chosen_drops {
-        println!("  {} {}  {}", ui::red("-"), d.trim(), ui::dim(&format!("→ {}", plan.brewfile_rel)));
+        println!(
+            "  {} {}  {}",
+            ui::red("-"),
+            d.trim(),
+            ui::dim(&format!("→ {}", plan.brewfile_rel))
+        );
     }
     for name in &chosen_ignores {
-        println!("  {} flatpak {}  {}", ui::yellow("~"), name, ui::dim("→ [ignore].flatpak in temper.toml"));
+        println!(
+            "  {} flatpak {}  {}",
+            ui::yellow("~"),
+            name,
+            ui::dim("→ [ignore].flatpak in temper.toml")
+        );
     }
 
     if !prompt_no("\napply these changes?") {
@@ -978,36 +1089,65 @@ fn cmd_restore(machine: Option<String>, yes: bool, json: bool) -> Result<()> {
     let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
-
-    if m.dconf.is_empty() {
-        if json {
-            println!("{}", serde_json::json!({ "machine": m.name, "restored": [] }));
-        } else {
-            println!("restore {}: no dconf snapshots declared for this machine.", m.name);
-        }
-        return Ok(());
-    }
-
-    if !yes && !json {
-        println!("{}", ui::bold(&format!("restore {} — loads snapshots into LIVE dconf:", m.name)));
-        for snap in &m.dconf {
-            println!("  {} {}  {}", ui::cyan("→"), snap.path, ui::dim(&snap.file));
-        }
-        println!("{}", ui::yellow("This overwrites live desktop tweaks under those paths."));
-        if !prompt_no("apply?") {
-            println!("aborted — nothing changed.");
+    let gc = manifest::effective_git(&ft.git, &m.git);
+    // Inner body has several early returns; the closure lets the dirty-spec nudge
+    // fire once on every one of them (below), regardless of which path we take.
+    let result = (|| -> Result<()> {
+        if m.dconf.is_empty() {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "machine": m.name, "restored": [] })
+                );
+            } else {
+                println!(
+                    "restore {}: no dconf snapshots declared for this machine.",
+                    m.name
+                );
+            }
             return Ok(());
         }
-    }
 
-    let loaded = plan::run_restore(&home, &m)?;
-    let paths: Vec<String> = loaded.iter().map(|p| p.display().to_string()).collect();
-    if json {
-        println!("{}", serde_json::json!({ "machine": m.name, "restored": paths }));
-    } else {
-        println!("{} restore {}: loaded {} snapshot(s).", ui::green("✓"), m.name, paths.len());
-    }
-    Ok(())
+        if !yes && !json {
+            println!(
+                "{}",
+                ui::bold(&format!(
+                    "restore {} — loads snapshots into LIVE dconf:",
+                    m.name
+                ))
+            );
+            for snap in &m.dconf {
+                println!("  {} {}  {}", ui::cyan("→"), snap.path, ui::dim(&snap.file));
+            }
+            println!(
+                "{}",
+                ui::yellow("This overwrites live desktop tweaks under those paths.")
+            );
+            if !prompt_no("apply?") {
+                println!("aborted — nothing changed.");
+                return Ok(());
+            }
+        }
+
+        let loaded = plan::run_restore(&home, &m)?;
+        let paths: Vec<String> = loaded.iter().map(|p| p.display().to_string()).collect();
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({ "machine": m.name, "restored": paths })
+            );
+        } else {
+            println!(
+                "{} restore {}: loaded {} snapshot(s).",
+                ui::green("✓"),
+                m.name,
+                paths.len()
+            );
+        }
+        Ok(())
+    })();
+    remind_if_dirty(&home, &gc);
+    result
 }
 
 enum AddChoice {

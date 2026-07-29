@@ -32,7 +32,10 @@ fn setup(bundle: &str) -> (TempDir, TempDir, TempDir) {
     fs::write(home.path().join("assets/x.conf"), "managed\n").unwrap();
     fs::write(
         home.path().join("temper.toml"),
-        format!("[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
+        format!(
+            "[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"demo\"]\n",
+            os()
+        ),
     )
     .unwrap();
     fs::write(home.path().join("apps/demo.toml"), bundle).unwrap();
@@ -48,7 +51,10 @@ fn when_present_applies() {
         .arg("install")
         .assert()
         .success();
-    assert!(fake_home.path().join(".config/x.conf").exists(), "present probe should apply");
+    assert!(
+        fake_home.path().join(".config/x.conf").exists(),
+        "present probe should apply"
+    );
 }
 
 #[test]
@@ -61,7 +67,10 @@ fn when_absent_skips_loudly() {
         .assert()
         .success()
         .stdout(predicates::str::contains("skipped"));
-    assert!(!fake_home.path().join(".config/x.conf").exists(), "absent probe should skip the step");
+    assert!(
+        !fake_home.path().join(".config/x.conf").exists(),
+        "absent probe should skip the step"
+    );
 }
 
 #[test]
