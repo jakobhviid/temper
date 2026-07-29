@@ -20,7 +20,9 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
-use temper_core::{discovery, git, journal, machine, manifest, plan, reconcile, ui};
+use temper_core::{
+    discovery, git, journal, machine, manifest, packages, plan, providers, reconcile, ui,
+};
 
 const REPO_URL: &str = "https://github.com/jakobhviid/temper";
 
@@ -94,10 +96,12 @@ enum Cmd {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
     },
-    /// Remove installed-but-undeclared packages (dependency-aware).
+    /// Remove installed-but-undeclared packages + untrust undeclared taps.
     ///
-    /// Honors the machine's `[ignore]` baseline; a kept package's transitive
-    /// dependencies are not flagged as extras.
+    /// Dependency-aware (a kept package's transitive deps are not flagged) and
+    /// honors the machine's `[ignore]` baseline. Also `brew untrust`s any tap
+    /// trusted on the machine but not in `[brew].trust` — the machine→spec
+    /// mirror of `reconcile` absorbing a trusted tap. Confirms first.
     Prune {
         /// List what would be removed without removing anything.
         #[arg(long)]
@@ -907,53 +911,77 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
     // fire once on every one of them (below), regardless of which path we take.
     let result = (|| -> Result<()> {
         // Compute the plan WITHOUT removing anything, so we can preview + confirm.
-        let extras = plan::run_prune(&home, &m, &ft.ignore)?;
+        let prune_plan = plan::run_prune(&home, &m, &ft.ignore, &ft.brew.trust)?;
 
         if json {
             // No tty to confirm on: JSON is a preview unless `--yes` explicitly opts
             // into the (destructive) removal.
-            let removed = yes && !dry_run && !extras.is_empty();
+            let removed = yes && !dry_run && !prune_plan.is_empty();
             if removed {
-                plan::commit_prune(&home, &m, &extras)?;
+                plan::commit_prune(&home, &m, &prune_plan)?;
             }
-            let arr: Vec<_> = extras
+            let arr: Vec<_> = prune_plan
+                .packages
                 .iter()
                 .map(|(mgr, name)| serde_json::json!({ "manager": mgr.as_str(), "name": name }))
                 .collect();
             println!(
                 "{}",
-                serde_json::json!({ "machine": m.name, "extras": arr, "removed": removed })
+                serde_json::json!({
+                    "machine": m.name, "extras": arr, "untrust": prune_plan.untrust,
+                    "removed": removed
+                })
             );
             return Ok(());
         }
 
-        for (mgr, name) in &extras {
-            println!("  - {} {}", mgr.as_str(), name);
+        // Resolve mas ids → app names for a legible preview (lazily; only when a
+        // mas extra is present), mirroring `drift`.
+        let mas_names = if prune_plan
+            .packages
+            .iter()
+            .any(|(m, _)| *m == packages::Manager::Mas)
+        {
+            providers::mas_names()
+        } else {
+            std::collections::BTreeMap::new()
+        };
+        for (mgr, name) in &prune_plan.packages {
+            match mgr {
+                packages::Manager::Mas => match mas_names.get(name) {
+                    Some(app) => println!("  - mas \"{app}\" (id {name})"),
+                    None => println!("  - mas {name}"),
+                },
+                _ => println!("  - {} {}", mgr.as_str(), name),
+            }
         }
-        if extras.is_empty() {
+        for tap in &prune_plan.untrust {
+            println!("  - untrust {tap}");
+        }
+        if prune_plan.is_empty() {
             println!("prune {}: nothing to remove.", m.name);
             return Ok(());
         }
         if dry_run {
             println!(
-                "prune {}: {} extra(s) (dry-run, nothing removed)",
+                "prune {}: {} item(s) (dry-run, nothing removed)",
                 m.name,
-                extras.len()
+                prune_plan.len()
             );
             return Ok(());
         }
-        // Removal is destructive (dependency-aware uninstall) — confirm first.
+        // Removal is destructive (dependency-aware uninstall + untrust) — confirm.
         if !yes
             && !prompt_no(&format!(
-                "remove {} extra(s) listed above? this uninstalls them",
-                extras.len()
+                "remove {} item(s) listed above? this uninstalls packages and untrusts taps",
+                prune_plan.len()
             ))
         {
             println!("aborted — nothing removed.");
             return Ok(());
         }
-        plan::commit_prune(&home, &m, &extras)?;
-        println!("prune {}: {} extra(s) removed", m.name, extras.len());
+        plan::commit_prune(&home, &m, &prune_plan)?;
+        println!("prune {}: {} item(s) removed", m.name, prune_plan.len());
         Ok(())
     })();
     remind_if_dirty(&home, &gc);
@@ -1081,7 +1109,7 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
             ui::bold("Declared in the Brewfile but not installed:")
         );
         for line in &plan.drops {
-            if !prompt_yes(&format!("  keep {:?} in the Brewfile?", line.trim())) {
+            if !prompt_yes(&format!("  keep `{}` in the Brewfile?", line.trim())) {
                 chosen_drops.push(line.clone());
             }
         }
@@ -1110,7 +1138,7 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
             ui::bold("Declared in [brew].trust but not currently trusted:")
         );
         for tap in &plan.trust_drops {
-            if !prompt_yes(&format!("  keep {tap:?} in [brew].trust?")) {
+            if !prompt_yes(&format!("  keep `{tap}` in [brew].trust?")) {
                 chosen_trust_drops.push(tap.clone());
             }
         }
@@ -1364,7 +1392,7 @@ fn prompt_no(msg: &str) -> bool {
 /// `[y/N]` (or `[y/N/i]` for flatpak) — default skip.
 fn prompt_add(token: &str, flatpak: bool) -> AddChoice {
     if flatpak {
-        print!("  add {token}? [y/N/i]  (i = add to [ignore]) ");
+        print!("  add `{token}`? [y/N/i]  (i = add to [ignore]) ");
         let r = read_reply();
         if r.starts_with('y') {
             AddChoice::Add
@@ -1374,7 +1402,7 @@ fn prompt_add(token: &str, flatpak: bool) -> AddChoice {
             AddChoice::Skip
         }
     } else {
-        print!("  add {token}? [y/N] ");
+        print!("  add `{token}`? [y/N] ");
         if read_reply().starts_with('y') {
             AddChoice::Add
         } else {

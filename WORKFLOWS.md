@@ -113,7 +113,8 @@ of the drift. You pick a direction and run what it prints:
 - **Tap-trust drifted** (`[brew].trust`): a declared tap that isn't trusted
   (brew silently skips its formulae) → `temper install`/`update` re-trusts it;
   a tap trusted on the machine but not declared → `temper reconcile` absorbs it
-  into `[brew].trust` (or `[ignore].tap`). `[ignore].tap` suppresses the extra.
+  into `[brew].trust` (or `[ignore].tap`), or `temper prune` `brew untrust`s it
+  (the machine→spec mirror). `[ignore].tap` suppresses the extra either way.
 
 This four-branch package fork is the heart of it (RIS emitted it at the moment of
 detection; temper prints it under Next steps, and in `--json` as `remediation`).

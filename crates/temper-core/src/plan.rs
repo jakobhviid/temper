@@ -238,12 +238,15 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
             "temper install --packages-only",
         );
     }
-    if extra_pkg {
-        push(
-            &mut out,
-            "uninstall packages not in the spec (asks first)",
-            "temper prune",
-        );
+    if extra_pkg || trust_extra {
+        let label = if extra_pkg && trust_extra {
+            "uninstall packages / untrust taps not in the spec (asks first)"
+        } else if trust_extra {
+            "untrust taps not in the spec (asks first)"
+        } else {
+            "uninstall packages not in the spec (asks first)"
+        };
+        push(&mut out, label, "temper prune");
     }
     if trust_gap {
         push(
@@ -627,24 +630,47 @@ pub fn run_install(
     })
 }
 
-/// Prune installed-but-not-declared packages. Returns the extras; the caller
-/// previews and confirms before `commit_prune` removes them.
+/// What a prune would remove: installed-but-undeclared packages, plus taps
+/// trusted on the machine but not in `[brew].trust` (nor `[ignore].tap`). Both
+/// are the machine→spec convergence — the mirror of `reconcile`'s absorb.
+#[derive(Debug, Default)]
+pub struct PrunePlan {
+    pub packages: Vec<(packages::Manager, String)>,
+    /// Taps to `brew untrust` — the prune counterpart of a `trust-extra`.
+    pub untrust: Vec<String>,
+}
+
+impl PrunePlan {
+    pub fn is_empty(&self) -> bool {
+        self.packages.is_empty() && self.untrust.is_empty()
+    }
+    pub fn len(&self) -> usize {
+        self.packages.len() + self.untrust.len()
+    }
+}
+
+/// Prune installed-but-not-declared packages **and** trusted-but-undeclared
+/// taps. Returns the plan; the caller previews and confirms before
+/// `commit_prune` applies it.
 ///
-/// Mirrors `compute_findings`: brew-family (brew/cask/tap) extras are computed
-/// dependency-aware via `providers::brew_extras`, because a naive set-diff
-/// wrongly flags every installed transitive dependency of a declared package.
-/// Only non-brew managers go through the naive `packages::extras`.
+/// Mirrors `run_drift`: brew-family (brew/cask/tap) extras are computed
+/// dependency-aware via `providers::brew_extras` (a naive set-diff wrongly flags
+/// every installed transitive dependency); only non-brew managers use the naive
+/// `packages::extras`. Tap-trust extras are the untrust side of drift's
+/// `trusted-extra`. Inert when the machine declares no packages (so an
+/// unconfigured machine never proposes nuking everything).
 pub fn run_prune(
     home: &Path,
     machine: &Machine,
     ignore: &Ignore,
-) -> Result<Vec<(packages::Manager, String)>> {
+    brew_trust: &[String],
+) -> Result<PrunePlan> {
     let effective = packages::effective_set(home, machine)?;
     if effective.is_empty() {
-        return Ok(Vec::new());
+        return Ok(PrunePlan::default());
     }
     let installed = providers::probe(&effective)?;
-    let mut extras: Vec<(packages::Manager, String)> =
+    let mut packages: Vec<(packages::Manager, String)> =
         packages::extras(&effective, &installed, ignore)
             .into_iter()
             .filter(|(m, _)| {
@@ -654,24 +680,36 @@ pub fn run_prune(
                 )
             })
             .collect();
-    extras.extend(providers::brew_extras(&effective, ignore)?);
-    Ok(extras)
+    packages.extend(providers::brew_extras(&effective, ignore)?);
+
+    // Trusted-but-undeclared taps → untrust (honors `[ignore].tap`). Skipped
+    // without brew (`trusted_taps` → None).
+    let mut untrust = Vec::new();
+    if let Some(trusted) = providers::trusted_taps()? {
+        for tap in &trusted {
+            if !brew_trust.iter().any(|t| t == tap) && !ignore.tap.iter().any(|t| t == tap) {
+                untrust.push(tap.clone());
+            }
+        }
+    }
+    untrust.sort();
+    Ok(PrunePlan { packages, untrust })
 }
 
-/// Apply a prune: uninstall `extras`. Destructive — the caller previews and
-/// confirms first (`run_prune` computes the plan without touching anything).
-/// Recomputes the effective set so `brew bundle cleanup` keeps a declared
-/// package's transitive deps. A no-op when `extras` is empty.
-pub fn commit_prune(
-    home: &Path,
-    machine: &Machine,
-    extras: &[(packages::Manager, String)],
-) -> Result<()> {
-    if extras.is_empty() {
-        return Ok(());
+/// Apply a prune: uninstall the packages and `brew untrust` the taps.
+/// Destructive — the caller previews and confirms first (`run_prune` computes
+/// the plan without touching anything). Recomputes the effective set so `brew
+/// bundle cleanup` keeps a declared package's transitive deps. A no-op on an
+/// empty plan.
+pub fn commit_prune(home: &Path, machine: &Machine, plan: &PrunePlan) -> Result<()> {
+    if !plan.packages.is_empty() {
+        let effective = packages::effective_set(home, machine)?;
+        providers::prune_apply(&effective, &plan.packages)?;
     }
-    let effective = packages::effective_set(home, machine)?;
-    providers::prune_apply(&effective, extras)
+    if !plan.untrust.is_empty() {
+        providers::untrust_taps(&plan.untrust)?;
+    }
+    Ok(())
 }
 
 /// What a `backup` wrote: the dumped Brewfile + any filtered dconf snapshots.

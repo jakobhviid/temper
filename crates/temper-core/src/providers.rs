@@ -313,6 +313,22 @@ pub fn trust_taps(taps: &[String], verbose: bool) -> Result<()> {
     Ok(())
 }
 
+/// `brew untrust` taps trusted on the machine but not declared — the prune
+/// (machine→spec) counterpart of `trust_taps`. Best-effort; a no-op without brew
+/// or an empty list. Output flows to the terminal (prune already confirmed).
+pub fn untrust_taps(taps: &[String]) -> Result<()> {
+    if taps.is_empty() || !have("brew") {
+        return Ok(());
+    }
+    let mut cmd = Command::new("brew");
+    cmd.args(["untrust", "--tap"]);
+    for t in taps {
+        cmd.arg(t);
+    }
+    let _ = cmd.status();
+    Ok(())
+}
+
 /// Live tap-trust state: the taps Homebrew currently trusts (`brew trust --json
 /// v1`, read-only). `None` when brew is absent — the caller then skips trust
 /// drift entirely (a declared `[brew].trust` is meaningless without brew, so it

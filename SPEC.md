@@ -23,9 +23,10 @@ tap     = []
 
 [brew]                      # optional
 trust = ["ublue-os/tap"]   # third-party taps to `brew trust` before converge/upgrade.
-                            #   drift/reconcile check this both ways vs `brew trust --json`:
+                            #   drift/reconcile/prune check this both ways vs `brew trust --json`:
                             #   declared-but-untrusted (install/update re-trusts) and
-                            #   trusted-but-undeclared (reconcile absorbs; [ignore].tap silences)
+                            #   trusted-but-undeclared (reconcile absorbs / prune untrusts;
+                            #   [ignore].tap silences)
 
 [eq_import]                 # optional; `temper eq-import` fetches speaker profiles
 repo = "https://github.com/…/pipewire-speaker-profiles"
