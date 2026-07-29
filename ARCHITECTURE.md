@@ -60,8 +60,10 @@ Folder discovery (built, `discovery.rs`) — first hit wins:
 2. **Walk up from the cwd** — you're inside the folder (or a subdir of it).
 3. **A saved pointer** — `temper setup <dir>` writes `$XDG_CONFIG_HOME/temper/home`.
 4. **Auto-scan** — a directory named `steel`, `temper-home`, or `.temper` under
-   any of: `~`, `~/Developer`, `~/Nextcloud`, `~/Dropbox`,
-   `~/Library/CloudStorage`, `/media`, `/run/media/$USER`.
+   any of: `~`, a dev parent (`~/Developer`, `~/developer`, `~/dev`, `~/src`,
+   `~/code`, `~/projects`, `~/git`, `~/repos`, … — so case/name conventions don't
+   matter), `~/Nextcloud`, `~/Dropbox`, `~/Library/CloudStorage`, `/media`,
+   `/run/media/$USER`.
 
 So a folder cloned/synced to e.g. `~/steel` or `~/Developer/steel` is found with
 **no configuration** — that's why machines "just know where steel is." A fresh

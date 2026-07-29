@@ -561,8 +561,14 @@ mod tests {
     fn auto_pull_reads_fleet_git() {
         let v = doc("[git]\nauto_pull = true\n[[machine]]\nname=\"kira\"\nos=\"linux\"\n");
         assert!(auto_pull_from(&v, Some("kira")));
-        assert!(!auto_pull_from(&doc("[git]\nauto_pull = false\n"), Some("kira")));
-        assert!(!auto_pull_from(&doc("[[machine]]\nname=\"kira\"\nos=\"linux\"\n"), Some("kira")));
+        assert!(!auto_pull_from(
+            &doc("[git]\nauto_pull = false\n"),
+            Some("kira")
+        ));
+        assert!(!auto_pull_from(
+            &doc("[[machine]]\nname=\"kira\"\nos=\"linux\"\n"),
+            Some("kira")
+        ));
     }
 
     #[test]

@@ -53,8 +53,10 @@ like `--json`) to see every tool's full output when debugging.
 **How temper finds the folder (why it "just knows where steel is").** temper
 resolves its home in this order, first hit wins: `$TEMPER_DIR` → walk up from the
 cwd → a saved pointer (`temper setup <dir>`) → **auto-scan** a folder named
-`steel`/`temper-home`/`.temper` under `~`, `~/Developer`, `~/Nextcloud`,
-`~/Dropbox`, `~/Library/CloudStorage`, `/media`, or `/run/media/$USER`. So on a
+`steel`/`temper-home`/`.temper` under `~`, a dev parent
+(`~/Developer`, `~/developer`, `~/dev`, `~/src`, `~/code`, `~/projects`, `~/git`,
+`~/repos`, …), `~/Nextcloud`, `~/Dropbox`, `~/Library/CloudStorage`, `/media`, or
+`/run/media/$USER`. So on a
 fresh box you have three no-fuss options: clone/sync your folder to one of those
 locations (e.g. `~/Developer/steel`) and it's found automatically; or run
 `temper setup` — with no argument it lists the discovered libraries and lets you

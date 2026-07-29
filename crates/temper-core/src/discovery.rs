@@ -121,16 +121,39 @@ pub fn scan_candidates() -> Vec<PathBuf> {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return Vec::new();
     };
+    scan_in(&home)
+}
+
+/// The scan over a given home root — split out so it's testable without touching
+/// the process-global `$HOME` (which is racy under parallel tests).
+fn scan_in(home: &Path) -> Vec<PathBuf> {
     let names = ["steel", "temper-home", ".temper"];
-    let roots = [
-        home.clone(),
-        home.join("Developer"),
+    // Parent dirs a checkout tends to live in. `Developer` is the macOS
+    // convention; a Linux box just as often uses a lowercase `developer` or a
+    // short `dev`/`src`/`code`/`projects`/`git`/`repos` — so detection doesn't
+    // hinge on which name (or case) a given machine happened to pick. (This is
+    // exactly what bit a lowercase `~/developer/steel` on some hosts.)
+    let dev_parents = [
+        "Developer",
+        "developer",
+        "dev",
+        "src",
+        "code",
+        "Code",
+        "projects",
+        "Projects",
+        "git",
+        "repos",
+    ];
+    let mut roots = vec![home.to_path_buf()];
+    roots.extend(dev_parents.iter().map(|d| home.join(d)));
+    roots.extend([
         home.join("Nextcloud"),
         home.join("Dropbox"),
         home.join("Library/CloudStorage"),
         PathBuf::from("/media"),
         PathBuf::from("/run/media").join(std::env::var("USER").unwrap_or_default()),
-    ];
+    ]);
     let mut out = Vec::new();
     for root in roots {
         for name in names {
@@ -165,5 +188,36 @@ mod tests {
     fn save_refuses_dir_without_manifest() {
         let empty = tempfile::TempDir::new().unwrap();
         assert!(save_pointer(empty.path()).is_err());
+    }
+
+    #[test]
+    fn scan_finds_lowercase_developer_and_other_dev_parents() {
+        // The regression: a checkout under a lowercase `~/developer` (or `~/dev`,
+        // `~/src`, …) must be found, not only the macOS-cased `~/Developer`.
+        for parent in ["developer", "Developer", "dev", "src", "code", "projects"] {
+            let home = tempfile::TempDir::new().unwrap();
+            let steel = home.path().join(parent).join("steel");
+            fs::create_dir_all(&steel).unwrap();
+            fs::write(steel.join("temper.toml"), "").unwrap();
+            let found = scan_in(home.path());
+            assert!(
+                found.contains(&steel),
+                "scan missed {}: got {found:?}",
+                steel.display()
+            );
+        }
+    }
+
+    #[test]
+    fn scan_finds_home_and_alt_repo_names() {
+        let home = tempfile::TempDir::new().unwrap();
+        // directly under ~ and under a named repo dir, both variants supported
+        for rel in ["steel", "developer/temper-home", "dev/.temper"] {
+            let d = home.path().join(rel);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("temper.toml"), "").unwrap();
+        }
+        let found = scan_in(home.path());
+        assert_eq!(found.len(), 3, "expected all three, got {found:?}");
     }
 }
