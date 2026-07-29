@@ -147,10 +147,28 @@ fn scan_in(home: &Path) -> Vec<PathBuf> {
     ];
     let mut roots = vec![home.to_path_buf()];
     roots.extend(dev_parents.iter().map(|d| home.join(d)));
+    // Cloud-sync roots — the same set dotsync probes, so a folder that arrives
+    // via any common sync client is found on both macOS and Linux:
+    // macOS's unified `~/Library/CloudStorage/*` clients (OneDrive, GoogleDrive,
+    // Dropbox, … each a subdir), iCloud Drive, and the classic home-root dirs.
+    if let Ok(entries) = std::fs::read_dir(home.join("Library/CloudStorage")) {
+        roots.extend(entries.flatten().map(|e| e.path()));
+    }
+    roots.push(home.join("Library/Mobile Documents/com~apple~CloudDocs")); // iCloud
+    roots.extend(
+        [
+            "Nextcloud",
+            "Dropbox",
+            "OneDrive",
+            "ProtonDrive",
+            "Proton Drive",
+            "Google Drive",
+            "Sync",
+        ]
+        .iter()
+        .map(|d| home.join(d)),
+    );
     roots.extend([
-        home.join("Nextcloud"),
-        home.join("Dropbox"),
-        home.join("Library/CloudStorage"),
         PathBuf::from("/media"),
         PathBuf::from("/run/media").join(std::env::var("USER").unwrap_or_default()),
     ]);
@@ -205,6 +223,26 @@ mod tests {
                 "scan missed {}: got {found:?}",
                 steel.display()
             );
+        }
+    }
+
+    #[test]
+    fn scan_finds_cloud_sync_locations() {
+        // A folder arriving via any common sync client must be found: a named
+        // home-root client, iCloud Drive, and a macOS CloudStorage subdir.
+        for rel in [
+            "OneDrive/steel",
+            "Proton Drive/steel",
+            "Nextcloud/temper-home",
+            "Library/Mobile Documents/com~apple~CloudDocs/steel",
+            "Library/CloudStorage/OneDrive-Personal/steel",
+        ] {
+            let home = tempfile::TempDir::new().unwrap();
+            let d = home.path().join(rel);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("temper.toml"), "").unwrap();
+            let found = scan_in(home.path());
+            assert!(found.contains(&d), "scan missed {rel}: got {found:?}");
         }
     }
 

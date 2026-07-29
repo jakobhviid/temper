@@ -55,7 +55,9 @@ resolves its home in this order, first hit wins: `$TEMPER_DIR` → walk up from 
 cwd → a saved pointer (`temper setup <dir>`) → **auto-scan** a folder named
 `steel`/`temper-home`/`.temper` under `~`, a dev parent
 (`~/Developer`, `~/developer`, `~/dev`, `~/src`, `~/code`, `~/projects`, `~/git`,
-`~/repos`, …), `~/Nextcloud`, `~/Dropbox`, `~/Library/CloudStorage`, `/media`, or
+`~/repos`, …), or a cloud-sync root — the same set `dotsync` probes: each
+`~/Library/CloudStorage/*` client, iCloud Drive, `~/Nextcloud`, `~/Dropbox`,
+`~/OneDrive`, `~/ProtonDrive`, `~/Google Drive`, `~/Sync`, plus `/media` and
 `/run/media/$USER`. So on a
 fresh box you have three no-fuss options: clone/sync your folder to one of those
 locations (e.g. `~/Developer/steel`) and it's found automatically; or run

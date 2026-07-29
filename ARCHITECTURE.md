@@ -62,7 +62,9 @@ Folder discovery (built, `discovery.rs`) — first hit wins:
 4. **Auto-scan** — a directory named `steel`, `temper-home`, or `.temper` under
    any of: `~`, a dev parent (`~/Developer`, `~/developer`, `~/dev`, `~/src`,
    `~/code`, `~/projects`, `~/git`, `~/repos`, … — so case/name conventions don't
-   matter), `~/Nextcloud`, `~/Dropbox`, `~/Library/CloudStorage`, `/media`,
+   matter), or a cloud-sync root (the same set `dotsync` probes: each
+   `~/Library/CloudStorage/*` client, iCloud Drive, `~/Nextcloud`, `~/Dropbox`,
+   `~/OneDrive`, `~/ProtonDrive`, `~/Google Drive`, `~/Sync`), `/media`,
    `/run/media/$USER`.
 
 So a folder cloned/synced to e.g. `~/steel` or `~/Developer/steel` is found with
