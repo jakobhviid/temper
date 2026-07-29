@@ -534,9 +534,13 @@ pub fn run_install(
     })
 }
 
-/// Prune installed-but-not-declared packages. Returns the extras (computed by
-/// the unit-tested set logic); with `dry_run` it only lists, otherwise it also
-/// removes them (VM-verified shell-out).
+/// Prune installed-but-not-declared packages. Returns the extras; the caller
+/// previews and confirms before `commit_prune` removes them.
+///
+/// Mirrors `compute_findings`: brew-family (brew/cask/tap) extras are computed
+/// dependency-aware via `providers::brew_extras`, because a naive set-diff
+/// wrongly flags every installed transitive dependency of a declared package.
+/// Only non-brew managers go through the naive `packages::extras`.
 pub fn run_prune(
     home: &Path,
     machine: &Machine,
@@ -547,7 +551,18 @@ pub fn run_prune(
         return Ok(Vec::new());
     }
     let installed = providers::probe(&effective)?;
-    Ok(packages::extras(&effective, &installed, ignore))
+    let mut extras: Vec<(packages::Manager, String)> =
+        packages::extras(&effective, &installed, ignore)
+            .into_iter()
+            .filter(|(m, _)| {
+                !matches!(
+                    m,
+                    packages::Manager::Brew | packages::Manager::Cask | packages::Manager::Tap
+                )
+            })
+            .collect();
+    extras.extend(providers::brew_extras(&effective, ignore)?);
+    Ok(extras)
 }
 
 /// Apply a prune: uninstall `extras`. Destructive — the caller previews and
