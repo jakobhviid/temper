@@ -106,6 +106,10 @@ of the drift. You pick a direction and run what it prints:
   - converge machine→spec: `temper prune` (uninstall them, asks first);
   - absorb spec←machine: `temper reconcile` (interactively add/drop),
     or `temper backup` (overwrite the machine Brewfile wholesale).
+- **Tap-trust drifted** (`[brew].trust`): a declared tap that isn't trusted
+  (brew silently skips its formulae) → `temper install`/`update` re-trusts it;
+  a tap trusted on the machine but not declared → `temper reconcile` absorbs it
+  into `[brew].trust` (or `[ignore].tap`). `[ignore].tap` suppresses the extra.
 
 This four-branch package fork is the heart of it (RIS emitted it at the moment of
 detection; temper prints it under Next steps, and in `--json` as `remediation`).
@@ -136,7 +140,7 @@ per-item and surgical, so nothing lands in the spec without you saying so.
 
 ```sh
 temper reconcile   # the go-to: interactively add extras / drop missing entries /
-                   #   route a flatpak extra to [ignore]
+                   #   route a flatpak extra to [ignore] / reconcile tap-trust
 temper adopt       # optional first look: just list the extras, mutate nothing
 temper backup      # rarely: wholesale dump of live state → Brewfile
 ```
@@ -145,9 +149,14 @@ temper backup      # rarely: wholesale dump of live state → Brewfile
 skip; flatpak extras also offer "ignore") and edits only the machine's **own**
 Brewfile, never a shared bundle — so it's safe to run often. Absorbed entries are
 written back in canonical order (taps → brews → casks → mas, alphabetical within
-each group) so the Brewfile stays sorted instead of growing an unsorted tail. `adopt` is the
-read-only preview; `backup` is the blunt "just capture everything" fallback when
-you'd rather diff-then-trim than answer prompts.
+each group) so the Brewfile stays sorted instead of growing an unsorted tail.
+
+`reconcile` also reconciles **tap-trust** (`[brew].trust`, fleet-level in
+temper.toml) the same way: a tap trusted on the machine but not declared can be
+absorbed into `[brew].trust` (or routed to `[ignore].tap`), and a declared tap
+that isn't currently trusted can be dropped (default keep — `install`/`update`
+would re-trust it). `adopt` is the read-only preview; `backup` is the blunt "just
+capture everything" fallback when you'd rather diff-then-trim than answer prompts.
 
 ## 6. Capture / restore desktop (GNOME + Ptyxis) state
 

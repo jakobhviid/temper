@@ -31,7 +31,8 @@ pub struct AddItem {
 }
 
 /// The computed reconcile plan: what could be added to / dropped from the
-/// machine's Brewfile. The CLI turns each into a per-item prompt.
+/// machine's Brewfile, plus the fleet-level `[brew].trust` tap-trust drift. The
+/// CLI turns each into a per-item prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReconcilePlan {
     /// The machine's Brewfile, relative to the temper-home.
@@ -40,6 +41,12 @@ pub struct ReconcilePlan {
     pub adds: Vec<AddItem>,
     /// Brewfile lines that are declared-but-absent — candidates to drop.
     pub drops: Vec<String>,
+    /// Taps trusted on the machine but not in `[brew].trust` (and not in
+    /// `[ignore].tap`) — candidates to absorb into `[brew].trust` (or ignore).
+    pub trust_adds: Vec<String>,
+    /// Taps in `[brew].trust` that aren't currently trusted — candidates to drop
+    /// from `[brew].trust`. (Keeping one instead is the `install`/`update` fix.)
+    pub trust_drops: Vec<String>,
 }
 
 /// The Brewfile token (line) for a `(manager, name)` pair.
@@ -60,7 +67,14 @@ fn classify_brew(name: &str, installed: &Installed) -> Manager {
 }
 
 /// Compute the reconcile plan for a machine. Read-only — mutates nothing.
-pub fn plan(home: &Path, machine: &Machine, ignore: &manifest::Ignore) -> Result<ReconcilePlan> {
+/// `brew_trust` is the declared fleet-level `[brew].trust`, reconciled against
+/// what Homebrew actually trusts (both directions, mirroring packages).
+pub fn plan(
+    home: &Path,
+    machine: &Machine,
+    ignore: &manifest::Ignore,
+    brew_trust: &[String],
+) -> Result<ReconcilePlan> {
     let brewfile_rel = machine.brewfile.clone().ok_or_else(|| {
         anyhow!(
             "machine '{}' has no `brewfile` — reconcile edits the machine's own \
@@ -144,10 +158,33 @@ pub fn plan(home: &Path, machine: &Machine, ignore: &manifest::Ignore) -> Result
         }
     }
 
+    // Tap-trust reconcile (fleet-level `[brew].trust`). Skipped without brew
+    // (`trusted_taps` → None), so a declared trust on a non-brew host neither
+    // offers spurious adds nor drops what it can't verify.
+    let (mut trust_adds, mut trust_drops) = (Vec::new(), Vec::new());
+    if let Some(trusted) = providers::trusted_taps()? {
+        // Trusted but not declared (and not ignored) → absorb into `[brew].trust`.
+        for tap in &trusted {
+            if !brew_trust.iter().any(|t| t == tap) && !ignore.tap.iter().any(|t| t == tap) {
+                trust_adds.push(tap.clone());
+            }
+        }
+        // Declared but not trusted → offer to drop from `[brew].trust`.
+        for tap in brew_trust {
+            if !trusted.iter().any(|t| t == tap) {
+                trust_drops.push(tap.clone());
+            }
+        }
+    }
+    trust_adds.sort();
+    trust_drops.sort();
+
     Ok(ReconcilePlan {
         brewfile_rel,
         adds,
         drops,
+        trust_adds,
+        trust_drops,
     })
 }
 
@@ -304,6 +341,48 @@ pub fn append_ignore(temper_toml: &str, manager: &str, appid: &str) -> Result<St
     Ok(doc.to_string())
 }
 
+/// Append `tap` to `[brew].trust` in a `temper.toml`, preserving comments +
+/// formatting (toml_edit). Idempotent — a no-op if already present. The
+/// spec←machine "absorb a trusted tap" edit, mirroring `append_ignore`.
+pub fn append_trust(temper_toml: &str, tap: &str) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = temper_toml
+        .parse()
+        .context("parsing temper.toml for trust edit")?;
+    let brew = doc
+        .as_table_mut()
+        .entry("brew")
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| anyhow!("[brew] in temper.toml is not a table"))?;
+    let arr = brew
+        .entry("trust")
+        .or_insert(toml_edit::Item::Value(toml_edit::Value::Array(
+            toml_edit::Array::new(),
+        )))
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("[brew].trust is not an array"))?;
+    if !arr.iter().any(|v| v.as_str() == Some(tap)) {
+        arr.push(tap);
+    }
+    Ok(doc.to_string())
+}
+
+/// Remove `tap` from `[brew].trust` in a `temper.toml`, preserving comments +
+/// formatting (toml_edit). A no-op if absent or `[brew].trust` doesn't exist.
+pub fn remove_trust(temper_toml: &str, tap: &str) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = temper_toml
+        .parse()
+        .context("parsing temper.toml for trust edit")?;
+    if let Some(arr) = doc
+        .get_mut("brew")
+        .and_then(|b| b.get_mut("trust"))
+        .and_then(|t| t.as_array_mut())
+    {
+        arr.retain(|v| v.as_str() != Some(tap));
+    }
+    Ok(doc.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,5 +490,39 @@ mod tests {
         .unwrap();
         let doc: toml_edit::DocumentMut = out.parse().unwrap();
         assert_eq!(doc["ignore"]["flatpak"][0].as_str(), Some("org.x"));
+    }
+
+    #[test]
+    fn trust_add_preserves_comments_and_dedups() {
+        let src = "# my fleet\n[brew]\ntrust = [\"user/keep\"] # baseline\n";
+        let out = append_trust(src, "user/new").unwrap();
+        assert!(out.contains("# my fleet"), "lost top comment: {out}");
+        assert!(out.contains("# baseline"), "lost inline comment: {out}");
+        assert!(out.contains("user/new"));
+        // idempotent — a second add is a no-op
+        let again = append_trust(&out, "user/new").unwrap();
+        assert_eq!(again.matches("user/new").count(), 1);
+    }
+
+    #[test]
+    fn trust_add_creates_missing_section() {
+        let out = append_trust("[[machine]]\nname = \"m\"\nos = \"linux\"\n", "user/tap").unwrap();
+        let doc: toml_edit::DocumentMut = out.parse().unwrap();
+        assert_eq!(doc["brew"]["trust"][0].as_str(), Some("user/tap"));
+    }
+
+    #[test]
+    fn trust_remove_drops_only_the_named_tap() {
+        let src = "[brew]\ntrust = [\"a/one\", \"b/two\"] # keep b\n";
+        let out = remove_trust(src, "a/one").unwrap();
+        assert!(!out.contains("a/one"), "did not drop: {out}");
+        assert!(out.contains("b/two"), "dropped the wrong one: {out}");
+        assert!(out.contains("# keep b"), "lost inline comment: {out}");
+        // absent tap / missing section → no-op, never an error
+        assert_eq!(remove_trust(&out, "nope/gone").unwrap(), out);
+        assert_eq!(
+            remove_trust("[[machine]]\nname=\"m\"\nos=\"linux\"\n", "x/y").unwrap(),
+            "[[machine]]\nname=\"m\"\nos=\"linux\"\n"
+        );
     }
 }

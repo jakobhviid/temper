@@ -208,9 +208,20 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
     let drifted = |kinds: &[&str]| items.iter().any(|f| !f.ok && kinds.contains(&f.kind));
     let missing_pkg = drifted(&["package", "extension", "rpm"]);
     let extra_pkg = drifted(&["package-extra"]);
-    let config_drift = items
-        .iter()
-        .any(|f| !f.ok && !["package", "package-extra", "extension", "rpm"].contains(&f.kind));
+    let trust_gap = drifted(&["trust"]);
+    let trust_extra = drifted(&["trust-extra"]);
+    let config_drift = items.iter().any(|f| {
+        !f.ok
+            && ![
+                "package",
+                "package-extra",
+                "extension",
+                "rpm",
+                "trust",
+                "trust-extra",
+            ]
+            .contains(&f.kind)
+    });
 
     let mut out = Vec::new();
     let push = |out: &mut Vec<Remediation>, label: &str, command: &str| {
@@ -234,13 +245,22 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
             "temper prune",
         );
     }
-    // Spec ← machine (absorb the machine's state into the spec).
-    if missing_pkg || extra_pkg {
+    if trust_gap {
         push(
             &mut out,
-            "interactively add extras / drop missing entries",
+            "trust declared taps so brew loads their formulae",
+            "temper install --packages-only",
+        );
+    }
+    // Spec ← machine (absorb the machine's state into the spec).
+    if missing_pkg || extra_pkg || trust_extra || trust_gap {
+        push(
+            &mut out,
+            "interactively add extras / drop missing entries (packages + tap-trust)",
             "temper reconcile",
         );
+    }
+    if missing_pkg || extra_pkg {
         push(
             &mut out,
             "overwrite the machine Brewfile with live state",
@@ -268,6 +288,7 @@ pub fn run_drift(
     machine: &Machine,
     vars: &BTreeMap<String, String>,
     ignore: &Ignore,
+    brew_trust: &[String],
 ) -> Result<Vec<Finding>> {
     let resolved = resolve(home, machine)?;
     let mut findings = Vec::new();
@@ -356,6 +377,38 @@ pub fn run_drift(
                 ok: false,
                 status: "extra".into(),
             });
+        }
+    }
+
+    // brew tap-trust drift — both directions, mirroring packages. Skipped
+    // entirely when brew is absent (`trusted_taps` → None), so a declared
+    // `[brew].trust` on a non-brew host doesn't read as "all untrusted".
+    if let Some(trusted) = providers::trusted_taps()? {
+        // Declared but not trusted → a gap (brew silently skips the tap's
+        // formulae). Fixed by `install`/`update`, which run `brew trust`.
+        for tap in brew_trust {
+            if !trusted.iter().any(|t| t == tap) {
+                findings.push(Finding {
+                    app: "trust".into(),
+                    kind: "trust",
+                    target: format!("tap {tap}"),
+                    ok: false,
+                    status: "untrusted".into(),
+                });
+            }
+        }
+        // Trusted but not declared → an extra. Honors `[ignore].tap` so a known
+        // baseline tap isn't nagged. Absorbed into `[brew].trust` by `reconcile`.
+        for tap in &trusted {
+            if !brew_trust.iter().any(|t| t == tap) && !ignore.tap.iter().any(|t| t == tap) {
+                findings.push(Finding {
+                    app: "trust".into(),
+                    kind: "trust-extra",
+                    target: format!("tap {tap}"),
+                    ok: false,
+                    status: "trusted-extra".into(),
+                });
+            }
         }
     }
 

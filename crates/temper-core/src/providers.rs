@@ -296,6 +296,35 @@ pub fn trust_taps(taps: &[String], verbose: bool) -> Result<()> {
     Ok(())
 }
 
+/// Live tap-trust state: the taps Homebrew currently trusts (`brew trust --json
+/// v1`, read-only). `None` when brew is absent — the caller then skips trust
+/// drift entirely (a declared `[brew].trust` is meaningless without brew, so it
+/// must NOT read as "everything untrusted"). Only the `taps` array is returned;
+/// temper trusts at tap granularity (`brew trust --tap`), so trusted individual
+/// formulae/casks/commands aren't temper's to manage and would be noise.
+pub fn trusted_taps() -> Result<Option<Vec<String>>> {
+    if !have("brew") {
+        return Ok(None);
+    }
+    let out = Command::new("brew")
+        .args(["trust", "--json", "v1"])
+        .output()
+        .context("running brew trust --json v1")?;
+    if !out.status.success() {
+        // An older brew without `trust` (or a transient failure): treat as "can't
+        // tell", not "nothing trusted", so we don't cry drift on every tap.
+        return Ok(None);
+    }
+    #[derive(serde::Deserialize)]
+    struct Trust {
+        #[serde(default)]
+        taps: Vec<String>,
+    }
+    let parsed: Trust =
+        serde_json::from_slice(&out.stdout).context("parsing brew trust --json v1")?;
+    Ok(Some(parsed.taps))
+}
+
 /// Upgrade installed packages (brew + flatpak). Best-effort; VM-verified. The
 /// caller only invokes this when packages are actually declared, so a machine
 /// with an empty set never triggers a global upgrade.

@@ -126,7 +126,7 @@ app-bundles it wants. Drift at app scope is per-file / per-key / per-assertion.
 | `copy` | app | deploy a file/dir → target(s). Modes: `verbatim`, `template` (variable + apply-time-probe substitution), `seed` (create-once, then hands-off, excluded from drift). Fields: `to`, `mode` (file perms), `template`. |
 | `block` | app | ensure a marker-delimited block / line is present in a user-owned file, idempotently (the grove-`setup` pattern: SSH `Include`, zshrc `source` line). |
 | `setkey` | both | set one or more keys in a structured store, preserving siblings. **Backends:** `dconf`, macOS `defaults`, `ini`/`.desktop`, `json`, `toml`. Supports **list-append** (json/toml/dconf array-union, e.g. dconf `custom-keybindings`) and opt-in apply-time value templating (`template = true`, all backends). The `json` backend is **JSONC/comment-preserving** (reads `//` + trailing commas, writes without reformatting). Generalizes the old standalone `dconf`. |
-| `brew` | machine | converge the aggregate Brewfile (`brew bundle`); internalizes tap-trust; knows the `vscode` sub-type |
+| `brew` | machine | converge the aggregate Brewfile (`brew bundle`); internalizes tap-trust (and drift-checks it both ways vs `brew trust --json`); knows the `vscode` sub-type |
 | `flatpak` | machine | converge the flatpak set (with ignore-list); `flatpak override` env/perms is a `setkey`-style op on the override store |
 | `mas` | machine | converge Mac App Store apps in a separate, **forgiving** `mas install` loop — skips apps already installed (per `mas list`), mutes Spotlight-reindex noise (`MAS_NO_AUTO_INDEX`), and a MAS failure is warned + skipped, never fatal (see below) |
 | `gext` | machine | converge GNOME extensions (install from EGO + `gext update`); distinct from *enabling* them (a dconf key) |
@@ -301,11 +301,12 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
   `install` refuses to run when the machine's `os` ≠ the host os (drift and
   `--dry-run` work from any host; only a converge is host-guarded). `manual`
   steps are skipped by both flows.
-- **`drift [machine]`** — read-only: package set + every managed file + keys +
-  assertions + exec-hooks. Findings are `ok` / `drifted` / `missing` /
-  **`unavailable`** (a backend whose tool is absent here, e.g. dconf on a Mac —
-  degraded, not a failure); `manual` steps and image-baked items are
-  status-only, never counted as drift.
+- **`drift [machine]`** — read-only: package set + tap-trust (`[brew].trust` vs
+  `brew trust --json`, both directions) + every managed file + keys + assertions
+  + exec-hooks. Findings are `ok` / `drifted` / `missing` / `untrusted` /
+  `trusted-extra` / **`unavailable`** (a backend whose tool is absent here, e.g.
+  dconf on a Mac — degraded, not a failure); `manual` steps and image-baked items
+  are status-only, never counted as drift.
 - **`prune`** — remove installed-but-not-declared (dependency-aware, honoring the
   ignore/baseline list); previews and confirms first (`--yes` skips; under
   `--json` it previews unless `--yes`).
@@ -323,11 +324,15 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
 - **`reconcile [machine]`** — the interactive spec←machine capture (RIS's
   `reconcile`): per-item, absorb installed-but-undeclared extras INTO the
   machine's own Brewfile, drop declared-but-absent entries FROM it, or route a
-  flatpak extra to `[ignore]` (comment-preserving, via toml_edit). Missing
-  entries default to *keep*, extras default to *skip*; a unified preview + one
-  confirm precede any write. Edits only the machine's **own** `brewfile`, never a
-  shared bundle. `--json` previews the plan without prompting. Converging the
-  other way, machine←spec, *is* `install`/`update`.
+  flatpak extra to `[ignore]` (comment-preserving, via toml_edit). It also
+  reconciles **tap-trust**: absorb a trusted-but-undeclared tap into
+  `[brew].trust` (or `[ignore].tap`), or drop a declared-but-untrusted tap from
+  it — the same both-direction diff, written to `temper.toml` via toml_edit.
+  Missing entries default to *keep*, extras default to *skip*; a unified preview
+  + one confirm precede any write. Edits only the machine's **own** `brewfile`
+  (and the fleet `temper.toml` for `[brew].trust`/`[ignore]`), never a shared
+  bundle. `--json` previews the plan without prompting. Converging the other way,
+  machine←spec, *is* `install`/`update`.
 - **`undo [run]`** — revert a run — the one named by its id, else the newest;
   **`undo --list`** enumerates revertible runs (read-only). amdl's
   content-addressed journal: after-hash-guarded reverts skip-and-report (a file

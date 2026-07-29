@@ -653,7 +653,7 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
     let vars = manifest::effective_vars(&ft.vars, &m);
-    let items = plan::run_drift(&home, &m, &vars, &ft.ignore)?;
+    let items = plan::run_drift(&home, &m, &vars, &ft.ignore, &ft.brew.trust)?;
     let out_of_sync = items.iter().filter(|f| !f.ok).count();
 
     if json {
@@ -940,7 +940,7 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
     let home = find_home_pulling()?;
     let ft = manifest::load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
-    let plan = reconcile::plan(&home, &m, &ft.ignore)?;
+    let plan = reconcile::plan(&home, &m, &ft.ignore, &ft.brew.trust)?;
 
     if json {
         let adds: Vec<_> = plan
@@ -952,13 +952,18 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
             "{}",
             serde_json::json!({
                 "machine": m.name, "brewfile": plan.brewfile_rel,
-                "adds": adds, "drops": plan.drops
+                "adds": adds, "drops": plan.drops,
+                "trust_adds": plan.trust_adds, "trust_drops": plan.trust_drops
             })
         );
         return Ok(());
     }
 
-    if plan.adds.is_empty() && plan.drops.is_empty() {
+    if plan.adds.is_empty()
+        && plan.drops.is_empty()
+        && plan.trust_adds.is_empty()
+        && plan.trust_drops.is_empty()
+    {
         println!(
             "reconcile {}: already in sync — nothing to absorb or drop.",
             m.name
@@ -998,7 +1003,43 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
         }
     }
 
-    if chosen_drops.is_empty() && chosen_adds.is_empty() && chosen_ignores.is_empty() {
+    // Tap-trust drops (declared but not trusted) → keep/drop, default KEEP
+    // (keeping lets `install`/`update` re-trust it — dropping abandons the tap).
+    let mut chosen_trust_drops: Vec<String> = Vec::new();
+    if !plan.trust_drops.is_empty() {
+        println!(
+            "\n{}",
+            ui::bold("Declared in [brew].trust but not currently trusted:")
+        );
+        for tap in &plan.trust_drops {
+            if !prompt_yes(&format!("  keep {tap:?} in [brew].trust?")) {
+                chosen_trust_drops.push(tap.clone());
+            }
+        }
+    }
+
+    // Tap-trust adds (trusted but not declared) → add / ignore / skip, default
+    // SKIP — mirrors the flatpak extra choice (add to spec, or `[ignore].tap`).
+    let mut chosen_trust_adds: Vec<String> = Vec::new();
+    let mut chosen_tap_ignores: Vec<String> = Vec::new();
+    if !plan.trust_adds.is_empty() {
+        println!("\n{}", ui::bold("Trusted but not in [brew].trust:"));
+        for tap in &plan.trust_adds {
+            match prompt_add(tap, true) {
+                AddChoice::Add => chosen_trust_adds.push(tap.clone()),
+                AddChoice::Ignore => chosen_tap_ignores.push(tap.clone()),
+                AddChoice::Skip => {}
+            }
+        }
+    }
+
+    if chosen_drops.is_empty()
+        && chosen_adds.is_empty()
+        && chosen_ignores.is_empty()
+        && chosen_trust_adds.is_empty()
+        && chosen_trust_drops.is_empty()
+        && chosen_tap_ignores.is_empty()
+    {
         println!("\nNothing selected — nothing changed.");
         return Ok(());
     }
@@ -1029,6 +1070,30 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
             ui::dim("→ [ignore].flatpak in temper.toml")
         );
     }
+    for tap in &chosen_trust_adds {
+        println!(
+            "  {} trust {}  {}",
+            ui::green("+"),
+            tap,
+            ui::dim("→ [brew].trust in temper.toml")
+        );
+    }
+    for tap in &chosen_trust_drops {
+        println!(
+            "  {} trust {}  {}",
+            ui::red("-"),
+            tap,
+            ui::dim("→ [brew].trust in temper.toml")
+        );
+    }
+    for tap in &chosen_tap_ignores {
+        println!(
+            "  {} trust {}  {}",
+            ui::yellow("~"),
+            tap,
+            ui::dim("→ [ignore].tap in temper.toml")
+        );
+    }
 
     if !prompt_no("\napply these changes?") {
         println!("aborted — nothing changed.");
@@ -1049,13 +1114,27 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
         std::fs::write(&bf_path, &new_bf)
             .map_err(|e| anyhow::anyhow!("writing {}: {e}", bf_path.display()))?;
     }
-    // [ignore] additions (comment-preserving).
-    if !chosen_ignores.is_empty() {
+    // temper.toml edits (comment-preserving): [ignore].flatpak absorbs, plus the
+    // tap-trust reconcile — [brew].trust add/drop and [ignore].tap absorb.
+    let tt_edits = !chosen_ignores.is_empty()
+        || !chosen_trust_adds.is_empty()
+        || !chosen_trust_drops.is_empty()
+        || !chosen_tap_ignores.is_empty();
+    if tt_edits {
         let tt_path = home.join("temper.toml");
         let before_tt = std::fs::read_to_string(&tt_path)?;
         let mut tt = before_tt.clone();
         for name in &chosen_ignores {
             tt = reconcile::append_ignore(&tt, "flatpak", name)?;
+        }
+        for tap in &chosen_trust_adds {
+            tt = reconcile::append_trust(&tt, tap)?;
+        }
+        for tap in &chosen_trust_drops {
+            tt = reconcile::remove_trust(&tt, tap)?;
+        }
+        for tap in &chosen_tap_ignores {
+            tt = reconcile::append_ignore(&tt, "tap", tap)?;
         }
         if tt != before_tt {
             jrnl.record_write(&tt_path, Some(before_tt.as_bytes()), tt.as_bytes())?;
@@ -1063,22 +1142,19 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
         }
     }
     jrnl.commit()?;
+    let added = chosen_adds.len() + chosen_trust_adds.len();
+    let dropped = chosen_drops.len() + chosen_trust_drops.len();
+    let ignored = chosen_ignores.len() + chosen_tap_ignores.len();
     println!(
         "{} reconcile {}: {} added, {} dropped, {} ignored.",
         ui::green("✓"),
         m.name,
-        chosen_adds.len(),
-        chosen_drops.len(),
-        chosen_ignores.len()
+        added,
+        dropped,
+        ignored
     );
     let gc = manifest::effective_git(&ft.git, &m.git);
-    let msg = format!(
-        "reconcile {}: +{} -{} ~{}",
-        m.name,
-        chosen_adds.len(),
-        chosen_drops.len(),
-        chosen_ignores.len()
-    );
+    let msg = format!("reconcile {}: +{} -{} ~{}", m.name, added, dropped, ignored);
     after_repo_change(&home, &gc, &msg);
     Ok(())
 }
