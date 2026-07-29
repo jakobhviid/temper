@@ -22,6 +22,7 @@ pub fn write_config(
     auto_commit: bool,
     auto_push: bool,
     auto_pull: bool,
+    auto_rebase: bool,
 ) -> Result<()> {
     let p = home.join("temper.toml");
     let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
@@ -36,6 +37,7 @@ pub fn write_config(
     git["auto_commit"] = toml_edit::value(auto_commit);
     git["auto_push"] = toml_edit::value(auto_push);
     git["auto_pull"] = toml_edit::value(auto_pull);
+    git["auto_rebase"] = toml_edit::value(auto_rebase);
     std::fs::write(&p, doc.to_string()).with_context(|| format!("writing {}", p.display()))?;
     Ok(())
 }
@@ -124,13 +126,15 @@ pub enum Pull {
     NotRepo,
 }
 
-/// `git pull --ff-only` the home. Never aborts the caller — a failure is a
-/// `Warn` with the reason, so a run continues on a possibly-stale spec.
-pub fn pull_ff(home: &Path) -> Pull {
+/// `git pull` the home — `--rebase` when `rebase`, else `--ff-only` (the safe
+/// default). Never aborts the caller — a failure is a `Warn` with the reason, so
+/// a run continues on a possibly-stale spec.
+pub fn pull(home: &Path, rebase: bool) -> Pull {
     if !is_repo(home) {
         return Pull::NotRepo;
     }
-    match git(home, &["pull", "--ff-only"]) {
+    let mode = if rebase { "--rebase" } else { "--ff-only" };
+    match git(home, &["pull", mode]) {
         Some(o) if o.status.success() => Pull::Ok,
         Some(o) => Pull::Warn(reason(&o.stderr)),
         None => Pull::Warn("could not run git".into()),
@@ -147,9 +151,10 @@ pub struct SaveReport {
 }
 
 /// Stage everything, commit with `message`, and (if `push`) push — pulling
-/// `--ff-only` first so the push isn't rejected. A clean tree is not an error
+/// first (`--rebase` when `rebase`, else `--ff-only`) so the push isn't
+/// rejected by a diverged remote. A clean tree is not an error
 /// (`committed=false`). Errors only on a genuine git failure at commit time.
-pub fn save(home: &Path, message: &str, push: bool) -> Result<SaveReport> {
+pub fn save(home: &Path, message: &str, push: bool, rebase: bool) -> Result<SaveReport> {
     if !is_repo(home) {
         bail!("{} is not a git repo — nothing to save", home.display());
     }
@@ -158,7 +163,7 @@ pub fn save(home: &Path, message: &str, push: bool) -> Result<SaveReport> {
     if !is_dirty(home) {
         // Nothing local to commit; still offer to push if we're ahead.
         if push {
-            if let Pull::Warn(w) = pull_ff(home) {
+            if let Pull::Warn(w) = pull(home, rebase) {
                 warning = Some(w);
             }
             let _ = git(home, &["push"]);
@@ -188,7 +193,7 @@ pub fn save(home: &Path, message: &str, push: bool) -> Result<SaveReport> {
     // Push, pulling first so a diverged remote doesn't reject us.
     let mut pushed = false;
     if push {
-        if let Pull::Warn(w) = pull_ff(home) {
+        if let Pull::Warn(w) = pull(home, rebase) {
             warning = Some(w);
         }
         match git(home, &["push"]) {
@@ -239,6 +244,6 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         assert!(!is_repo(dir.path())); // a plain dir isn't a git repo
         assert!(!is_dirty(dir.path()));
-        assert!(save(dir.path(), "x", false).is_err());
+        assert!(save(dir.path(), "x", false, false).is_err());
     }
 }

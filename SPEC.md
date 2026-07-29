@@ -36,7 +36,9 @@ dest = "assets/speaker-eq"  # default; each <x>.calibrated.conf lands as <x>.con
 remind      = true          # hint whenever any command finds the folder dirty (unless auto_commit)
 auto_commit = false         # commit right after reconcile/backup/eq-import (auto message)
 auto_push   = false         # …and push
-auto_pull   = true          # `git pull --ff-only` before a run; warn (never abort) if it can't
+auto_pull   = true          # `git pull` before a run; warn (never abort) if it can't
+auto_rebase = false         # when auto_pull runs, `--rebase` instead of `--ff-only`
+                            #   (so a pull still lands when local has un-pushed commits)
                             # A `[machine.git]` block wholly overrides this for that machine.
 
 [[machine]]

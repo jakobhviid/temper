@@ -217,19 +217,21 @@ you persist those changes so it doesn't silently drift:
   verbs above *and* the read/apply ones (`drift`, `install`, `update`, `prune`,
   `adopt`, `restore`), so a stray hand edit surfaces whatever you run next:
   `ⓘ steel has uncommitted spec changes — temper save …`.
-- **`temper save`** = `pull --ff-only → add -A → commit → push`, with an
+- **`temper save`** = `pull → add -A → commit → push`, with an
   auto-generated message (`reconcile chronos-redux: +2 -1 ~0`) unless you pass
   `-m "…"`. `--no-push` to hold. Works after hand edits too (message from the
   changed paths).
-- Prefer hands-off? **`temper git enable [--push] [--pull]`** writes `[git]` in
-  temper.toml so temper auto-commits (and optionally pushes, and pulls before a
-  run). `temper git` shows the current state; `temper git disable` reverts to
-  hint-only.
+- Prefer hands-off? **`temper git enable [--push] [--pull] [--rebase]`** writes
+  `[git]` in temper.toml so temper auto-commits (and optionally pushes, and pulls
+  before a run). `--rebase` pulls with `--rebase` instead of `--ff-only` (so a
+  pull still lands when the box has un-pushed local commits); it implies `--pull`.
+  `temper git` shows the current state; `temper git disable` reverts to hint-only.
 - On a **non-git** folder (Nextcloud / USB / plain dir) all of this is a silent
   no-op — syncing that folder is git/Nextcloud's job, not temper's (Principle #9).
 
 `auto_pull` (and `save`'s pre-push pull) keep you from committing onto a stale
 spec; if it can't pull (offline, diverged) it warns and continues — never blocks.
+With `auto_rebase` a diverged local is replayed on top instead of warned past.
 
 ## Fleet: author once, run per-machine
 

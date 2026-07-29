@@ -66,10 +66,27 @@ pub struct GitConfig {
     /// Also push after an auto-commit / on `save`.
     #[serde(default)]
     pub auto_push: bool,
-    /// `git pull --ff-only` the folder before a run (warn, never abort, if it
-    /// can't) so you work on the latest spec.
+    /// `git pull` the folder before a run (warn, never abort, if it can't) so
+    /// you work on the latest spec. Fast-forward-only by default (see
+    /// `auto_rebase`).
     #[serde(default)]
     pub auto_pull: bool,
+    /// When `auto_pull` runs, `git pull --rebase` instead of `--ff-only` — so a
+    /// pull still succeeds when local has commits the remote doesn't (they're
+    /// replayed on top). No effect unless `auto_pull` is on.
+    #[serde(default)]
+    pub auto_rebase: bool,
+}
+
+/// How the pre-run auto-pull should pull, resolved from `[git]`/`[machine.git]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullMode {
+    /// `auto_pull` off — don't pull.
+    Off,
+    /// `git pull --ff-only` (the safe default).
+    FastForward,
+    /// `git pull --rebase` (replay local commits on top of the remote).
+    Rebase,
 }
 
 fn default_true() -> bool {
@@ -83,6 +100,7 @@ impl Default for GitConfig {
             auto_commit: false,
             auto_push: false,
             auto_pull: false,
+            auto_rebase: false,
         }
     }
 }
@@ -441,24 +459,46 @@ pub fn effective_git(fleet: &Option<GitConfig>, machine: &Option<GitConfig>) -> 
 /// say, or a machine that sets `auto_pull` only under `[machine.git]` would
 /// never pull. Any parse trouble → false (pull is opt-in; never let a peek error
 /// block a run).
-pub fn peek_auto_pull(home: &Path) -> bool {
+pub fn peek_pull_mode(home: &Path) -> PullMode {
     std::fs::read_to_string(home.join("temper.toml"))
         .ok()
         .and_then(|s| s.parse::<toml::Value>().ok())
-        .map(|v| auto_pull_from(&v, crate::machine::hostname().as_deref()))
+        .map(|v| pull_mode_from(&v, crate::machine::hostname().as_deref()))
+        .unwrap_or(PullMode::Off)
+}
+
+/// Peek at `[git].auto_rebase` (machine-override-aware) — the pull strategy
+/// `save` uses for its pre-push sync, read cheaply before the validated load so
+/// even a save that fixes a malformed spec still resolves it.
+pub fn peek_auto_rebase(home: &Path) -> bool {
+    std::fs::read_to_string(home.join("temper.toml"))
+        .ok()
+        .and_then(|s| s.parse::<toml::Value>().ok())
+        .map(|v| git_flag_from(&v, crate::machine::hostname().as_deref(), "auto_rebase"))
         .unwrap_or(false)
 }
 
-/// Pure `auto_pull` decision over the raw doc + this host's name. A
-/// `[machine.git]` for the resolved machine replaces the fleet `[git]` outright
-/// (so we do NOT fall back to fleet when it's present) — matching `effective_git`.
-fn auto_pull_from(v: &toml::Value, host: Option<&str>) -> bool {
+/// A boolean `[git]`/`[machine.git]` flag from the raw doc for the resolved
+/// machine. A `[machine.git]` replaces the fleet `[git]` outright (so we do NOT
+/// fall back to fleet when it's present) — matching `effective_git`.
+fn git_flag_from(v: &toml::Value, host: Option<&str>, key: &str) -> bool {
     let git = peek_current_machine(v, host)
         .and_then(|m| m.get("git"))
         .or_else(|| v.get("git"));
-    git.and_then(|g| g.get("auto_pull"))
+    git.and_then(|g| g.get(key))
         .and_then(|b| b.as_bool())
         .unwrap_or(false)
+}
+
+/// Pure pull-mode decision over the raw doc + this host's name.
+fn pull_mode_from(v: &toml::Value, host: Option<&str>) -> PullMode {
+    if !git_flag_from(v, host, "auto_pull") {
+        PullMode::Off
+    } else if git_flag_from(v, host, "auto_rebase") {
+        PullMode::Rebase
+    } else {
+        PullMode::FastForward
+    }
 }
 
 /// The `[[machine]]` table for this host, resolved the way `machine::resolve`
@@ -558,40 +598,66 @@ mod tests {
     }
 
     #[test]
-    fn auto_pull_reads_fleet_git() {
+    fn pull_mode_reads_fleet_git() {
         let v = doc("[git]\nauto_pull = true\n[[machine]]\nname=\"kira\"\nos=\"linux\"\n");
-        assert!(auto_pull_from(&v, Some("kira")));
-        assert!(!auto_pull_from(
-            &doc("[git]\nauto_pull = false\n"),
-            Some("kira")
-        ));
-        assert!(!auto_pull_from(
-            &doc("[[machine]]\nname=\"kira\"\nos=\"linux\"\n"),
-            Some("kira")
-        ));
+        assert_eq!(pull_mode_from(&v, Some("kira")), PullMode::FastForward);
+        assert_eq!(
+            pull_mode_from(&doc("[git]\nauto_pull = false\n"), Some("kira")),
+            PullMode::Off
+        );
+        assert_eq!(
+            pull_mode_from(
+                &doc("[[machine]]\nname=\"kira\"\nos=\"linux\"\n"),
+                Some("kira")
+            ),
+            PullMode::Off
+        );
     }
 
     #[test]
-    fn machine_git_wholly_overrides_fleet_for_auto_pull() {
+    fn pull_mode_rebase_only_when_pull_on() {
+        // auto_rebase alone (pull off) stays Off — rebase has no effect.
+        assert_eq!(
+            pull_mode_from(&doc("[git]\nauto_rebase = true\n"), Some("k")),
+            PullMode::Off
+        );
+        // pull on + rebase on → Rebase.
+        assert_eq!(
+            pull_mode_from(
+                &doc("[git]\nauto_pull = true\nauto_rebase = true\n"),
+                Some("k")
+            ),
+            PullMode::Rebase
+        );
+    }
+
+    #[test]
+    fn machine_git_wholly_overrides_fleet_for_pull_mode() {
         // Machine sets it on though the fleet is off (or silent) → pulls.
         let on = "[git]\nauto_pull = false\n[[machine]]\nname=\"kira\"\nos=\"linux\"\n\
                   [machine.git]\nauto_pull = true\n";
-        assert!(auto_pull_from(&doc(on), Some("kira")));
+        assert_eq!(
+            pull_mode_from(&doc(on), Some("kira")),
+            PullMode::FastForward
+        );
         // …and a matching machine whose `[machine.git]` omits auto_pull is OFF
         // even when the fleet turns it on — the override replaces wholesale.
         // (Two machines so the sole-machine fallback doesn't mask the match.)
         let off = "[git]\nauto_pull = true\n\
                    [[machine]]\nname=\"kira\"\nos=\"linux\"\n[machine.git]\nremind = false\n\
                    [[machine]]\nname=\"other\"\nos=\"linux\"\n";
-        assert!(!auto_pull_from(&doc(off), Some("kira")));
+        assert_eq!(pull_mode_from(&doc(off), Some("kira")), PullMode::Off);
         // A *different* host with no override of its own falls to the fleet.
-        assert!(auto_pull_from(&doc(off), Some("other")));
+        assert_eq!(
+            pull_mode_from(&doc(off), Some("other")),
+            PullMode::FastForward
+        );
     }
 
     #[test]
-    fn auto_pull_sole_machine_fallback_when_host_unknown() {
+    fn pull_mode_sole_machine_fallback_when_host_unknown() {
         let v = doc("[[machine]]\nname=\"only\"\nos=\"linux\"\n[machine.git]\nauto_pull = true\n");
-        assert!(auto_pull_from(&v, None)); // no hostname → sole machine wins
+        assert_eq!(pull_mode_from(&v, None), PullMode::FastForward); // sole machine wins
     }
 
     fn machine(os: &str, role: Option<&str>) -> Machine {

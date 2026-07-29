@@ -197,9 +197,12 @@ enum GitAction {
         /// Also push after each auto-commit and on `save`.
         #[arg(long)]
         push: bool,
-        /// Also `git pull --ff-only` before a run (warns if it can't).
+        /// Also `git pull` before a run (warns if it can't).
         #[arg(long)]
         pull: bool,
+        /// Pull with `--rebase` instead of `--ff-only` (implies `--pull`).
+        #[arg(long)]
+        rebase: bool,
     },
     /// Turn off all git automation (back to hint-only).
     Disable,
@@ -267,12 +270,14 @@ fn run(cli: Cli) -> Result<()> {
 }
 
 /// Save a temper-home as the default (a saved pointer discovery reads).
-/// Find the temper-home, pulling `--ff-only` first when fleet `[git].auto_pull`
-/// is on (so a run works on the latest spec). A pull failure only warns.
+/// Find the temper-home, pulling first when `[git].auto_pull` is on (so a run
+/// works on the latest spec) — `--rebase` if `auto_rebase`, else `--ff-only`. A
+/// pull failure only warns.
 fn find_home_pulling() -> Result<std::path::PathBuf> {
     let home = discovery::find_home()?;
-    if manifest::peek_auto_pull(&home) {
-        if let git::Pull::Warn(w) = git::pull_ff(&home) {
+    let mode = manifest::peek_pull_mode(&home);
+    if mode != manifest::PullMode::Off {
+        if let git::Pull::Warn(w) = git::pull(&home, mode == manifest::PullMode::Rebase) {
             eprintln!(
                 "{} couldn't pull — working on a possibly-stale spec: {w}",
                 ui::yellow("⚠")
@@ -289,7 +294,7 @@ fn after_repo_change(home: &std::path::Path, gc: &manifest::GitConfig, auto_msg:
         return; // dormant on a non-git folder
     }
     if gc.auto_commit {
-        match git::save(home, auto_msg, gc.auto_push) {
+        match git::save(home, auto_msg, gc.auto_push, gc.auto_rebase) {
             Ok(r) => {
                 if r.committed {
                     eprintln!("{} committed: {}", ui::green("✓"), r.message);
@@ -343,7 +348,7 @@ fn cmd_save(message: Option<String>, no_push: bool, json: bool) -> Result<()> {
         anyhow::bail!("{} is not a git repo — nothing to save", home.display());
     }
     let msg = message.unwrap_or_else(|| git::message_from_changes(&home));
-    let r = git::save(&home, &msg, !no_push)?;
+    let r = git::save(&home, &msg, !no_push, manifest::peek_auto_rebase(&home))?;
     if json {
         println!(
             "{}",
@@ -383,14 +388,15 @@ fn cmd_git(action: Option<GitAction>, json: bool) -> Result<()> {
                         "git_repo": is_repo,
                         "status": is_repo.then(|| git::status_line(&home)),
                         "remind": gc.remind, "auto_commit": gc.auto_commit,
-                        "auto_push": gc.auto_push, "auto_pull": gc.auto_pull
+                        "auto_push": gc.auto_push, "auto_pull": gc.auto_pull,
+                        "auto_rebase": gc.auto_rebase
                     })
                 );
             } else if is_repo {
                 println!("{} {}", ui::bold("git:"), git::status_line(&home));
                 println!(
-                    "settings: remind={} auto_commit={} auto_push={} auto_pull={}",
-                    gc.remind, gc.auto_commit, gc.auto_push, gc.auto_pull
+                    "settings: remind={} auto_commit={} auto_push={} auto_pull={} auto_rebase={}",
+                    gc.remind, gc.auto_commit, gc.auto_push, gc.auto_pull, gc.auto_rebase
                 );
             } else {
                 println!(
@@ -399,17 +405,20 @@ fn cmd_git(action: Option<GitAction>, json: bool) -> Result<()> {
                 );
             }
         }
-        Some(GitAction::Enable { push, pull }) => {
-            git::write_config(&home, true, true, push, pull)?;
+        Some(GitAction::Enable { push, pull, rebase }) => {
+            // `--rebase` is a pull strategy, so it implies `--pull`.
+            let pull = pull || rebase;
+            git::write_config(&home, true, true, push, pull, rebase)?;
             println!(
-                "{} git automation enabled (auto_commit{}{})",
+                "{} git automation enabled (auto_commit{}{}{})",
                 ui::green("✓"),
                 if push { " + push" } else { "" },
-                if pull { " + pull" } else { "" }
+                if pull { " + pull" } else { "" },
+                if rebase { " (rebase)" } else { "" }
             );
         }
         Some(GitAction::Disable) => {
-            git::write_config(&home, true, false, false, false)?;
+            git::write_config(&home, true, false, false, false, false)?;
             println!("{} git automation disabled (hint-only)", ui::green("✓"));
         }
     }
