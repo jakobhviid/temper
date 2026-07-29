@@ -116,41 +116,58 @@ pub fn mas_names() -> std::collections::BTreeMap<String, String> {
 }
 
 /// Resolve a brew short name to its `(manager, fully-qualified token name)` via
-/// `brew info`. A **tap** formula/cask resolves to its `user/tap/name` — crucial
-/// for `reconcile`: a bare short token (e.g. `brew "sesh"`) may not match the
-/// installed tap formula in `brew bundle cleanup`, so it stays "undeclared" and
-/// is re-offered forever. `None` if brew can't resolve it (fall back to short).
-pub fn brew_identity(name: &str) -> Option<(Manager, String)> {
-    if !have("brew") {
-        return None;
+/// Resolve short brew names to their fully-qualified identity in **one**
+/// `brew info --json=v2 <name…>` call — a tap formula/cask becomes its
+/// `user/tap/name`. Crucial for `reconcile`: a bare short token (e.g.
+/// `brew "sesh"`) may not match the installed tap formula in `brew bundle
+/// cleanup`, so it stays "undeclared" and is re-offered forever.
+///
+/// Batched on purpose: `brew info` spins up Ruby and evaluates each formula, so
+/// one call per extra made `reconcile` hang for tens of seconds on a machine
+/// with a couple dozen extras — a single call for all of them is ~one call's
+/// cost. Names brew can't resolve are simply absent from the map (caller falls
+/// back to the short name). Casks take precedence over a same-named formula.
+pub fn brew_identities(names: &[&str]) -> std::collections::BTreeMap<String, (Manager, String)> {
+    let mut map = std::collections::BTreeMap::new();
+    if names.is_empty() || !have("brew") {
+        return map;
     }
     let out = Command::new("brew")
-        .args(["info", "--json=v2", name])
-        .output()
-        .ok()?;
+        .args(["info", "--json=v2"])
+        .args(names)
+        .output();
+    let Ok(out) = out else { return map };
     if !out.status.success() {
-        return None;
+        return map;
     }
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    if let Some(t) = v
-        .get("casks")
-        .and_then(|c| c.as_array())
-        .and_then(|a| a.first())
-        .and_then(|c| c.get("full_token"))
-        .and_then(|t| t.as_str())
-    {
-        return Some((Manager::Cask, t.to_string()));
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) else {
+        return map;
+    };
+    // Casks first, then formulae — `or_insert` keeps the cask on a name clash,
+    // matching the old single-name precedence.
+    if let Some(arr) = v.get("casks").and_then(|c| c.as_array()) {
+        for c in arr {
+            if let (Some(tok), Some(full)) = (
+                c.get("token").and_then(|t| t.as_str()),
+                c.get("full_token").and_then(|t| t.as_str()),
+            ) {
+                map.entry(tok.to_string())
+                    .or_insert((Manager::Cask, full.to_string()));
+            }
+        }
     }
-    if let Some(t) = v
-        .get("formulae")
-        .and_then(|c| c.as_array())
-        .and_then(|a| a.first())
-        .and_then(|f| f.get("full_name"))
-        .and_then(|t| t.as_str())
-    {
-        return Some((Manager::Brew, t.to_string()));
+    if let Some(arr) = v.get("formulae").and_then(|f| f.as_array()) {
+        for f in arr {
+            if let (Some(name), Some(full)) = (
+                f.get("name").and_then(|t| t.as_str()),
+                f.get("full_name").and_then(|t| t.as_str()),
+            ) {
+                map.entry(name.to_string())
+                    .or_insert((Manager::Brew, full.to_string()));
+            }
+        }
     }
-    None
+    map
 }
 
 /// Converge the effective set (install-missing; never removes). brew-family

@@ -118,18 +118,28 @@ pub fn plan(
             _ => {} // brew-family handled dependency-aware below
         }
     }
-    for (kind, name) in providers::brew_extras(&effective, ignore)? {
-        // A tap orphan (its formulae migrated to core, so nothing uses it) is
-        // absorbed verbatim as a `tap "user/repo"` line — NOT split to a bogus
-        // short formula name. A formula/cask extra is resolved to its
-        // FULLY-QUALIFIED token via `brew info` so a tap formula round-trips (a
-        // bare short token can be re-offered forever); fall back to a classified
-        // short name if brew can't resolve it.
-        let (m, full) = if kind == Manager::Tap {
-            (Manager::Tap, name)
+    // A tap orphan (its formulae migrated to core, so nothing uses it) is
+    // absorbed verbatim as a `tap "user/repo"` line — NOT split to a bogus short
+    // formula name. Each formula/cask extra is resolved to its FULLY-QUALIFIED
+    // token so a tap formula round-trips (a bare short token can be re-offered
+    // forever) — resolved in ONE batched `brew info` (per-extra calls made this
+    // hang for tens of seconds); fall back to a classified short name if brew
+    // can't resolve it.
+    let brew_extras = providers::brew_extras(&effective, ignore)?;
+    let to_resolve: Vec<&str> = brew_extras
+        .iter()
+        .filter(|(kind, _)| *kind != Manager::Tap)
+        .map(|(_, name)| name.as_str())
+        .collect();
+    let identities = providers::brew_identities(&to_resolve);
+    for (kind, name) in &brew_extras {
+        let (m, full) = if *kind == Manager::Tap {
+            (Manager::Tap, name.clone())
         } else {
-            providers::brew_identity(&name)
-                .unwrap_or_else(|| (classify_brew(&name, &installed), name.clone()))
+            identities
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| (classify_brew(name, &installed), name.clone()))
         };
         adds.push(AddItem {
             manager: m,
