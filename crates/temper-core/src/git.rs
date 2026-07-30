@@ -14,9 +14,9 @@ use anyhow::{bail, Result};
 
 use crate::primitives::which;
 
-/// The `[git]` table is written by `temper configure set git.*` (see
-/// `crate::settings`), which stamps the version too — this module only reads git
-/// state and performs git operations.
+// The `[git]` table is written by `temper configure set git.*` (see
+// `crate::settings`), which stamps the version too — this module only reads git
+// state and performs git operations.
 
 /// The last non-empty line of some git stderr — a terse reason for a warning.
 fn reason(stderr: &[u8]) -> String {
