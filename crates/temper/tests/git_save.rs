@@ -1,6 +1,6 @@
-//! Proves the git convenience layer: `git enable` writes `[git]`, `save` commits
-//! a git-backed home, and a non-git home stays dormant (save errors, no config).
-//! Requires `git` on PATH (present in CI).
+//! Proves the git convenience layer: `configure set git.*` writes `[git]`, `save`
+//! commits a git-backed home, and a non-git home stays dormant (save errors,
+//! `status` reports dormant). Requires `git` on PATH (present in CI).
 
 use std::fs;
 use std::path::Path;
@@ -51,10 +51,14 @@ fn git_home() -> TempDir {
 }
 
 #[test]
-fn git_enable_writes_config_then_disable_clears() {
+fn configure_writes_git_toggles() {
     let h = git_home();
     temper(h.path())
-        .args(["git", "enable", "--push"])
+        .args(["configure", "set", "git.auto_commit", "true"])
+        .assert()
+        .success();
+    temper(h.path())
+        .args(["configure", "set", "git.auto_push", "true"])
         .assert()
         .success();
     let toml = fs::read_to_string(h.path().join("temper.toml")).unwrap();
@@ -62,7 +66,11 @@ fn git_enable_writes_config_then_disable_clears() {
     assert!(toml.contains("auto_commit = true"));
     assert!(toml.contains("auto_push = true"));
 
-    temper(h.path()).args(["git", "disable"]).assert().success();
+    // Turning one back off writes false (unset would drop the line entirely).
+    temper(h.path())
+        .args(["configure", "set", "git.auto_commit", "false"])
+        .assert()
+        .success();
     let toml = fs::read_to_string(h.path().join("temper.toml")).unwrap();
     assert!(toml.contains("auto_commit = false"));
 }
@@ -97,9 +105,9 @@ fn non_git_home_is_dormant() {
         .assert()
         .failure()
         .stderr(predicates::str::contains("not a git repo"));
-    // `git` status reports dormant, doesn't error
+    // `status` reports the home dormant, doesn't error
     temper(plain.path())
-        .arg("git")
+        .arg("status")
         .assert()
         .success()
         .stdout(predicates::str::contains("dormant"));

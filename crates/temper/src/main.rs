@@ -21,7 +21,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
 use temper_core::{
-    discovery, git, journal, machine, manifest, packages, plan, providers, reconcile, ui,
+    discovery, git, journal, machine, manifest, packages, plan, providers, reconcile, settings, ui,
 };
 
 const REPO_URL: &str = "https://github.com/jakobhviid/temper";
@@ -202,29 +202,21 @@ enum Cmd {
         #[arg(long)]
         rebase: bool,
     },
-    /// Show or configure git automation for the home.
+    /// Show the home's state + settings: path, git, resolved machine, update mode.
     ///
-    /// With no subcommand: show whether the home is git, its branch/ahead-behind,
-    /// and the current `[git]` settings. `enable`/`disable` write `[git]` in
-    /// temper.toml so temper can auto-commit (and optionally push/pull) around
-    /// spec-writing verbs.
-    Git {
-        #[command(subcommand)]
-        action: Option<GitAction>,
-    },
-    /// Show the home's git state + settings (alias for `git` with no subcommand).
+    /// Read-only "where do I stand" overview. Reads the fleet-level `[git]` and
+    /// `[update]` settings (change them with `temper configure set`).
     Status,
-    /// Show or set the self-update policy for an out-of-date temper.
+    /// Get/set the home's scalar settings (`[git]` toggles, `[update].mode`).
     ///
-    /// Writes `[update].mode` in temper.toml (comment-preserving). When a folder
-    /// was written by a NEWER temper than the one running, this decides what
-    /// happens: `off` errors plainly, `warn` reports it, `prompt` (default) also
-    /// offers to `brew upgrade temper`, `auto` runs it unattended. Omit the mode
-    /// to show the current setting. Self-update upgrades ONLY temper, never other
-    /// packages, and works on Homebrew installs (macOS + Linuxbrew).
-    Autoupdate {
-        /// off | warn | prompt | auto (omit to show the current setting).
-        mode: Option<String>,
+    /// One validated key/value surface for the fleet-wide automation knobs, e.g.
+    /// `temper configure set git.auto_push true` or `… set update.mode auto`.
+    /// Run `temper configure keys` for the full list. Structured config
+    /// (`[brew].trust`, `[ignore]`, `[vars]`, machines) is hand-edited or managed
+    /// by `reconcile`/`prune`.
+    Configure {
+        #[command(subcommand)]
+        action: ConfigureAction,
     },
     /// Print a shell completion script.
     Completions {
@@ -234,21 +226,36 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
-enum GitAction {
-    /// Turn on auto-commit after a spec-writing verb (optionally push/pull).
-    Enable {
-        /// Also push after each auto-commit and on `save`.
-        #[arg(long)]
-        push: bool,
-        /// Also `git pull` before a run (warns if it can't).
-        #[arg(long)]
-        pull: bool,
-        /// Pull with `--rebase` instead of `--ff-only` (implies `--pull`).
-        #[arg(long)]
-        rebase: bool,
+enum ConfigureAction {
+    /// Set a setting's value (writes temper.toml, comment-preserving).
+    Set {
+        /// The setting key (run `temper configure keys` for the list).
+        #[arg(value_parser = setting_keys())]
+        key: String,
+        /// The value (bools: on/off; update.mode: off|warn|prompt|auto).
+        value: String,
     },
-    /// Turn off all git automation (back to hint-only).
-    Disable,
+    /// Print a setting's current value (bare — composes in scripts).
+    Get {
+        #[arg(value_parser = setting_keys())]
+        key: String,
+    },
+    /// Reset a setting to its default (drop the override).
+    Unset {
+        #[arg(value_parser = setting_keys())]
+        key: String,
+    },
+    /// List every setting with its current value.
+    List,
+    /// List every settable key with a one-line description.
+    Keys,
+}
+
+/// The settable keys, as a clap value-set — validates the `key` argument AND
+/// feeds shell completion (so `temper configure set <TAB>` lists every key).
+/// Sourced from `settings::SETTINGS` so there's one source of truth.
+fn setting_keys() -> clap::builder::PossibleValuesParser {
+    clap::builder::PossibleValuesParser::new(settings::keys())
 }
 
 fn main() -> ExitCode {
@@ -332,9 +339,8 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::EqImport) => cmd_eq_import(json)?,
         Some(Cmd::Save { message, no_push }) => cmd_save(message, no_push, json)?,
         Some(Cmd::Refresh { rebase }) => cmd_refresh(rebase, json)?,
-        Some(Cmd::Git { action }) => cmd_git(action, json)?,
-        Some(Cmd::Status) => cmd_git(None, json)?,
-        Some(Cmd::Autoupdate { mode }) => cmd_autoupdate(mode, json)?,
+        Some(Cmd::Status) => cmd_status(json)?,
+        Some(Cmd::Configure { action }) => cmd_configure(action, json)?,
         Some(Cmd::Setup { dir }) => cmd_setup(dir, json)?,
     }
     Ok(())
@@ -646,96 +652,130 @@ fn cmd_refresh(rebase: bool, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// Show or configure the home's git automation.
-fn cmd_git(action: Option<GitAction>, json: bool) -> Result<()> {
+/// Read-only "where do I stand" overview: home path + git state, the resolved
+/// machine, the fleet `[git]` settings, and the `[update]` self-update policy.
+fn cmd_status(json: bool) -> Result<()> {
     let home = discovery::find_home()?;
-    match action {
-        None => {
-            let is_repo = git::is_repo(&home);
-            let ft = load_fleet(&home)?;
-            let gc = manifest::effective_git(&ft.git, &None);
-            if json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "git_repo": is_repo,
-                        "status": is_repo.then(|| git::status_line(&home)),
-                        "remind": gc.remind, "auto_commit": gc.auto_commit,
-                        "auto_push": gc.auto_push, "auto_pull": gc.auto_pull,
-                        "auto_rebase": gc.auto_rebase
-                    })
-                );
-            } else if is_repo {
-                println!("{} {}", ui::bold("git:"), git::status_line(&home));
-                println!(
-                    "settings: remind={} auto_commit={} auto_push={} auto_pull={} auto_rebase={}",
-                    gc.remind, gc.auto_commit, gc.auto_push, gc.auto_pull, gc.auto_rebase
-                );
-            } else {
-                println!(
-                    "{} not a git repo — git automation is dormant.",
-                    home.display()
-                );
-            }
-        }
-        Some(GitAction::Enable { push, pull, rebase }) => {
-            // `--rebase` is a pull strategy, so it implies `--pull`.
-            let pull = pull || rebase;
-            git::write_config(&home, true, true, push, pull, rebase)?;
-            println!(
-                "{} git automation enabled (auto_commit{}{}{})",
-                ui::green("✓"),
-                if push { " + push" } else { "" },
-                if pull { " + pull" } else { "" },
-                if rebase { " (rebase)" } else { "" }
-            );
-        }
-        Some(GitAction::Disable) => {
-            git::write_config(&home, true, false, false, false, false)?;
-            println!("{} git automation disabled (hint-only)", ui::green("✓"));
-        }
-    }
-    Ok(())
-}
-
-/// Show or set `[update].mode` — the self-update policy for an out-of-date temper.
-fn cmd_autoupdate(mode: Option<String>, json: bool) -> Result<()> {
-    let home = discovery::find_home()?;
-    if let Some(m) = mode {
-        manifest::set_update_mode(&home, &m)?; // validates the value
-        if json {
-            println!("{}", serde_json::json!({ "update_mode": m }));
-        } else {
-            println!("{} autoupdate mode: {}", ui::green("✓"), ui::bold(&m));
-        }
-        return Ok(());
-    }
-    // No mode → show the current setting (+ whether self-update can run here).
-    let src = std::fs::read_to_string(home.join("temper.toml")).unwrap_or_default();
-    let cur = manifest::peek_update_mode(&src);
-    let name = format!("{cur:?}").to_lowercase();
+    let is_repo = git::is_repo(&home);
+    // load_fleet (wrapper) is skew-aware; a version skew surfaces here too.
+    let ft = load_fleet(&home)?;
+    let machine = machine::resolve(&ft, None).ok();
+    // `configure`-managed fleet settings, as a key→value map.
+    let sets: std::collections::BTreeMap<&str, String> = settings::list(&home).into_iter().collect();
     let brew = installed_via_brew();
+    // A `[machine.git]` override means the fleet `[git]` shown here isn't the
+    // whole story for this machine — say so rather than mislead.
+    let machine_git_override = machine.as_ref().map(|m| m.git.is_some()).unwrap_or(false);
+
     if json {
         println!(
             "{}",
-            serde_json::json!({ "update_mode": name, "homebrew": brew })
+            serde_json::json!({
+                "home": home.display().to_string(),
+                "git_repo": is_repo,
+                "git_status": is_repo.then(|| git::status_line(&home)),
+                "machine": machine.as_ref().map(|m| serde_json::json!({
+                    "name": m.name, "os": m.os, "role": m.role
+                })),
+                "settings": sets,
+                "machine_git_override": machine_git_override,
+                "homebrew": brew,
+            })
         );
+        return Ok(());
+    }
+
+    let git_state = if is_repo {
+        git::status_line(&home)
     } else {
-        let blurb = match cur {
-            manifest::UpdateMode::Off => "ignore the version stamp — a skew errors plainly",
-            manifest::UpdateMode::Warn => "report a newer-temper folder + show the upgrade command",
-            manifest::UpdateMode::Prompt => "…and offer to run it (Homebrew installs)",
-            manifest::UpdateMode::Auto => "…and run `brew upgrade temper -y` without asking",
-        };
-        println!("autoupdate mode: {}  {}", ui::bold(&name), ui::dim(&format!("({blurb})")));
-        println!(
-            "  Homebrew install: {}",
-            if brew { ui::green("yes") } else { ui::dim("no") }
-        );
-        println!(
-            "  set with: {}",
-            ui::bold("temper autoupdate <off|warn|prompt|auto>")
-        );
+        ui::dim("not a git repo — git automation dormant").to_string()
+    };
+    println!("{:<9}{}  {}", ui::bold("home:"), home.display(), ui::dim(&format!("({git_state})")));
+    match &machine {
+        Some(m) => {
+            let role = m.role.as_deref().map(|r| format!(", {r}")).unwrap_or_default();
+            println!("{:<9}{}  {}", ui::bold("machine:"), m.name, ui::dim(&format!("({}{role})", m.os)));
+        }
+        None => println!("{:<9}{}", ui::bold("machine:"), ui::dim("unresolved (name it, or check [[machine]])")),
+    }
+    let g = |k: &str| sets.get(k).map(String::as_str).unwrap_or("?");
+    let override_note = if machine_git_override {
+        ui::dim("  (this machine overrides [git] via [machine.git])").to_string()
+    } else {
+        String::new()
+    };
+    println!(
+        "{:<9}remind={} auto_commit={} auto_push={} auto_pull={} auto_rebase={}{}",
+        ui::bold("git:"),
+        g("git.remind"),
+        g("git.auto_commit"),
+        g("git.auto_push"),
+        g("git.auto_pull"),
+        g("git.auto_rebase"),
+        override_note,
+    );
+    println!(
+        "{:<9}mode={}  {}",
+        ui::bold("update:"),
+        g("update.mode"),
+        ui::dim(&format!("(Homebrew install: {})", if brew { "yes" } else { "no" }))
+    );
+    println!("{}", ui::dim("change settings with: temper configure set <key> <value>  ·  keys: temper configure keys"));
+    Ok(())
+}
+
+/// Get/set/unset/list the home's scalar settings (`[git]` toggles, `[update].mode`).
+fn cmd_configure(action: ConfigureAction, json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    match action {
+        ConfigureAction::Set { key, value } => {
+            let display = settings::set(&home, &key, &value)?;
+            if json {
+                println!("{}", serde_json::json!({ "key": key, "value": display }));
+            } else {
+                println!("{} {} = {}", ui::green("✓"), key, ui::bold(&display));
+            }
+        }
+        ConfigureAction::Get { key } => {
+            let v = settings::get(&home, &key)?;
+            if json {
+                println!("{}", serde_json::json!({ "key": key, "value": v }));
+            } else {
+                println!("{v}"); // bare — composes in scripts
+            }
+        }
+        ConfigureAction::Unset { key } => {
+            settings::unset(&home, &key)?;
+            if json {
+                println!("{}", serde_json::json!({ "unset": key }));
+            } else {
+                println!("{} unset {} (back to default)", ui::green("✓"), key);
+            }
+        }
+        ConfigureAction::List => {
+            let items = settings::list(&home);
+            if json {
+                let map: std::collections::BTreeMap<_, _> = items.into_iter().collect();
+                println!("{}", serde_json::json!(map));
+            } else {
+                for (k, v) in items {
+                    println!("  {k} = {v}");
+                }
+            }
+        }
+        ConfigureAction::Keys => {
+            if json {
+                let arr: Vec<_> = settings::SETTINGS
+                    .iter()
+                    .map(|s| serde_json::json!({ "key": s.key, "description": s.desc }))
+                    .collect();
+                println!("{}", serde_json::json!(arr));
+            } else {
+                for s in settings::SETTINGS {
+                    println!("  {:<16} {}", s.key, ui::dim(s.desc));
+                }
+            }
+        }
     }
     Ok(())
 }

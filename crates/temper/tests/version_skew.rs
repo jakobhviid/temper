@@ -109,34 +109,105 @@ fn parse_ok_but_newer_stamp_nudges_then_continues() {
 }
 
 #[test]
-fn autoupdate_sets_and_rejects_the_mode() {
+fn configure_sets_gets_and_rejects() {
     let home = TempDir::new().unwrap();
     let fake = TempDir::new().unwrap();
     let state = TempDir::new().unwrap();
     let tt = home.path().join("temper.toml");
     fs::write(&tt, "# fleet\n[vars]\nEDITOR = \"hx\"\n").unwrap();
 
-    // A bad value names itself and changes nothing.
+    // Unknown key is rejected by clap, listing the valid keys (discoverability).
     temper(home.path(), fake.path(), state.path())
-        .args(["autoupdate", "nope"])
+        .args(["configure", "set", "bogus.key", "on"])
         .assert()
         .failure()
-        .stderr(predicates::str::contains("expected off | warn | prompt | auto"));
+        .stderr(predicates::str::contains("possible values").and(predicates::str::contains("update.mode")));
 
-    // A good value is written (comment-preserving) and stamps the version.
+    // Bad value for a known key names the domain.
     temper(home.path(), fake.path(), state.path())
-        .args(["autoupdate", "auto"])
+        .args(["configure", "set", "update.mode", "nope"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("off | warn | prompt | auto"));
+
+    // Good sets are written (comment-preserving) and stamp the version.
+    temper(home.path(), fake.path(), state.path())
+        .args(["configure", "set", "git.auto_push", "true"])
+        .assert()
+        .success();
+    temper(home.path(), fake.path(), state.path())
+        .args(["configure", "set", "update.mode", "auto"])
         .assert()
         .success();
     let after = fs::read_to_string(&tt).unwrap();
+    assert!(after.contains("[git]") && after.contains("auto_push = true"));
     assert!(after.contains("[update]") && after.contains("mode = \"auto\""));
-    assert!(after.contains("temper_version =")); // stamped on write
+    assert!(after.contains("temper_version =")); // stamped
     assert!(after.contains("# fleet") && after.contains("EDITOR = \"hx\"")); // preserved
 
-    // Showing the mode reports what we set.
+    // `get` prints the bare value (composes in scripts); bools show on/off.
     temper(home.path(), fake.path(), state.path())
-        .arg("autoupdate")
+        .args(["configure", "get", "git.auto_push"])
         .assert()
         .success()
-        .stdout(predicates::str::contains("autoupdate mode: auto"));
+        .stdout(predicates::str::diff("on\n"));
+
+    // `unset` reverts to default.
+    temper(home.path(), fake.path(), state.path())
+        .args(["configure", "unset", "git.auto_push"])
+        .assert()
+        .success();
+    temper(home.path(), fake.path(), state.path())
+        .args(["configure", "get", "git.auto_push"])
+        .assert()
+        .success()
+        .stdout(predicates::str::diff("off\n"));
+}
+
+#[test]
+fn status_shows_home_machine_and_settings() {
+    let home = TempDir::new().unwrap();
+    let fake = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    // A sole machine resolves regardless of hostname, so a static name is fine.
+    fs::write(
+        home.path().join("temper.toml"),
+        format!(
+            "[[machine]]\nname = \"box\"\nos = \"{}\"\n[update]\nmode = \"warn\"\n",
+            os()
+        ),
+    )
+    .unwrap();
+
+    temper(home.path(), fake.path(), state.path())
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("home:"))
+        .stdout(predicates::str::contains("git:"))
+        .stdout(predicates::str::contains("update:"))
+        .stdout(predicates::str::contains("mode=warn"));
+}
+
+#[test]
+fn completions_expose_every_configure_key() {
+    // The keys MUST be shell-completable or nobody finds them. clap's
+    // PossibleValuesParser puts them in the generated script.
+    let home = TempDir::new().unwrap();
+    let fake = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    for key in [
+        "git.remind",
+        "git.auto_commit",
+        "git.auto_push",
+        "git.auto_pull",
+        "git.auto_rebase",
+        "update.mode",
+    ] {
+        temper(home.path(), fake.path(), state.path())
+            .args(["completions", "zsh"])
+            .assert()
+            .success()
+            .stdout(predicates::str::contains(key));
+    }
 }

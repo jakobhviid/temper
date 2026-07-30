@@ -10,41 +10,13 @@
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Result};
 
 use crate::primitives::which;
 
-/// Write the `[git]` table in `temper.toml` (comment-preserving, toml_edit).
-/// Backs `temper git enable/disable`.
-pub fn write_config(
-    home: &Path,
-    remind: bool,
-    auto_commit: bool,
-    auto_push: bool,
-    auto_pull: bool,
-    auto_rebase: bool,
-) -> Result<()> {
-    let p = home.join("temper.toml");
-    let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
-    let mut doc: toml_edit::DocumentMut = s.parse().context("parsing temper.toml")?;
-    let git = doc
-        .as_table_mut()
-        .entry("git")
-        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| anyhow!("[git] in temper.toml is not a table"))?;
-    git["remind"] = toml_edit::value(remind);
-    git["auto_commit"] = toml_edit::value(auto_commit);
-    git["auto_push"] = toml_edit::value(auto_push);
-    git["auto_pull"] = toml_edit::value(auto_pull);
-    git["auto_rebase"] = toml_edit::value(auto_rebase);
-    // Record the temper that wrote this file (so an older temper elsewhere can
-    // tell a version skew from a typo). String-based to keep the stamp a leading
-    // root key, never mis-nested under the `[git]` table we just wrote.
-    let out = crate::manifest::stamp_version(&doc.to_string())?;
-    std::fs::write(&p, out).with_context(|| format!("writing {}", p.display()))?;
-    Ok(())
-}
+/// The `[git]` table is written by `temper configure set git.*` (see
+/// `crate::settings`), which stamps the version too — this module only reads git
+/// state and performs git operations.
 
 /// The last non-empty line of some git stderr — a terse reason for a warning.
 fn reason(stderr: &[u8]) -> String {

@@ -99,10 +99,10 @@ tweaks). *(RIS: `just update`, which deliberately excludes gnome-restore.)*
 > folder came from a newer temper) from a genuine typo. On a skew it says so —
 > and, on a Homebrew install (macOS or Linuxbrew), offers to run
 > `brew upgrade temper` and re-run your command, instead of dumping a cryptic
-> `unknown field` error. Tune this with `temper autoupdate <off|warn|prompt|auto>`
-> (writes `[update].mode`; default `prompt`). `auto` upgrades unattended —
-> **only temper**, never your other packages. (`temper upgrade` is an alias for
-> `temper update`.)
+> `unknown field` error. Tune this with
+> `temper configure set update.mode <off|warn|prompt|auto>` (default `prompt`).
+> `auto` upgrades unattended — **only temper**, never your other packages.
+> (`temper upgrade` is an alias for `temper update`.)
 
 ## 3. The drift loop (the core habit)
 
@@ -244,11 +244,13 @@ you persist those changes so it doesn't silently drift:
   you never have to find it or `cd` in just to grab a fleet change. Explicit, so
   it pulls even when `auto_pull` is off; `--rebase` (or `[git].auto_rebase`)
   rebases instead of fast-forward. A non-git home just says so.
-- Prefer hands-off? **`temper git enable [--push] [--pull] [--rebase]`** writes
-  `[git]` in temper.toml so temper auto-commits (and optionally pushes, and pulls
-  before a run). `--rebase` pulls with `--rebase` instead of `--ff-only` (so a
-  pull still lands when the box has un-pushed local commits); it implies `--pull`.
-  `temper git` shows the current state; `temper git disable` reverts to hint-only.
+- Prefer hands-off? Turn on the `[git]` toggles so temper auto-commits (and
+  optionally pushes, and pulls before a run):
+  **`temper configure set git.auto_commit true`** (then `git.auto_push`,
+  `git.auto_pull`, and `git.auto_rebase` — the last makes `auto_pull` use
+  `--rebase` instead of `--ff-only`, so a pull still lands when the box has
+  un-pushed local commits). `temper configure list` shows the current values;
+  `temper configure unset git.auto_commit` reverts a toggle to its default.
 - On a **non-git** folder (Nextcloud / USB / plain dir) all of this is a silent
   no-op — syncing that folder is git/Nextcloud's job, not temper's (Principle #9).
 
@@ -259,8 +261,9 @@ With `auto_rebase` a diverged local is replayed on top instead of warned past.
 **Per-run override.** `auto_pull` is the persistent default; two global flags
 override it for a single run on **any** verb: **`--pull`** forces a pull even
 when `auto_pull` is off (handy after a known fleet change), and **`--no-pull`**
-skips it even when on (handy offline). **`temper status`** (= `temper git` with
-no subcommand) shows the home's git state + `[git]` settings.
+skips it even when on (handy offline). **`temper status`** shows the home's
+state + settings in one view: path, git state, resolved machine, `[git]` toggles,
+and the `[update]` self-update mode.
 
 The whole git surface, then, is symmetric: **pull** = `auto_pull` (default) ·
 `--pull`/`--no-pull` (per-run) · `temper refresh` (explicit); **push** =

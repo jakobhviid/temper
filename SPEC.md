@@ -39,7 +39,7 @@ repo = "https://github.com/…/pipewire-speaker-profiles"
 dest = "assets/speaker-eq"  # default; each <x>.calibrated.conf lands as <x>.conf
 
 [git]                       # optional; convenience for a GIT-backed home (no-op
-                            #   on a non-git folder). Toggle via `temper git enable/disable`.
+                            #   on a non-git folder). Set via `temper configure set git.*`.
 remind      = true          # hint whenever any command finds the folder dirty (unless auto_commit)
 auto_commit = false         # commit right after reconcile/backup/eq-import (auto message)
 auto_push   = false         # …and push
@@ -59,6 +59,7 @@ mode = "prompt"             # off | warn | prompt (default) | auto
                             #   fails and (unless off) becomes an upgrade offer instead of a
                             #   cryptic `unknown field` error. If it still parses, temper nudges
                             #   and carries on. A taken upgrade re-runs your command.
+                            # Set via `temper configure set update.mode <…>`.
 
 [[machine]]
 name     = "chronos"        # required; resolved against `hostname -s`

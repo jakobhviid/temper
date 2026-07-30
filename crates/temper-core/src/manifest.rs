@@ -541,28 +541,6 @@ pub fn stamp_version(src: &str) -> Result<String> {
     }
 }
 
-/// Write `[update].mode` in temper.toml (comment-preserving, toml_edit) — backs
-/// `temper autoupdate <mode>`. Validates the value against `UpdateMode` so a typo
-/// names itself instead of silently writing junk. Also (re)stamps the version.
-pub fn set_update_mode(home: &Path, mode: &str) -> Result<()> {
-    if !matches!(mode, "off" | "warn" | "prompt" | "auto") {
-        anyhow::bail!("unknown update mode '{mode}' — expected off | warn | prompt | auto");
-    }
-    let p = home.join("temper.toml");
-    let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
-    let mut doc: toml_edit::DocumentMut = s.parse().context("parsing temper.toml")?;
-    let update = doc
-        .as_table_mut()
-        .entry("update")
-        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| anyhow::anyhow!("[update] in temper.toml is not a table"))?;
-    update["mode"] = toml_edit::value(mode);
-    let out = stamp_version(&doc.to_string())?;
-    std::fs::write(&p, out).with_context(|| format!("writing {}", p.display()))?;
-    Ok(())
-}
-
 /// The load-time error raised when a folder was written by a temper NEWER than
 /// the one running: the strict parse choked on a field/value this build doesn't
 /// know, AND the `temper_version` stamp confirms it's a version skew (not a
