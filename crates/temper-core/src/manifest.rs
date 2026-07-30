@@ -33,6 +33,16 @@ pub struct TemperToml {
     /// to a git home). A `[machine.git]` overrides this per machine.
     #[serde(default)]
     pub git: Option<GitConfig>,
+    /// What to do when this folder was written by a temper NEWER than the one
+    /// running (detected via the `temper_version` stamp below). See `[update]`.
+    #[serde(default)]
+    pub update: UpdateConfig,
+    /// The temper version that last WROTE this file — temper stamps it on every
+    /// write (`stamp_version`). On load, a stamp newer than the running temper
+    /// drives `[update]`. Managed: hand-editing it is pointless (temper rewrites
+    /// it), but it parses so a stamped folder round-trips cleanly.
+    #[serde(default)]
+    pub temper_version: Option<String>,
 }
 
 /// `[eq_import]` — fetch calibrated speaker profiles into the folder (authoring,
@@ -103,6 +113,36 @@ impl Default for GitConfig {
             auto_rebase: false,
         }
     }
+}
+
+/// `[update]` — what temper does when this folder was written by a temper NEWER
+/// than the one running (a version skew, detected via the `temper_version`
+/// stamp). The check itself is free and fleet-friendly: a newer machine stamps
+/// the folder, an older one notices on the next command.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateConfig {
+    /// `off` | `warn` | `prompt` (default) | `auto` — see `UpdateMode`.
+    #[serde(default)]
+    pub mode: UpdateMode,
+}
+
+/// What to do on a newer-temper skew. `prompt` is the default: explain, and on a
+/// Homebrew install offer to run the upgrade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateMode {
+    /// Ignore the stamp entirely — a skew errors plainly, like any other parse
+    /// failure. (The escape hatch if you never want temper touching Homebrew.)
+    Off,
+    /// Report the skew and print the upgrade command; never touch Homebrew.
+    Warn,
+    /// Report it and, on a Homebrew install, interactively offer to run
+    /// `brew upgrade temper`. The default.
+    #[default]
+    Prompt,
+    /// Run the Homebrew upgrade without asking (unattended machines).
+    Auto,
 }
 
 /// `[brew]` settings.
@@ -422,18 +462,178 @@ pub struct JsonSemantic {
     pub against: String,
 }
 
-pub fn load_fleet(home: &Path) -> Result<TemperToml> {
+/// This build's temper version. Both workspace crates set `version.workspace`,
+/// so this equals the running CLI's `--version`. Stamped into `temper.toml` on
+/// every write, and compared against a file's stamp on load.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Numeric `(major, minor, patch)` of a version string, ignoring any
+/// `-pre`/`+build` suffix. Unparseable parts → 0, so a version we can't read
+/// never spuriously compares as "newer".
+fn version_triple(s: &str) -> (u64, u64, u64) {
+    let core = s.trim().split(['-', '+']).next().unwrap_or("");
+    let mut it = core.split('.').map(|p| p.trim().parse::<u64>().unwrap_or(0));
+    (
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+    )
+}
+
+/// Is `candidate` a strictly newer temper than `running`? (Both `major.minor.patch`.)
+pub fn version_is_newer(candidate: &str, running: &str) -> bool {
+    version_triple(candidate) > version_triple(running)
+}
+
+/// The `temper_version` stamp from a raw temper.toml, read leniently — a file
+/// whose *strict* parse just failed still yields its stamp, which is exactly the
+/// case that needs it. Any trouble → None.
+pub fn peek_version_stamp(src: &str) -> Option<String> {
+    src.parse::<toml::Value>()
+        .ok()?
+        .get("temper_version")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// `[update].mode`, read leniently from a raw temper.toml (needed on the
+/// parse-failure path, where the strict load is unavailable). Unset/unreadable →
+/// the default (`prompt`).
+pub fn peek_update_mode(src: &str) -> UpdateMode {
+    src.parse::<toml::Value>()
+        .ok()
+        .and_then(|v| {
+            v.get("update")
+                .and_then(|u| u.get("mode"))
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
+        .and_then(|s| match s.as_str() {
+            "off" => Some(UpdateMode::Off),
+            "warn" => Some(UpdateMode::Warn),
+            "prompt" => Some(UpdateMode::Prompt),
+            "auto" => Some(UpdateMode::Auto),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// Stamp `temper_version = VERSION` at the top level of a temper.toml, preserving
+/// comments/formatting (toml_edit). Updates an existing stamp in place, else
+/// prepends it as a leading root key (valid before any `[table]`). **Monotonic**:
+/// a stamp already recording a NEWER temper is left untouched — stamping *down*
+/// would erase the very signal an older temper needs to spot the skew. Idempotent
+/// otherwise, so a git home sees no diff until temper itself is upgraded.
+pub fn stamp_version(src: &str) -> Result<String> {
+    if let Some(existing) = peek_version_stamp(src) {
+        if version_is_newer(&existing, VERSION) {
+            return Ok(src.to_string()); // never stamp a newer folder down
+        }
+    }
+    let mut doc: toml_edit::DocumentMut = src
+        .parse()
+        .context("parsing temper.toml for version stamp")?;
+    if doc.as_table().contains_key("temper_version") {
+        doc["temper_version"] = toml_edit::value(VERSION);
+        Ok(doc.to_string())
+    } else {
+        Ok(format!("temper_version = \"{VERSION}\"\n{src}"))
+    }
+}
+
+/// Write `[update].mode` in temper.toml (comment-preserving, toml_edit) — backs
+/// `temper autoupdate <mode>`. Validates the value against `UpdateMode` so a typo
+/// names itself instead of silently writing junk. Also (re)stamps the version.
+pub fn set_update_mode(home: &Path, mode: &str) -> Result<()> {
+    if !matches!(mode, "off" | "warn" | "prompt" | "auto") {
+        anyhow::bail!("unknown update mode '{mode}' — expected off | warn | prompt | auto");
+    }
     let p = home.join("temper.toml");
     let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
-    let ft: TemperToml = toml::from_str(&s).with_context(|| format!("parsing {}", p.display()))?;
-    // Reject duplicate machine names — otherwise the second silently shadows.
+    let mut doc: toml_edit::DocumentMut = s.parse().context("parsing temper.toml")?;
+    let update = doc
+        .as_table_mut()
+        .entry("update")
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("[update] in temper.toml is not a table"))?;
+    update["mode"] = toml_edit::value(mode);
+    let out = stamp_version(&doc.to_string())?;
+    std::fs::write(&p, out).with_context(|| format!("writing {}", p.display()))?;
+    Ok(())
+}
+
+/// The load-time error raised when a folder was written by a temper NEWER than
+/// the one running: the strict parse choked on a field/value this build doesn't
+/// know, AND the `temper_version` stamp confirms it's a version skew (not a
+/// typo). Carries what the CLI needs to explain the upgrade — and, per
+/// `[update].mode`, offer to run it. See `crates/temper/src/main.rs`.
+#[derive(Debug)]
+pub struct NewerVersion {
+    /// The `temper_version` stamped in the file (the temper that wrote it).
+    pub required: String,
+    /// The running temper (`VERSION`).
+    pub running: String,
+    /// Resolved `[update].mode`.
+    pub mode: UpdateMode,
+    /// The underlying strict-parse error, for the detail line.
+    pub parse_error: String,
+}
+
+impl std::fmt::Display for NewerVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "this temper-home was written by temper {} — you're running {}. \
+             Upgrade temper to read it (`brew upgrade temper`). (parser: {})",
+            self.required, self.running, self.parse_error
+        )
+    }
+}
+
+impl std::error::Error for NewerVersion {}
+
+/// Reject duplicate machine names — otherwise the second silently shadows.
+fn reject_duplicate_machines(ft: &TemperToml) -> Result<()> {
     let mut seen = std::collections::HashSet::new();
     for m in &ft.machine {
         if !seen.insert(m.name.to_lowercase()) {
             anyhow::bail!("duplicate machine name '{}' in temper.toml", m.name);
         }
     }
-    Ok(ft)
+    Ok(())
+}
+
+pub fn load_fleet(home: &Path) -> Result<TemperToml> {
+    let p = home.join("temper.toml");
+    let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
+    match toml::from_str::<TemperToml>(&s) {
+        Ok(ft) => {
+            reject_duplicate_machines(&ft)?;
+            Ok(ft)
+        }
+        // Couldn't parse. Version skew (a newer temper's field) or a genuine
+        // mistake? The stamp decides: a stamp newer than us (with the check on)
+        // becomes a `NewerVersion` the CLI can offer to fix; anything else is the
+        // plain parse error the author needs to see.
+        Err(e) => {
+            let mode = peek_update_mode(&s);
+            if mode != UpdateMode::Off {
+                if let Some(stamp) = peek_version_stamp(&s) {
+                    if version_is_newer(&stamp, VERSION) {
+                        return Err(NewerVersion {
+                            required: stamp,
+                            running: VERSION.to_string(),
+                            mode,
+                            parse_error: e.to_string(),
+                        }
+                        .into());
+                    }
+                }
+            }
+            Err(e).with_context(|| format!("parsing {}", p.display()))
+        }
+    }
 }
 
 pub fn load_bundle(home: &Path, name: &str) -> Result<Bundle> {
@@ -703,5 +903,98 @@ mod tests {
         assert!(toml::from_str::<Ignore>("flatpak = []\n").is_ok());
         assert!(toml::from_str::<ContainsLine>("file = \"x\"\nlyne = \"y\"\n").is_err());
         assert!(toml::from_str::<ContainsLine>("file = \"x\"\nline = \"y\"\n").is_ok());
+    }
+
+    #[test]
+    fn version_ordering_is_numeric_and_lenient() {
+        assert!(version_is_newer("1.41.0", "1.40.0"));
+        assert!(version_is_newer("2.0.0", "1.99.99"));
+        assert!(version_is_newer("1.40.10", "1.40.9")); // numeric, not lexical
+        assert!(!version_is_newer("1.40.0", "1.40.0")); // equal is not newer
+        assert!(!version_is_newer("1.39.0", "1.40.0"));
+        // pre-release / build suffixes are ignored (core parts compared)
+        assert!(!version_is_newer("1.40.0-rc1", "1.40.0"));
+        // garbage parses to 0.0.0 → never spuriously newer
+        assert!(!version_is_newer("not-a-version", "1.0.0"));
+    }
+
+    #[test]
+    fn peek_stamp_and_mode_are_lenient() {
+        // Both peeks must survive a file that FAILS the strict parse (unknown
+        // field) — that's the whole point.
+        let broken = "temper_version = \"9.9.9\"\n[update]\nmode = \"warn\"\nfuture_field = 1\n";
+        assert_eq!(peek_version_stamp(broken).as_deref(), Some("9.9.9"));
+        assert_eq!(peek_update_mode(broken), UpdateMode::Warn);
+        // Absent → None / default(prompt).
+        assert_eq!(peek_version_stamp("[vars]\nA=\"b\"\n"), None);
+        assert_eq!(peek_update_mode("[vars]\nA=\"b\"\n"), UpdateMode::Prompt);
+        // Truly malformed TOML → None / default (never panics).
+        assert_eq!(peek_version_stamp("= = ="), None);
+        assert_eq!(peek_update_mode("= = ="), UpdateMode::Prompt);
+    }
+
+    #[test]
+    fn update_mode_parses_and_rejects_unknown() {
+        let ok: TemperToml = toml::from_str("[update]\nmode = \"auto\"\n").unwrap();
+        assert_eq!(ok.update.mode, UpdateMode::Auto);
+        // default when the table/field is absent
+        let def: TemperToml = toml::from_str("[vars]\nA=\"b\"\n").unwrap();
+        assert_eq!(def.update.mode, UpdateMode::Prompt);
+        // an unknown mode value is a parse error (names itself)
+        assert!(toml::from_str::<TemperToml>("[update]\nmode = \"sometimes\"\n").is_err());
+        // an unknown [update] sub-field errors (deny_unknown_fields)
+        assert!(toml::from_str::<TemperToml>("[update]\nnope = true\n").is_err());
+        // a stamped folder round-trips (the stamp is a known field now)
+        assert!(toml::from_str::<TemperToml>("temper_version = \"1.2.3\"\n").is_ok());
+    }
+
+    #[test]
+    fn stamp_is_prepended_updated_and_monotonic() {
+        // Absent → prepended as a leading root key (survives a re-parse).
+        let src = "[vars]\nEDITOR = \"hx\"\n";
+        let stamped = stamp_version(src).unwrap();
+        assert!(stamped.starts_with(&format!("temper_version = \"{VERSION}\"\n")));
+        assert_eq!(peek_version_stamp(&stamped).as_deref(), Some(VERSION));
+        assert!(stamped.contains("EDITOR = \"hx\"")); // original content preserved
+
+        // Present-and-equal → byte-for-byte no-op (no git churn).
+        assert_eq!(stamp_version(&stamped).unwrap(), stamped);
+
+        // Present-and-NEWER → left untouched (never stamp down).
+        let newer = "temper_version = \"999.0.0\"\n[vars]\nA = \"b\"\n";
+        assert_eq!(stamp_version(newer).unwrap(), newer);
+    }
+
+    #[test]
+    fn load_fleet_distinguishes_skew_from_typo() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let write = |body: &str| {
+            let mut f = std::fs::File::create(dir.path().join("temper.toml")).unwrap();
+            f.write_all(body.as_bytes()).unwrap();
+        };
+
+        // Unknown field + a NEWER stamp → NewerVersion (a version issue).
+        write("temper_version = \"999.0.0\"\nfuture_field = true\n");
+        let err = load_fleet(dir.path()).unwrap_err();
+        let nv = err.downcast_ref::<NewerVersion>().expect("should be NewerVersion");
+        assert_eq!(nv.required, "999.0.0");
+        assert_eq!(nv.mode, UpdateMode::Prompt);
+
+        // Same unknown field but mode = off → plain parse error, not NewerVersion.
+        write("temper_version = \"999.0.0\"\nfuture_field = true\n[update]\nmode = \"off\"\n");
+        let err = load_fleet(dir.path()).unwrap_err();
+        assert!(err.downcast_ref::<NewerVersion>().is_none());
+
+        // Unknown field with NO newer stamp → genuine TOML issue → plain error.
+        write("future_field = true\n");
+        let err = load_fleet(dir.path()).unwrap_err();
+        assert!(err.downcast_ref::<NewerVersion>().is_none());
+
+        // A clean, current-stamped folder loads fine.
+        write(&format!(
+            "temper_version = \"{VERSION}\"\n[[machine]]\nname = \"m\"\nos = \"linux\"\n"
+        ));
+        assert!(load_fleet(dir.path()).is_ok());
     }
 }

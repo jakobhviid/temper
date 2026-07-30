@@ -38,7 +38,11 @@ pub fn write_config(
     git["auto_push"] = toml_edit::value(auto_push);
     git["auto_pull"] = toml_edit::value(auto_pull);
     git["auto_rebase"] = toml_edit::value(auto_rebase);
-    std::fs::write(&p, doc.to_string()).with_context(|| format!("writing {}", p.display()))?;
+    // Record the temper that wrote this file (so an older temper elsewhere can
+    // tell a version skew from a typo). String-based to keep the stamp a leading
+    // root key, never mis-nested under the `[git]` table we just wrote.
+    let out = crate::manifest::stamp_version(&doc.to_string())?;
+    std::fs::write(&p, out).with_context(|| format!("writing {}", p.display()))?;
     Ok(())
 }
 

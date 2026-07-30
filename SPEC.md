@@ -10,6 +10,12 @@ asset files they reference.
 ## `temper.toml`
 
 ```toml
+temper_version = "1.42.0"   # optional/MANAGED: the temper that last WROTE this file.
+                            #   temper stamps it on every write (monotonic — never
+                            #   lowered). On load, a stamp NEWER than the running temper
+                            #   means the folder came from a newer temper — see [update].
+                            #   Hand-editing is pointless (temper rewrites it).
+
 [vars]                      # optional: GLOBAL template variables, {{ var "X" }}
 EDITOR = "hx"
 
@@ -41,6 +47,18 @@ auto_pull   = true          # `git pull` before a run; warn (never abort) if it 
 auto_rebase = false         # when auto_pull runs, `--rebase` instead of `--ff-only`
                             #   (so a pull still lands when local has un-pushed commits)
                             # A `[machine.git]` block wholly overrides this for that machine.
+
+[update]                    # optional; what to do when this folder was written by a
+                            #   NEWER temper than the one running (via temper_version).
+mode = "prompt"             # off | warn | prompt (default) | auto
+                            #   off:    ignore the stamp — a skew errors plainly
+                            #   warn:   report the skew + print the upgrade command
+                            #   prompt: also OFFER to run it on a Homebrew install (mac/Linux)
+                            #   auto:   run `brew update && brew upgrade temper -y` unattended
+                            # If the newer temper added a field this one can't parse, the load
+                            #   fails and (unless off) becomes an upgrade offer instead of a
+                            #   cryptic `unknown field` error. If it still parses, temper nudges
+                            #   and carries on. A taken upgrade re-runs your command.
 
 [[machine]]
 name     = "chronos"        # required; resolved against `hostname -s`

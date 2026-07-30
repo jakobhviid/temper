@@ -89,6 +89,7 @@ enum Cmd {
     ///
     /// Re-apply the `always` config steps and upgrade declared packages
     /// (`brew upgrade` + `flatpak update`). Does not add newly-declared apps.
+    #[command(alias = "upgrade")]
     Update,
     /// Show what's out of sync (read-only), with the commands to fix it.
     ///
@@ -213,6 +214,18 @@ enum Cmd {
     },
     /// Show the home's git state + settings (alias for `git` with no subcommand).
     Status,
+    /// Show or set the self-update policy for an out-of-date temper.
+    ///
+    /// Writes `[update].mode` in temper.toml (comment-preserving). When a folder
+    /// was written by a NEWER temper than the one running, this decides what
+    /// happens: `off` errors plainly, `warn` reports it, `prompt` (default) also
+    /// offers to `brew upgrade temper`, `auto` runs it unattended. Omit the mode
+    /// to show the current setting. Self-update upgrades ONLY temper, never other
+    /// packages, and works on Homebrew installs (macOS + Linuxbrew).
+    Autoupdate {
+        /// off | warn | prompt | auto (omit to show the current setting).
+        mode: Option<String>,
+    },
     /// Print a shell completion script.
     Completions {
         /// The shell to generate for.
@@ -258,12 +271,25 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let cli = Cli::parse();
+    let _ = JSON.set(cli.json);
     if let Err(e) = run(cli) {
+        // A folder written by a NEWER temper gets a tailored path (and, per
+        // `[update].mode`, an offer to self-update) instead of the raw parser
+        // error. `handle_skew` may not return — on a taken update it re-execs.
+        if let Some(nv) = e.downcast_ref::<manifest::NewerVersion>() {
+            handle_skew(&nv.required, nv.mode, true, Some(&nv.parse_error));
+            return ExitCode::FAILURE;
+        }
         eprintln!("error: {e:#}");
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
 }
+
+/// The global `--json` flag, stashed for `handle_skew` (which fires from deep in
+/// a command, or from `main`'s error path, and must stay silent/non-interactive
+/// under `--json`). Set once at startup.
+static JSON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 /// The per-run pull override from the global `--pull`/`--no-pull` flags:
 /// `Some(true)` = force, `Some(false)` = skip, `None` = follow `[git].auto_pull`.
@@ -308,6 +334,7 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Refresh { rebase }) => cmd_refresh(rebase, json)?,
         Some(Cmd::Git { action }) => cmd_git(action, json)?,
         Some(Cmd::Status) => cmd_git(None, json)?,
+        Some(Cmd::Autoupdate { mode }) => cmd_autoupdate(mode, json)?,
         Some(Cmd::Setup { dir }) => cmd_setup(dir, json)?,
     }
     Ok(())
@@ -336,6 +363,157 @@ fn find_home_pulling() -> Result<std::path::PathBuf> {
         }
     }
     Ok(home)
+}
+
+/// Load the fleet manifest, layering the newer-temper check over the core parse.
+/// A parse *failure* caused by a version skew surfaces as `manifest::NewerVersion`
+/// (handled in `main`); a *successful* parse of a folder that a newer temper
+/// nonetheless wrote still gets the `[update]` treatment here — outdated is
+/// outdated — but the command carries on afterwards (it parsed, so it works).
+fn load_fleet(home: &std::path::Path) -> Result<manifest::TemperToml> {
+    let ft = manifest::load_fleet(home)?;
+    if let Ok(src) = std::fs::read_to_string(home.join("temper.toml")) {
+        if let Some(stamp) = manifest::peek_version_stamp(&src) {
+            let mode = manifest::peek_update_mode(&src);
+            if mode != manifest::UpdateMode::Off && manifest::version_is_newer(&stamp, manifest::VERSION)
+            {
+                // Not blocked (it parsed) — offer/auto per mode, then continue.
+                handle_skew(&stamp, mode, false, None);
+            }
+        }
+    }
+    Ok(ft)
+}
+
+/// Explain a "written by a newer temper" skew and act on `[update].mode`. Shared
+/// by the blocked path (parse failed — `main`) and the unblocked one (parse ok —
+/// `load_fleet`). May not return: on a taken Homebrew upgrade it re-execs the
+/// fresh binary. `mode` is never `Off` here (callers gate on it).
+fn handle_skew(
+    required: &str,
+    mode: manifest::UpdateMode,
+    blocked: bool,
+    parse_error: Option<&str>,
+) {
+    let running = manifest::VERSION;
+    eprintln!(
+        "{} this temper-home was written by temper {} — you're running {running}.",
+        ui::yellow("⚠"),
+        ui::bold(required)
+    );
+    if let Some(pe) = parse_error {
+        eprintln!("  it uses something this version can't parse:");
+        eprintln!("    {}", ui::dim(pe));
+    }
+
+    let json = JSON.get().copied().unwrap_or(false);
+    let brew = installed_via_brew();
+    let already_tried = std::env::var_os("TEMPER_SELF_UPDATED").is_some();
+    // Only actually run the upgrade when we can: a Homebrew install, not already
+    // retried this run, and not under --json (no interactive/noisy work there).
+    let do_update = brew
+        && !already_tried
+        && !json
+        && match mode {
+            manifest::UpdateMode::Auto => true,
+            manifest::UpdateMode::Prompt => {
+                io::stdin().is_terminal()
+                    && prompt_yes(&format!(
+                        "\nUpdate temper now via Homebrew ({})?",
+                        ui::bold("brew upgrade temper")
+                    ))
+            }
+            _ => false, // warn (off never reaches here)
+        };
+
+    if do_update {
+        match self_update() {
+            Ok(()) => reexec_after_update(), // replaces this process on success
+            Err(e) => eprintln!("{} self-update failed: {e:#}", ui::yellow("⚠")),
+        }
+    }
+
+    // Didn't (or couldn't) update — leave the user a way forward.
+    if already_tried {
+        eprintln!(
+            "\n{} already updated once this run — temper {} may not be on Homebrew yet.",
+            ui::cyan("ⓘ"),
+            required
+        );
+    } else if brew {
+        eprintln!(
+            "\nUpgrade with: {}",
+            ui::bold("brew update && brew upgrade temper -y")
+        );
+    } else {
+        eprintln!("\nUpgrade temper (see {REPO_URL}) to match the folder.");
+    }
+    if blocked {
+        eprintln!("{} this version can't read the folder until then.", ui::dim("·"));
+    }
+}
+
+/// Whether the running temper is a Homebrew install (macOS **or** Linuxbrew): its
+/// symlink-resolved path sits under a `/Cellar/`, and `brew` is on PATH to run
+/// the upgrade.
+fn installed_via_brew() -> bool {
+    let under_cellar = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .map(|p| p.to_string_lossy().contains("/Cellar/"))
+        .unwrap_or(false);
+    under_cellar && brew_on_path()
+}
+
+fn brew_on_path() -> bool {
+    std::process::Command::new("brew")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// `brew update && brew upgrade temper -y`, inheriting stdio so the user sees
+/// Homebrew's progress. `-y` skips Homebrew's newer confirmation prompt.
+fn self_update() -> Result<()> {
+    use std::process::Command;
+    eprintln!("{} brew update …", ui::cyan("→"));
+    if !Command::new("brew").arg("update").status()?.success() {
+        anyhow::bail!("`brew update` failed");
+    }
+    eprintln!("{} brew upgrade temper …", ui::cyan("→"));
+    if !Command::new("brew")
+        .args(["upgrade", "temper", "-y"])
+        .status()?
+        .success()
+    {
+        anyhow::bail!("`brew upgrade temper` failed");
+    }
+    Ok(())
+}
+
+/// Re-run the original command with the freshly-upgraded binary (found via PATH,
+/// since the old Cellar path is gone after the upgrade). A `TEMPER_SELF_UPDATED`
+/// sentinel stops a loop if the required version isn't on Homebrew yet. Only
+/// returns if it can't exec.
+fn reexec_after_update() {
+    eprintln!("{} updated — re-running…\n", ui::green("✓"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let err = std::process::Command::new("temper")
+            .args(&args)
+            .env("TEMPER_SELF_UPDATED", "1")
+            .exec();
+        eprintln!(
+            "{} couldn't re-run automatically ({err}) — re-run your command.",
+            ui::yellow("⚠")
+        );
+    }
+    #[cfg(not(unix))]
+    eprintln!("updated — re-run your command.");
 }
 
 /// After a spec-writing verb, either auto-commit (per `[git]`) or hint. A no-op
@@ -474,7 +652,7 @@ fn cmd_git(action: Option<GitAction>, json: bool) -> Result<()> {
     match action {
         None => {
             let is_repo = git::is_repo(&home);
-            let ft = manifest::load_fleet(&home)?;
+            let ft = load_fleet(&home)?;
             let gc = manifest::effective_git(&ft.git, &None);
             if json {
                 println!(
@@ -516,6 +694,48 @@ fn cmd_git(action: Option<GitAction>, json: bool) -> Result<()> {
             git::write_config(&home, true, false, false, false, false)?;
             println!("{} git automation disabled (hint-only)", ui::green("✓"));
         }
+    }
+    Ok(())
+}
+
+/// Show or set `[update].mode` — the self-update policy for an out-of-date temper.
+fn cmd_autoupdate(mode: Option<String>, json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    if let Some(m) = mode {
+        manifest::set_update_mode(&home, &m)?; // validates the value
+        if json {
+            println!("{}", serde_json::json!({ "update_mode": m }));
+        } else {
+            println!("{} autoupdate mode: {}", ui::green("✓"), ui::bold(&m));
+        }
+        return Ok(());
+    }
+    // No mode → show the current setting (+ whether self-update can run here).
+    let src = std::fs::read_to_string(home.join("temper.toml")).unwrap_or_default();
+    let cur = manifest::peek_update_mode(&src);
+    let name = format!("{cur:?}").to_lowercase();
+    let brew = installed_via_brew();
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "update_mode": name, "homebrew": brew })
+        );
+    } else {
+        let blurb = match cur {
+            manifest::UpdateMode::Off => "ignore the version stamp — a skew errors plainly",
+            manifest::UpdateMode::Warn => "report a newer-temper folder + show the upgrade command",
+            manifest::UpdateMode::Prompt => "…and offer to run it (Homebrew installs)",
+            manifest::UpdateMode::Auto => "…and run `brew upgrade temper -y` without asking",
+        };
+        println!("autoupdate mode: {}  {}", ui::bold(&name), ui::dim(&format!("({blurb})")));
+        println!(
+            "  Homebrew install: {}",
+            if brew { ui::green("yes") } else { ui::dim("no") }
+        );
+        println!(
+            "  set with: {}",
+            ui::bold("temper autoupdate <off|warn|prompt|auto>")
+        );
     }
     Ok(())
 }
@@ -597,7 +817,7 @@ fn save_and_report(target: &std::path::Path, json: bool) -> Result<()> {
 /// Folder-authoring: fetch calibrated speaker profiles into the folder.
 fn cmd_eq_import(json: bool) -> Result<()> {
     let home = find_home_pulling()?;
-    let ft = manifest::load_fleet(&home)?;
+    let ft = load_fleet(&home)?;
     let cfg = ft.eq_import.ok_or_else(|| {
         anyhow::anyhow!(
             "no [eq_import] in temper.toml — add `repo = \"...\"` (and optional `dest`) to import"
@@ -638,7 +858,7 @@ fn cmd_install(
     verbose: bool,
 ) -> Result<()> {
     let home = find_home_pulling()?;
-    let ft = manifest::load_fleet(&home)?;
+    let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
 
     // A live install with an *explicit* name that isn't this host is a footgun:
@@ -728,7 +948,7 @@ fn announce_skipped(skipped: &[String]) {
 
 fn cmd_update(json: bool, verbose: bool) -> Result<()> {
     let home = find_home_pulling()?;
-    let ft = manifest::load_fleet(&home)?;
+    let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
     let vars = manifest::effective_vars(&ft.vars, &m);
     let r = plan::run_update(&home, &m, &vars, &ft.brew.trust, verbose)?;
@@ -754,7 +974,7 @@ fn cmd_update(json: bool, verbose: bool) -> Result<()> {
 
 fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
     let home = find_home_pulling()?;
-    let ft = manifest::load_fleet(&home)?;
+    let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
     let vars = manifest::effective_vars(&ft.vars, &m);
     let items = plan::run_drift(&home, &m, &vars, &ft.ignore, &ft.brew.trust)?;
@@ -906,7 +1126,7 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
 
 fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
     let home = find_home_pulling()?;
-    let ft = manifest::load_fleet(&home)?;
+    let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
     let gc = manifest::effective_git(&ft.git, &m.git);
     // Inner body has several early returns; the closure lets the dirty-spec nudge
@@ -992,7 +1212,7 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
 
 fn cmd_backup(machine: Option<String>, json: bool) -> Result<()> {
     let home = find_home_pulling()?;
-    let ft = manifest::load_fleet(&home)?;
+    let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
     let r = plan::run_backup(&home, &m)?;
     let dconf: Vec<String> = r.dconf.iter().map(|p| p.display().to_string()).collect();
@@ -1026,7 +1246,7 @@ fn cmd_backup(machine: Option<String>, json: bool) -> Result<()> {
 
 fn cmd_adopt(json: bool) -> Result<()> {
     let home = find_home_pulling()?;
-    let ft = manifest::load_fleet(&home)?;
+    let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
     let extras = plan::run_adopt(&home, &m, &ft.ignore)?;
     if json {
@@ -1066,7 +1286,7 @@ fn cmd_adopt(json: bool) -> Result<()> {
 /// prompts for nothing.
 fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
     let home = find_home_pulling()?;
-    let ft = manifest::load_fleet(&home)?;
+    let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
     let plan = reconcile::plan(&home, &m, &ft.ignore, &ft.brew.trust)?;
 
@@ -1264,6 +1484,9 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
         for tap in &chosen_tap_ignores {
             tt = reconcile::append_ignore(&tt, "tap", tap)?;
         }
+        // Stamp the temper that wrote this file, so a skew is later distinguishable
+        // from a genuine parse error (monotonic — never lowers a newer stamp).
+        tt = manifest::stamp_version(&tt)?;
         if tt != before_tt {
             jrnl.record_write(&tt_path, Some(before_tt.as_bytes()), tt.as_bytes())?;
             std::fs::write(&tt_path, tt)?;
@@ -1291,7 +1514,7 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
 /// desktop state); `--yes` or `--json` skips the prompt.
 fn cmd_restore(machine: Option<String>, yes: bool, json: bool) -> Result<()> {
     let home = find_home_pulling()?;
-    let ft = manifest::load_fleet(&home)?;
+    let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
     let gc = manifest::effective_git(&ft.git, &m.git);
     // Inner body has several early returns; the closure lets the dirty-spec nudge

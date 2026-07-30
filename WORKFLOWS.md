@@ -93,6 +93,16 @@ tweaks). *(RIS: `just update`, which deliberately excludes gnome-restore.)*
 > the whole manifest, breaking that machine's entire converge, not just the step.
 > So a new field (a new `setkey` backend, `template`, `append`, …) sets a version
 > *floor*: bump temper everywhere first, and note the floor in the commit/recipe.
+>
+> temper helps you catch this: it stamps `temper_version` into `temper.toml` on
+> every write, so a box running an older temper can tell a *version skew* (the
+> folder came from a newer temper) from a genuine typo. On a skew it says so —
+> and, on a Homebrew install (macOS or Linuxbrew), offers to run
+> `brew upgrade temper` and re-run your command, instead of dumping a cryptic
+> `unknown field` error. Tune this with `temper autoupdate <off|warn|prompt|auto>`
+> (writes `[update].mode`; default `prompt`). `auto` upgrades unattended —
+> **only temper**, never your other packages. (`temper upgrade` is an alias for
+> `temper update`.)
 
 ## 3. The drift loop (the core habit)
 
