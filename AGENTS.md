@@ -54,3 +54,11 @@ commit **subject prefix** decides the bump:
 So **pick the right commit-subject prefix for the change** and the release version
 follows automatically. Never hand-edit `version` in `Cargo.toml` to release — CI
 computes and stamps it.
+
+**Green-gate before you push, or no release is cut.** The release job first runs
+`cargo clippy --workspace --all-targets -- -D warnings` and the test suite; if
+either fails, the push does **not** publish — the intended version simply never
+appears (a stale binary keeps installing). `cargo build`/`cargo test` alone is
+not enough — **clippy is the gate** (warnings are errors), so run
+`cargo clippy --workspace --all-targets -- -D warnings` locally before every
+push. (There is deliberately **no** `cargo fmt` gate — don't add one.)
