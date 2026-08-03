@@ -365,6 +365,10 @@ pub fn upgrade(verbose: bool) -> Result<()> {
     if have("brew") {
         let mut cmd = Command::new("brew");
         cmd.arg("upgrade");
+        // `-y` skips Homebrew 6.0+'s upgrade confirmation prompt: the user already
+        // consented by running `temper converge`/`temper update`, and a prompt here
+        // would stall an otherwise-unattended converge.
+        cmd.arg("-y");
         // Quiet by default: suppress the per-formula progress spam (an up-to-date
         // machine should be near-silent). `--verbose` keeps brew's full output.
         if !verbose {
