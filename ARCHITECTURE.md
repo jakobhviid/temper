@@ -81,6 +81,15 @@ The bar is "as readable as a Brewfile." The CLI carries the `amdl` house style:
 `--json` on every command, an `--llm` guide, a global `-v/--verbose`,
 journaled `undo`, human output to stdout / progress + errors to stderr.
 
+A long converge is the one place that house style needs help: hushing the package
+managers is right (nobody needs 200 "Using x" lines), but silence for the twenty
+minutes it takes to pour `llvm` and `mactex` reads as a hang. So the quiet path
+**captures** the manager's output and renders a `grove`-style spinner naming the
+package in flight, replaying the whole log if the converge fails and surfacing
+warnings even when it succeeds. temper reads Homebrew's `ohai` lines
+(`==> Installing …`, `==> Pouring …`) purely as a progress feed — never as a
+source of truth about what is installed; that always comes from a probe.
+
 ---
 
 ## Two scopes
@@ -289,6 +298,15 @@ assumed:
 - **Privilege** — a step may declare it needs `sudo` (the `/etc/1password/…`
   edits, `rpm-ostree`). `plan` shows it; `undo`/journal semantics for privileged
   system mutations are best-effort and labeled as such.
+- **One password per run** — root is needed in several unrelated places (a
+  pkg-based cask's installer, a `sysfile` write, `rpm-ostree`), each of which
+  would otherwise prompt on its own schedule, minutes apart, because sudo's
+  timestamp expires during the downloads between them. A mutating run therefore
+  determines up front whether it needs root at all (`providers::casks_needing_root`
+  — a batched cask-artifact query over just the packages this run would touch),
+  asks **once** with a reason if so, and keeps the timestamp warm for the duration
+  (`sudo::keep_alive`, a `sudo -n -v` refresh that can never itself prompt).
+  Nothing needed → no prompt; `--dry-run` and every read-only verb never ask.
 - **Secrets / env** — a step may declare env vars / a `secrets/` source to pass
   through (the `ACOUSTID_KEY` amdl case). The private folder makes a `secrets/`
   dir viable; this is the mechanism that consumes it.

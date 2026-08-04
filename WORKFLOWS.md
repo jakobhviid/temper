@@ -47,13 +47,31 @@ live tweaks). *(RIS: `bootstrap.sh` → `just install` → `just gnome-restore`.
 `install`/`update` are **quiet by default** — the underlying tools are hushed
 (`brew bundle`/`brew upgrade` `--quiet`, mas's Spotlight-reindex noise muted, and
 already-installed App Store apps skipped) so you see installs, changes, warnings,
-and errors, not a wall of "already OK". Your own **`exec` scripts are hushed the
-same way**: their output is captured and stays hidden on success (so an
-idempotent script's "nothing to do" chatter can't masquerade as temper's own
-verdict), and is surfaced only if the script fails. Pass **`-v`/`--verbose`** (a
-global flag, like `--json`) to stream every tool's — and every `exec`'s — full
-output when debugging. (An idempotent `exec` that re-runs each `update` should
-carry a `check` hook so it's skipped, not just hushed, when already in sync.)
+and errors, not a wall of "already OK". Quiet is not silent: the package phase
+shows a **spinner naming the package being installed right now**
+(`⠹ Installing llvm`, and `⠹ Installing Xcode 3/49` for the one-at-a-time App
+Store apps), so a multi-GB download reads as progress instead of a hang. The
+tool's own output is captured and **replayed in full if the converge fails**;
+Homebrew's warnings (with their bodies, which carry the remedy) print even on
+success. Your own **`exec` scripts are hushed the same way**: their output is
+captured and stays hidden on success (so an idempotent script's "nothing to do"
+chatter can't masquerade as temper's own verdict), and is surfaced only if the
+script fails. Pass **`-v`/`--verbose`** (a global flag, like `--json`) to stream
+every tool's — and every `exec`'s — full output instead of the spinner when
+debugging. (An idempotent `exec` that re-runs each `update` should carry a `check`
+hook so it's skipped, not just hushed, when already in sync.)
+
+**One password per run.** Some casks install through a system installer
+(`mactex`, `zoom`, `dotnet-sdk`, …) and need root. Homebrew asks per cask, and
+because sudo's timestamp expires (5 min by default) during the multi-GB downloads
+in between, a big converge used to prompt over and over, hours apart. temper now
+checks up front whether this run will touch any such package, names them, and
+asks **once** before anything downloads — then holds the timestamp open for the
+rest of the run. Nothing to ask for means no prompt at all: a converged machine,
+a spec with no pkg-based casks, and every read-only verb stay password-free, and
+so does `--dry-run`. Set `TEMPER_NO_SUDO_KEEPALIVE=1` to opt out (you'll get
+Homebrew's per-cask prompts back). App Store prompts are Apple's own and can't be
+cached this way — `mas` may still ask per app.
 
 **How temper finds the folder (why it "just knows where steel is").** temper
 resolves its home in this order, first hit wins: `$TEMPER_DIR` → walk up from the

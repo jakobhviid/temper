@@ -572,6 +572,22 @@ pub fn run_install(
 
     // Phase 1 — packages (aggregate converge; inert without declared packages).
     let effective = packages::effective_set(home, machine)?;
+    // One password for the whole run. Homebrew needs root once per pkg-based cask
+    // and prompts for each — minutes apart, since sudo's timestamp expires during
+    // the multi-GB downloads in between. So: find out up front whether root is
+    // needed at all, ask once here (at the keyboard, before anything downloads),
+    // and hold the timestamp open for the rest of the run.
+    let _sudo = (!dry_run).then(|| {
+        let root = providers::casks_needing_root(&effective);
+        if !root.is_empty() {
+            crate::sudo::acquire(&format!(
+                "{} package(s) install with a system installer and need your password: {}",
+                root.len(),
+                root.join(", ")
+            ));
+        }
+        crate::sudo::keep_alive()
+    });
     if !dry_run {
         providers::trust_taps(brew_trust, verbose)?;
     }
@@ -703,6 +719,10 @@ pub fn run_prune(
 /// bundle cleanup` keeps a declared package's transitive deps. A no-op on an
 /// empty plan.
 pub fn commit_prune(home: &Path, machine: &Machine, plan: &PrunePlan) -> Result<()> {
+    // Uninstalling a pkg-based cask needs root per cask, same as installing one.
+    // No `acquire` here: the plan is already confirmed and brew asks in its own
+    // words on the first one — this just stops it asking again for the rest.
+    let _sudo = crate::sudo::keep_alive();
     if !plan.packages.is_empty() {
         let effective = packages::effective_set(home, machine)?;
         providers::prune_apply(&effective, &plan.packages)?;
@@ -797,6 +817,18 @@ pub fn run_update(
     verbose: bool,
 ) -> Result<InstallReport> {
     let effective = packages::effective_set(home, machine)?;
+    // Same one-password-per-run deal as `install`: upgrading a pkg-based cask
+    // needs root just like installing it, and `sysfile` steps below shell out to
+    // `sudo install`. Ask once, up front, only if something actually needs it.
+    let root = providers::casks_needing_root(&effective);
+    if !root.is_empty() {
+        crate::sudo::acquire(&format!(
+            "{} package(s) upgrade with a system installer and need your password: {}",
+            root.len(),
+            root.join(", ")
+        ));
+    }
+    let _sudo = crate::sudo::keep_alive();
     if !effective.is_empty() {
         providers::trust_taps(brew_trust, verbose)?;
         providers::upgrade(verbose)?;

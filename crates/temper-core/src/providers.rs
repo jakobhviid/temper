@@ -13,8 +13,9 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 
@@ -170,6 +171,196 @@ pub fn brew_identities(names: &[&str]) -> std::collections::BTreeMap<String, (Ma
     map
 }
 
+/// The label a progress spinner should show for a line of Homebrew output, or
+/// `None` for a line that names no single package. Pure → unit-tested, because
+/// this is the one place temper reads Homebrew's human output as a data feed and
+/// a wrong guess shows the user the wrong package name.
+///
+/// `brew bundle` itself prints nothing per entry unless `--verbose` (see
+/// `bundle/brew.rb`), so the signal we key on is the *nested* `brew install`'s
+/// own `ohai` lines — those are printed unconditionally. Lines naming a *list*
+/// ("Installing dependencies for x: a, b", "Fetching downloads for: a, b") are
+/// deliberately `None`: each item in them arrives again on its own line, and
+/// showing the list would just flash unreadably.
+fn brew_progress_label(line: &str) -> Option<String> {
+    let rest = line.trim().strip_prefix("==> ")?;
+    // "Installing llvm dependency: xz" — the dep is what's building right now.
+    if let Some((_, dep)) = rest.split_once(" dependency: ") {
+        return Some(dep.trim().to_string());
+    }
+    if rest.starts_with("Installing dependencies for ") || rest.starts_with("Fetching downloads for")
+    {
+        return None; // a list — its members each get their own line
+    }
+    for prefix in ["Installing Cask ", "Installing ", "Fetching "] {
+        if let Some(x) = rest.strip_prefix(prefix) {
+            return Some(x.trim().to_string());
+        }
+    }
+    // "Pouring llvm--22.1.8.arm64_tahoe.bottle.tar.gz" → the formula name.
+    if let Some(x) = rest.strip_prefix("Pouring ") {
+        let name = x.split_once("--").map_or(x, |(n, _)| n);
+        return Some(name.trim().to_string());
+    }
+    // "Running installer for mactex; your password may be necessary."
+    if let Some(x) = rest.strip_prefix("Running installer for ") {
+        return Some(x.split(';').next().unwrap_or(x).trim().to_string());
+    }
+    None
+}
+
+/// Whether a captured line *starts* something worth surfacing even on a
+/// successful run — the capture-and-replay-on-failure pattern would otherwise
+/// swallow Homebrew's advisories, which the streamed (`--verbose`) path showed.
+fn is_noteworthy(line: &str) -> bool {
+    let l = line.trim_start();
+    l.starts_with("Warning:") || l.starts_with("Error:")
+}
+
+/// The lines to surface from a *successful* run: every `Warning:`/`Error:` line
+/// **plus its body**. Homebrew's advisories are multi-line blocks whose body
+/// carries the remedy —
+///
+/// ```text
+/// Warning: Formulae dependency graph sorting found a circular dependency:
+///   libtiff, webp
+/// This is usually caused by stale dependency data in installed keg tabs.
+/// If it persists, run the following commands and try again:
+///   brew update
+/// ```
+///
+/// — so first-line-only would print a problem with its fix cut off. A block runs
+/// until a blank line or the next `==>` progress line (which is Homebrew moving
+/// on to the next package, not part of the advisory).
+fn noteworthy_lines(log: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut in_block = false;
+    for line in log.lines() {
+        if is_noteworthy(line) {
+            in_block = true;
+        } else if line.trim().is_empty() || line.trim_start().starts_with("==> ") {
+            in_block = false;
+        }
+        if in_block {
+            out.push(line);
+        }
+    }
+    out
+}
+
+/// Run a `brew bundle` (or any converge child) with its output captured, driving
+/// a spinner off the package names it announces. Returns the merged log on
+/// failure so the caller can replay everything it swallowed.
+///
+/// Quiet by default is the repo-wide convention (exec steps, `brew upgrade`), but
+/// a silent 40-minute converge reads as a hang — so the spinner shows *which*
+/// package is being worked on right now, and warnings still print.
+fn run_with_spinner(mut cmd: Command, initial: &str) -> Result<(bool, String)> {
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().context("spawning brew bundle")?;
+    let stdout = child.stdout.take().context("piped stdout")?;
+    let stderr = child.stderr.take().context("piped stderr")?;
+
+    // stderr is drained on its own thread: a full pipe buffer on either stream
+    // would deadlock the child while we block reading the other.
+    let errs = std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = BufReader::new(stderr).read_to_string(&mut buf);
+        buf
+    });
+
+    let pb = crate::ui::spinner(initial);
+    let mut log = String::new();
+    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        if let Some(label) = brew_progress_label(&line) {
+            pb.set_message(format!("Installing {label}"));
+        }
+        log.push_str(&line);
+        log.push('\n');
+    }
+    let ok = child.wait().context("waiting for brew bundle")?.success();
+    let log = format!("{log}{}", errs.join().unwrap_or_default());
+    pb.finish_and_clear();
+
+    if ok {
+        for line in noteworthy_lines(&log) {
+            eprintln!("{line}"); // stderr: keeps `--json` clean
+        }
+    }
+    Ok((ok, log))
+}
+
+/// The casks in `effective` that Homebrew will need **root** for — those with a
+/// `pkg` or `installer` artifact (`mactex`, `zoom`, `dotnet-sdk`, …) — and that
+/// this run would actually touch (not installed, or installed but outdated).
+/// Empty on a converged machine, without brew, or when no declared cask needs
+/// root, so the caller never asks for a password speculatively.
+///
+/// Batched into one `brew info --json=v2 --cask` over just the candidates: on an
+/// already-converged machine the candidate list is empty and this costs nothing
+/// beyond two cheap list calls.
+pub fn casks_needing_root(effective: &[Pkg]) -> Vec<String> {
+    if !have("brew") {
+        return Vec::new();
+    }
+    let declared: Vec<&str> = effective
+        .iter()
+        .filter(|p| p.manager == Manager::Cask)
+        .map(|p| p.name.as_str())
+        .collect();
+    if declared.is_empty() {
+        return Vec::new();
+    }
+    let installed: HashSet<String> = run_lines("brew", &["list", "--cask"])
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let outdated: HashSet<String> = run_lines("brew", &["outdated", "--cask", "--quiet"])
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    // A tap-qualified token (`user/tap/x`) is listed by brew under its short name.
+    let short = |n: &str| n.rsplit('/').next().unwrap_or(n).to_string();
+    let candidates: Vec<String> = declared
+        .iter()
+        .filter(|n| {
+            let s = short(n);
+            !installed.contains(&s) || outdated.contains(&s)
+        })
+        .map(|n| n.to_string())
+        .collect();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let out = Command::new("brew")
+        .args(["info", "--json=v2", "--cask"])
+        .args(&candidates)
+        .output();
+    let Ok(out) = out else { return Vec::new() };
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) else {
+        return Vec::new();
+    };
+    let mut need = Vec::new();
+    for c in v.get("casks").and_then(|c| c.as_array()).into_iter().flatten() {
+        let roots = c
+            .get("artifacts")
+            .and_then(|a| a.as_array())
+            .is_some_and(|arts| {
+                arts.iter().any(|a| {
+                    a.get("pkg").is_some() || a.get("installer").is_some()
+                })
+            });
+        if roots {
+            if let Some(t) = c.get("token").and_then(|t| t.as_str()) {
+                need.push(t.to_string());
+            }
+        }
+    }
+    need.sort();
+    need
+}
+
 /// Converge the effective set (install-missing; never removes). brew-family
 /// packages go through one materialized Brewfile + `brew bundle`; flatpaks are
 /// installed by id. `dry_run` performs no mutation. Returns the number of
@@ -201,13 +392,24 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize
         if !verbose {
             cmd.arg("--quiet");
         }
-        let status = cmd
-            .arg("--file")
-            .arg(&tmp)
-            .status()
-            .context("running brew bundle")?;
+        cmd.arg("--file").arg(&tmp);
+        // Quiet path: capture and drive a spinner naming the package being
+        // installed right now. `--verbose` streams brew's own output instead —
+        // the spinner would fight it for the cursor.
+        let failed_log = if verbose {
+            let status = cmd.status().context("running brew bundle")?;
+            (!status.success()).then(String::new)
+        } else {
+            let (ok, log) = run_with_spinner(cmd, "converging packages")?;
+            (!ok).then_some(log)
+        };
         let _ = std::fs::remove_file(&tmp);
-        if !status.success() {
+        if let Some(log) = failed_log {
+            // Replay everything the capture swallowed, then fail (the exec-step
+            // contract: quiet on success, the full story on failure).
+            if !log.is_empty() {
+                eprint!("{log}");
+            }
             bail!("brew bundle failed");
         }
     }
@@ -252,26 +454,50 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize
                 todo.len()
             );
         }
-        for p in todo {
+        // One spinner for the whole App Store phase: these are installed strictly
+        // one at a time (mas has no batch mode), each is a full download, and a
+        // big one otherwise looks like a hang. The counter says how far in we are.
+        let pb = (!verbose && !todo.is_empty())
+            .then(|| crate::ui::spinner_counted(todo.len() as u64, "App Store"));
+        for p in &todo {
             let id = p.id.as_deref().unwrap_or(&p.name);
+            if let Some(pb) = &pb {
+                pb.set_message(format!("Installing {}", p.name));
+            }
             let mut cmd = Command::new("mas");
             // Quiet by default: mute mas's post-install "not indexed in Spotlight"
             // warnings. `--verbose` lets them through.
             if !verbose {
                 cmd.env("MAS_NO_AUTO_INDEX", "1");
             }
-            let ok = cmd
-                .args(["install", id])
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-            if !ok {
-                eprintln!(
-                    "⚠ mas install {} (id {id}) failed — skipped (App Store sign-in, or an \
-                     Apple/iWork app mas can't install — get it from the App Store directly).",
-                    p.name
-                );
+            cmd.args(["install", id]);
+            // Captured on the quiet path so mas's own progress doesn't fight the
+            // spinner for the cursor; streamed under `--verbose`, as before.
+            let ok = if verbose {
+                cmd.status().map(|s| s.success()).unwrap_or(false)
+            } else {
+                cmd.output().map(|o| o.status.success()).unwrap_or(false)
+            };
+            if let Some(pb) = &pb {
+                pb.inc(1);
             }
+            if !ok {
+                let warn = || {
+                    eprintln!(
+                        "⚠ mas install {} (id {id}) failed — skipped (App Store sign-in, or an \
+                         Apple/iWork app mas can't install — get it from the App Store directly).",
+                        p.name
+                    )
+                };
+                // Inside `suspend`, so the warning doesn't land on the spinner's line.
+                match &pb {
+                    Some(pb) => pb.suspend(warn),
+                    None => warn(),
+                }
+            }
+        }
+        if let Some(pb) = pb {
+            pb.finish_and_clear();
         }
     }
 
@@ -553,6 +779,115 @@ pub fn rpm_missing(effective: &[String]) -> Vec<String> {
         })
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+
+    #[test]
+    fn labels_the_package_being_installed() {
+        // Real `brew install` ohai lines — the spinner's whole input.
+        assert_eq!(brew_progress_label("==> Fetching llvm").as_deref(), Some("llvm"));
+        assert_eq!(
+            brew_progress_label("==> Installing Cask zoom").as_deref(),
+            Some("zoom")
+        );
+        assert_eq!(
+            brew_progress_label("==> Pouring llvm--22.1.8.arm64_tahoe.bottle.tar.gz").as_deref(),
+            Some("llvm")
+        );
+        // A dependency being built names the DEP, not its parent — that's what's
+        // actually taking the time.
+        assert_eq!(
+            brew_progress_label("==> Installing llvm dependency: xz").as_deref(),
+            Some("xz")
+        );
+        // The pkg-installer line (the one that used to mean a password prompt).
+        assert_eq!(
+            brew_progress_label("==> Running installer for mactex; your password may be necessary.")
+                .as_deref(),
+            Some("mactex")
+        );
+    }
+
+    #[test]
+    fn list_lines_and_plain_output_label_nothing() {
+        // Lists: each member arrives again on its own line, so showing the list
+        // would flash a name the user can't read and isn't being installed yet.
+        assert_eq!(brew_progress_label("==> Installing dependencies for llvm: xz, zstd"), None);
+        assert_eq!(brew_progress_label("==> Fetching downloads for: llvm, xz"), None);
+        // Not an ohai line at all.
+        assert_eq!(brew_progress_label("Using wget"), None);
+        assert_eq!(brew_progress_label(""), None);
+        assert_eq!(brew_progress_label("🍺  /opt/homebrew/Cellar/llvm/22.1.8: 8,000 files"), None);
+    }
+
+    #[test]
+    fn capture_keeps_everything_for_the_failure_replay() {
+        // The exec-step contract: quiet on success, the full story on failure —
+        // so a failing converge must hand back every line, both streams.
+        let mut cmd = Command::new("sh");
+        cmd.args([
+            "-c",
+            "echo '==> Installing Cask zoom'; echo 'Error: nope' 1>&2; exit 3",
+        ]);
+        let (ok, log) = run_with_spinner(cmd, "test").unwrap();
+        assert!(!ok, "non-zero exit must report failure");
+        assert!(log.contains("Installing Cask zoom"), "stdout lost: {log:?}");
+        assert!(log.contains("Error: nope"), "stderr lost: {log:?}");
+    }
+
+    #[test]
+    fn capture_reports_success_and_drains_both_streams() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo out; echo err 1>&2"]);
+        let (ok, log) = run_with_spinner(cmd, "test").unwrap();
+        assert!(ok);
+        assert!(log.contains("out") && log.contains("err"), "{log:?}");
+    }
+
+    #[test]
+    fn warnings_survive_a_successful_capture() {
+        // Quiet-on-success must not swallow advisories the streamed path showed.
+        assert!(is_noteworthy("Warning: wget 1.25.0 is already installed"));
+        assert!(is_noteworthy("  Error: cask 'x' is unavailable"));
+        assert!(!is_noteworthy("==> Fetching llvm"));
+        assert!(!is_noteworthy("Using wget"));
+    }
+
+    #[test]
+    fn a_warning_keeps_its_body() {
+        // Verbatim from a real `brew bundle` run on this fleet: the remedy is in
+        // the body, so surfacing only the "Warning:" line is worse than useless.
+        let log = "\
+==> Fetching jq
+Warning: Formulae dependency graph sorting found a circular dependency:
+  libtiff, webp
+If it persists, run the following commands and try again:
+  brew update
+
+==> Installing Cask zoom
+Using wget
+";
+        assert_eq!(
+            noteworthy_lines(log),
+            vec![
+                "Warning: Formulae dependency graph sorting found a circular dependency:",
+                "  libtiff, webp",
+                "If it persists, run the following commands and try again:",
+                "  brew update",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_progress_line_ends_a_warning_block() {
+        // No blank line to close the block — the next `==>` must, or every
+        // remaining line of the converge would be reported as part of the warning.
+        let log = "Warning: something\n  detail\n==> Installing Cask zoom\n🍺 done\n";
+        assert_eq!(noteworthy_lines(log), vec!["Warning: something", "  detail"]);
+    }
 }
 
 #[cfg(test)]

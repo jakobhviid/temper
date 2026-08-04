@@ -40,3 +40,38 @@ pub fn bold(s: &str) -> String {
 pub fn dim(s: &str) -> String {
     paint("2", s)
 }
+
+/// A live spinner line on stderr — `⠋ Installing llvm` — for a long phase whose
+/// individual items we learn about as they start (a `brew bundle` converge). The
+/// tick chars, cadence, and cyan match `grove`'s fetch spinner so every tool in
+/// the fleet animates identically.
+///
+/// stderr (never stdout), so `--json` and piped output stay clean; indicatif
+/// hides the bar entirely when stderr isn't a terminal, which makes this inert in
+/// CI and in the test suite.
+pub fn spinner(msg: &str) -> indicatif::ProgressBar {
+    let pb = indicatif::ProgressBar::new_spinner();
+    pb.set_style(
+        indicatif::ProgressStyle::with_template("  {spinner:.cyan} {msg}")
+            .expect("static template")
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
+    );
+    pb.set_message(msg.to_string());
+    pb.enable_steady_tick(std::time::Duration::from_millis(90));
+    pb
+}
+
+/// A spinner that also carries a `pos/len` counter — for a phase whose total is
+/// known up front and whose items are installed one at a time (App Store apps via
+/// `mas`), so a stalled download reads as "3/49", not as a hang.
+pub fn spinner_counted(len: u64, msg: &str) -> indicatif::ProgressBar {
+    let pb = indicatif::ProgressBar::new(len);
+    pb.set_style(
+        indicatif::ProgressStyle::with_template("  {spinner:.cyan} {msg} {pos}/{len}")
+            .expect("static template")
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
+    );
+    pb.set_message(msg.to_string());
+    pb.enable_steady_tick(std::time::Duration::from_millis(90));
+    pb
+}
