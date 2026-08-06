@@ -91,6 +91,73 @@ pub fn spinner_counted(len: u64, msg: &str) -> indicatif::ProgressBar {
     pb
 }
 
+/// Says what a phase is waiting on, for a unit that runs long enough that silence
+/// would read as a hang — then gets out of the way.
+///
+/// This is the safe half of a spinner. A unit that may hand the terminal to
+/// arbitrary code (an `exec` step) cannot carry an animated line: `sudo`/polkit/PAM
+/// prompt on `/dev/tty` at a moment we cannot predict — in practice within the
+/// first seconds — and anything of ours redrawing in place fuses onto that prompt.
+/// So the line is written **once**, in the same shape as the phase's `✓` lines, and
+/// the `✓` for the same label follows when the unit finishes:
+///
+/// ```text
+///   ⋯ 1password · exec assets/scripts/1password-setup.sh
+/// Place your finger on the fingerprint reader
+///   ✓ 1password · exec assets/scripts/1password-setup.sh
+/// ```
+///
+/// Nothing is printed at all for a unit that finishes before the threshold, so the
+/// quick ones stay a single `✓`. Dropping this cancels a notice that hasn't fired.
+pub struct WaitNotice {
+    done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+/// How long a unit may run before it says what it is.
+const WAIT_NOTICE_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
+
+impl WaitNotice {
+    pub fn new(label: &str) -> WaitNotice {
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if json_mode() {
+            return WaitNotice { done, handle: None };
+        }
+        let flag = done.clone();
+        let line = format!("  {} {label}", dim("⋯"));
+        let handle = std::thread::spawn(move || {
+            // Ticked rather than slept whole, so a fast unit's notice is cancelled
+            // promptly instead of holding the thread for the full window.
+            let tick = std::time::Duration::from_millis(100);
+            let mut waited = std::time::Duration::ZERO;
+            while waited < WAIT_NOTICE_AFTER {
+                if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                std::thread::sleep(tick);
+                waited += tick;
+            }
+            if !flag.load(std::sync::atomic::Ordering::Relaxed) {
+                eprintln!("{line}"); // stderr: progress, so `--json` stays clean
+            }
+        });
+        WaitNotice {
+            done,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for WaitNotice {
+    fn drop(&mut self) {
+        self.done
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
 /// Live progress for a phase of discrete units — the config-step phase, a
 /// per-file restore, a per-entry undo — where the total is known up front.
 ///

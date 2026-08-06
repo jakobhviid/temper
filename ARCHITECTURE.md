@@ -116,9 +116,11 @@ apply to new code as much as old:
    which no pipe of ours can capture — so a live progress region gets *fused* onto
    the prompt and the next tick erases the one message the run is blocked on. Any
    step that may prompt therefore gets the terminal to itself: the step phase
-   clears its region for the duration of an `exec` (and says which script it is
-   waiting on if that takes more than a few seconds), and `sudo::acquire` asks up
-   front, before any region exists.
+   clears its region for the duration of an `exec`, and `sudo::acquire` asks up
+   front, before any region exists. An animated line is not an option there — the
+   prompt arrives at a moment we cannot predict (in practice within the first
+   seconds), so a slow step is announced **once**, in the same shape as its `✓`
+   (`⋯ <label>` then `✓ <label>`), which is the safe half of a spinner.
 2. **Report the effect, never the invocation.** Not "we ran the upgrade" but how
    many packages moved version; not "we called push" but whether the remote moved;
    not "we pulled" but how many commits landed. Measured, never assumed.

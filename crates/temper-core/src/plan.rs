@@ -196,6 +196,12 @@ fn step_finding(
 /// cannot see (or protect) them. So the region is cleared for its duration: the
 /// prompt gets a clean line, stays on screen, and leaves no fused progress line
 /// behind. See `ui::Checklist::suspend`.
+struct StepUi<'a> {
+    cl: &'a crate::ui::Checklist,
+    /// The label this step's `✓`/`⚠` line will carry.
+    label: &'a str,
+}
+
 fn apply_one(
     home: &Path,
     machine: &Machine,
@@ -203,10 +209,15 @@ fn apply_one(
     vars: &BTreeMap<String, String>,
     journal: &mut Journal,
     verbose: bool,
-    cl: &crate::ui::Checklist,
+    ui: StepUi<'_>,
 ) -> Result<bool> {
     if step.exec.is_some() {
-        return cl.suspend(|| apply_step(home, machine, step, vars, journal, verbose));
+        return ui.cl.suspend(|| {
+            // Same label the `✓` will carry, so a slow script reads as one item
+            // moving from `⋯` to `✓` rather than as a separate announcement.
+            let _notice = crate::ui::WaitNotice::new(ui.label);
+            apply_step(home, machine, step, vars, journal, verbose)
+        });
     }
     apply_step(home, machine, step, vars, journal, verbose)
 }
@@ -712,7 +723,15 @@ pub fn run_install(
                 changed += 1;
                 cl.noted(&format!("would apply {label}"));
             }
-        } else if apply_one(home, machine, step, vars, &mut journal, verbose, &cl)? {
+        } else if apply_one(
+            home,
+            machine,
+            step,
+            vars,
+            &mut journal,
+            verbose,
+            StepUi { cl: &cl, label: &label },
+        )? {
             changed += 1;
             cl.done(&label);
         } else {
@@ -971,7 +990,15 @@ pub fn run_update(
             Gate::Apply => {}
         }
         total += 1;
-        if apply_one(home, machine, step, vars, &mut journal, verbose, &cl)? {
+        if apply_one(
+            home,
+            machine,
+            step,
+            vars,
+            &mut journal,
+            verbose,
+            StepUi { cl: &cl, label: &label },
+        )? {
             changed += 1;
             cl.done(&label);
         } else {

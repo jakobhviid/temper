@@ -171,7 +171,7 @@ fn exec_output_is_quiet_unless_verbose_or_failing() {
         .stdout(predicates::str::contains("BOOM_DETAIL"));
 }
 
-/// A captured script that runs long must say what the run is waiting on.
+/// A captured script that runs long must say which step the run is waiting on.
 ///
 /// The step phase clears its progress region while an `exec` runs — the script may
 /// prompt on the tty (`sudo`/polkit/PAM), and a live region drawn over that prompt
@@ -204,8 +204,9 @@ fn a_slow_exec_says_what_it_is_waiting_on() {
         .arg("install")
         .assert()
         .success()
-        // Named the way the spec names it, not as an absolute path.
-        .stderr(predicates::str::contains("still running assets/slow.sh"))
+        // The waiting line carries the same label the `✓` will, so the step reads
+        // as one item moving from `⋯` to `✓`.
+        .stderr(predicates::str::contains("⋯ demo · exec assets/slow.sh"))
         // Quiet-on-success still holds for the script's own output.
         .stdout(predicates::str::contains("chatter").not());
 }

@@ -61,8 +61,16 @@ is arbitrary code, and `sudo`/polkit/PAM write their prompts straight to the
 terminal where a redrawing spinner would fuse itself onto them ("Place your finger
 on the fingerprint reader" landing mid-progress-line, then erased by the next
 tick). So the region clears for the script's duration — a prompt gets a clean line
-of its own and stays there — and a script still running after a few seconds says
-which one it is, so a long one isn't a silent terminal either. Pass
+of its own and stays there. A script still running after a few seconds names itself
+in the phase's own shape, so a long one isn't a silent terminal either and reads as
+one item finishing:
+
+```text
+  ⋯ 1password · exec assets/scripts/1password-setup.sh
+  ✓ 1password · exec assets/scripts/1password-setup.sh
+```
+
+A script that finishes quickly prints only the `✓`. Pass
 **`-v`/`--verbose`** (a global flag, like `--json`) to stream
 every tool's — and every `exec`'s — full output instead of the spinner when
 debugging. (An idempotent `exec` that re-runs each `update` should carry a `check`
