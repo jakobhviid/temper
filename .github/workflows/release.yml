@@ -75,6 +75,15 @@ jobs:
           for t in ${TARGETS//,/ }; do
             echo "::group::build $t"
             if [ "$CROSS" = "true" ]; then
+              # Each cross target runs in its OWN container image, but build scripts
+              # and proc macros are compiled for the *container host* and land in the
+              # shared, triple-less `target/release/build/`. Two targets in one job
+              # therefore have image B execute image A's host binaries, which fails
+              # on a glibc mismatch (`GLIBC_2.28 not found`, seen 2026-08-06). Drop
+              # those host artifacts between targets; each triple's own outputs live
+              # under `target/<triple>/` and are untouched, so only build scripts
+              # recompile.
+              rm -rf target/release
               cross build --release --target "$t"
             else
               cargo build --release --target "$t"
