@@ -235,15 +235,24 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
     let rf: RunFile = serde_json::from_slice(&fs::read(run_dir.join("manifest.json"))?)?;
 
     let (mut reverted, mut skipped) = (0usize, 0usize);
+    // A revert is exactly the kind of phase that must name its items: "reverted 3,
+    // skipped 2" leaves you unable to tell *which* two were left alone, and a skip
+    // here means "the file changed since temper wrote it" — the single most
+    // important thing to know before running it again. No children to stream, so
+    // the spinner is never in anyone's way.
+    let cl = crate::ui::Checklist::new(rf.entries.len(), "reverting", false);
     for entry in rf.entries.iter().rev() {
         // dconf key entries guard on the live value, not a file hash.
         if let Entry::DconfKey { key, before, after } = entry {
+            cl.start(&format!("dconf {key}"));
             if dconf_read(key).as_deref() != Some(after.as_str()) {
                 skipped += 1; // changed since temper wrote it → don't clobber
+                cl.skipped(&format!("dconf {key}"), "changed since temper wrote it");
                 continue;
             }
             if dry_run {
                 reverted += 1;
+                cl.noted(&format!("would revert dconf {key}"));
                 continue;
             }
             let done = match before {
@@ -252,8 +261,10 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
             };
             if done {
                 reverted += 1;
+                cl.done(&format!("dconf {key}"));
             } else {
                 skipped += 1;
+                cl.skipped(&format!("dconf {key}"), "dconf write failed");
             }
             continue;
         }
@@ -263,6 +274,7 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
             Entry::Restore { path, after, .. } => (path, after),
             Entry::DconfKey { .. } => unreachable!(),
         };
+        cl.start(path);
         let p = PathBuf::from(path);
         let current = if p.is_file() { fs::read(&p).ok() } else { None };
         // Only revert if the file still hashes to what temper left it as.
@@ -271,10 +283,19 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
             .is_some_and(|b| hash(b).as_str() == expect_after.as_str())
         {
             skipped += 1;
+            cl.skipped(
+                path,
+                if current.is_none() {
+                    "gone since temper wrote it"
+                } else {
+                    "changed since temper wrote it"
+                },
+            );
             continue;
         }
         if dry_run {
             reverted += 1;
+            cl.noted(&format!("would revert {path}"));
             continue;
         }
         let done = match entry {
@@ -290,10 +311,13 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
         };
         if done {
             reverted += 1;
+            cl.done(path);
         } else {
             skipped += 1;
+            cl.skipped(path, "could not restore the saved content");
         }
     }
+    cl.finish();
     // Keep the run dir if anything was skipped, so it can be inspected/retried.
     if !dry_run && skipped == 0 {
         fs::remove_dir_all(&run_dir).ok();

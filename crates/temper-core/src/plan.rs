@@ -673,7 +673,7 @@ pub fn run_install(
         // Presence gate — skip loudly when absent, error on a failed `needs`.
         match gate_step(home, step) {
             Gate::Skip(desc) => {
-                cl.skipped(&label, &desc);
+                cl.skipped(&label, &format!("{desc} absent"));
                 skipped.push(desc);
                 continue;
             }
@@ -682,8 +682,12 @@ pub fn run_install(
         }
         total += 1;
         if dry_run {
+            // Name the steps behind the count: "would apply 4 of 26" never said
+            // *which* four, so the one thing a dry run exists to tell you was the
+            // one thing it withheld.
             if step_would_change(home, machine, step, vars)? {
                 changed += 1;
+                cl.noted(&format!("would apply {label}"));
             }
         } else if apply_step(home, machine, step, vars, &mut journal, verbose)? {
             changed += 1;
@@ -936,7 +940,7 @@ pub fn run_update(
         // Presence gate — same as install.
         match gate_step(home, step) {
             Gate::Skip(desc) => {
-                cl.skipped(&label, &desc);
+                cl.skipped(&label, &format!("{desc} absent"));
                 skipped.push(desc);
                 continue;
             }

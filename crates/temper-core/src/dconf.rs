@@ -109,7 +109,12 @@ pub fn restore(home: &Path, machine: &Machine) -> Result<Vec<PathBuf>> {
         bail!("dconf not found — cannot restore a dconf snapshot on this host");
     }
     let mut loaded = Vec::new();
+    // Per-snapshot progress: a restore overwrites live desktop state, so which
+    // paths were actually loaded is worth naming rather than totalling. No child
+    // output to fight here (dconf load is silent), so the region is always welcome.
+    let cl = crate::ui::Checklist::new(machine.dconf.len(), "restoring", false);
     for snap in &machine.dconf {
+        cl.start(&snap.path);
         let src = home.join(&snap.file);
         let content = fs::read_to_string(&src)
             .with_context(|| format!("reading snapshot {}", src.display()))?;
@@ -127,8 +132,10 @@ pub fn restore(home: &Path, machine: &Machine) -> Result<Vec<PathBuf>> {
         if !child.wait()?.success() {
             bail!("dconf load {} failed", snap.path);
         }
+        cl.done(&format!("dconf {} ← {}", snap.path, snap.file));
         loaded.push(src);
     }
+    cl.finish();
     Ok(loaded)
 }
 

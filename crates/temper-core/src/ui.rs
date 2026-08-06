@@ -163,11 +163,18 @@ impl Checklist {
         self.advance();
     }
 
-    /// A unit skipped by a failed presence gate — loud by design (Principle #6).
-    /// `why` is a probe description (`binary \`topgrade\``), so it reads as
-    /// "…skipped: binary `topgrade` absent".
+    /// A unit that was not applied, with the reason — loud by design
+    /// (Principle #6). Callers phrase `why` fully ("binary `topgrade` absent",
+    /// "changed since temper wrote it"), because only they know what it means.
     pub fn skipped(&self, label: &str, why: &str) {
-        self.emit(format!("  {} {label} — skipped: {why} absent", yellow("⚠")));
+        self.emit(format!("  {} {label} — skipped: {why}", yellow("⚠")));
+        self.advance();
+    }
+
+    /// A unit a *dry run* would have acted on. Neither a change nor a warning, so
+    /// it gets neither mark — the point is naming the items behind the count.
+    pub fn noted(&self, label: &str) {
+        self.emit(format!("  {} {label}", dim("·")));
         self.advance();
     }
 

@@ -237,6 +237,13 @@ values. `setkey(defaults)`, `sysfile`, and `exec` aren't journaled — undo skip
 them. Every revert is guarded: if the target changed since, it's skipped, not
 clobbered.
 
+Each item is named as it goes — `✓ <path>` for a revert, and a skip says **why**
+(`changed since temper wrote it`, `gone since temper wrote it`), because that is
+the thing you need before deciding what to do next. `--dry-run` lists the same
+items as `· would revert <path>` and touches nothing. Likewise `install
+--dry-run` now names the steps behind its count (`· would apply zsh · copy
+~/.zshrc`) instead of only totalling them.
+
 ## 8. Pull calibrated speaker profiles
 
 **When:** the upstream speaker-EQ repo has new profiles (needs `[eq_import]`).
