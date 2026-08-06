@@ -90,6 +90,34 @@ warnings even when it succeeds. temper reads Homebrew's `ohai` lines
 (`==> Installing …`, `==> Pouring …`) purely as a progress feed — never as a
 source of truth about what is installed; that always comes from a probe.
 
+**Capture is not only about noise — it is about voice.** Every child temper shells
+out to has its own opinion of the world: `flatpak update` says "Nothing to update."
+about *its remotes*, `git pull` says "Already up to date." about *the folder's
+upstream*, `brew trust` says "Already trusted tap". Left on the terminal, any of
+them reads as temper's verdict on the run, moments before temper installs and
+upgrades plenty — and, going to temper's stdout, breaks `--json` outright. So
+every converge child goes through one door (`providers::run_child`) and every
+phase reports its own effect in temper's words. Three rules fall out, and they
+apply to new code as much as old:
+
+1. **A child's output never stands as temper's.** Capture, replay on failure, and
+   let warnings through. Stream only where the child's output *is* the operation:
+   `prune`'s removals (destructive, confirmed, the user is watching) and the
+   self-update's `brew upgrade temper -y`.
+2. **Report the effect, never the invocation.** Not "we ran the upgrade" but how
+   many packages moved version; not "we called push" but whether the remote moved;
+   not "we pulled" but how many commits landed. Measured, never assumed.
+3. **Never parse a tool's prose to learn what happened.** git and flatpak
+   localize their messages, so string-matching works on the author's machine and
+   silently stops working on someone else's. Compare refs, versions, hashes —
+   things that mean the same in every locale. (Homebrew's `ohai` lines are the one
+   exception, and only as a *progress label*, never as truth.)
+
+The user-facing consequence: **silence means converged.** A run prints a live
+region while it works (erased when done), a `✓` line only for something that
+actually changed, warnings and errors always, and one summary at the end. `-v`
+turns the children back on in full.
+
 ---
 
 ## Two scopes
@@ -223,10 +251,11 @@ installed. Probe vocabulary (declarative, exactly one per probe): `binary` /
 `brew` / `cask` / `flatpak` / `mas` / `gext` / `rpm` / `path` / `exec`. `when`
 skips the step when the probe fails; `needs` errors (a hard requirement).
 
-**Skips are loud** (Principle #6): install/update print `⚠ skipped: binary
-\`ghostty\` absent`, and `drift` reports the gated-out step status-only (never as
-red drift). (The implicit "my declared package is installed" default is not
-inferred — declare the probe explicitly.)
+**Skips are loud** (Principle #6): install/update print
+`⚠ ghostty · copy ~/.config/ghostty/config — skipped: binary \`ghostty\` absent`
+as the phase reaches the step, and `drift` reports the gated-out step status-only
+(never as red drift). (The implicit "my declared package is installed" default is
+not inferred — declare the probe explicitly.)
 
 ### The cask-artifact exception (a named Principle-#2 violation)
 

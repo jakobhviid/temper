@@ -53,9 +53,28 @@ one rule.
 
 ## 6. No silent skips, no silent caps
 
-A gate that silently doesn't fire is a trap. Every skip is announced. Forgiving
-providers (MAS) report failures loudly and continue. `brew` tap-trust runs before
-converge so third-party taps are never *silently* skipped.
+A gate that silently doesn't fire is a trap. Every skip is announced — naming the
+step, not just its failed probe. Forgiving providers (MAS) report failures loudly
+and continue. `brew` tap-trust runs before converge so third-party taps are never
+*silently* skipped. A discarded exit code is a silent cap too: a best-effort child
+may fail without stopping the run, but never without saying so.
+
+## 6b. temper's output is temper's own; it reports effects, in temper's voice
+
+Every tool temper shells out to has its own idea of the world, and each one is
+happy to announce it: `flatpak update` prints "Nothing to update." about *its
+remotes*, `git pull` "Already up to date." about *the folder's upstream*. On the
+terminal mid-run, any of those reads as temper's verdict on the whole converge —
+and on stdout it corrupts `--json`. So a child's output is captured and only
+temper speaks: a live region while working, a `✓` only for what actually changed,
+warnings and errors always, one summary at the end. Silence means converged.
+
+What temper says is the **effect**, never the invocation: how many packages
+changed version, how many commits landed, whether the remote actually moved — and
+it learns that by comparing versions, refs and hashes, never by parsing a tool's
+prose, which is localized and would work only in the author's language. Streaming
+a child is right in exactly one case: when its output *is* the operation the user
+asked for (`prune`'s removals, `brew upgrade temper` during a self-update).
 
 ## 7. Nothing is enforced without a drift story
 
