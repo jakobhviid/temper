@@ -212,7 +212,14 @@ setkey = { backend = "json", file = "~/.config/x.json", key = "bin", value = "{{
 [[step]]
 exec    = "assets/setup.sh"  # runs via sh AS YOU (not root); cwd = temper-home; env TEMPER_HOME/MACHINE/OS
 check   = "assets/check.sh"  # optional drift-hook: exit 0 = in sync; gates re-run
-sudo    = false              # deprecated no-op — escalate inside the script with sudo per-command
+sudo    = false              # "this script escalates internally" — it still runs AS YOU
+                             #   (escalate per-command inside it: `sudo cp …`). The flag
+                             #   only tells temper to include the step in the ONE up-front
+                             #   password ask, so the script never stops mid-run to prompt
+                             #   (a prompt buried in a list of results is easy to miss, and
+                             #   the keyboard may not be there in 20 minutes). Set it on any
+                             #   script that calls sudo/pkexec. `sysfile` steps are included
+                             #   automatically — temper escalates for those itself.
 secrets = ["ACOUSTID_KEY"]   # env vars passed through to the script. A live apply
                              # errors if a declared secret is missing; a read-only
                              # `drift`/`install --dry-run` DEGRADES that step to

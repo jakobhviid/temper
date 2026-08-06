@@ -267,13 +267,19 @@ impl Columns {
 /// arbitrary code (an `exec` step) cannot carry an animated line: `sudo`/polkit/PAM
 /// prompt on `/dev/tty` at a moment we cannot predict — in practice within the
 /// first seconds — and anything of ours redrawing in place fuses onto that prompt.
-/// So the line is written **once**, in the same shape as the phase's `✓` lines, and
-/// the `✓` for the same label follows when the unit finishes:
+/// So the line is written **once**.
+///
+/// It is deliberately **not** shaped like a row of the results list. The leftmost
+/// glyph there is a *status* column — `✓`/`⚠`/`✗` — and the eye scans it for
+/// exceptions, so a `⋯` sitting in it reads as "this step has a problem", which is
+/// the opposite of what it means. Instead it is indented as a subordinate detail,
+/// dimmed, and says in words what it is:
 ///
 /// ```text
-///   ⋯ 1password · exec assets/scripts/1password-setup.sh
+///   ✓ ptyxis             exec    assets/scripts/ptyxis-load.sh
+///       … still working: assets/scripts/1password-setup.sh
 /// Place your finger on the fingerprint reader
-///   ✓ 1password · exec assets/scripts/1password-setup.sh
+///   ✓ 1password          exec    assets/scripts/1password-setup.sh    12s
 /// ```
 ///
 /// Nothing is printed at all for a unit that finishes before the threshold, so the
@@ -281,6 +287,17 @@ impl Columns {
 pub struct WaitNotice {
     done: std::sync::Arc<std::sync::atomic::AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
+}
+
+/// A short, human duration: `12s`, `2m14s`. Whole seconds — this explains a pause,
+/// it is not a benchmark.
+fn human_secs(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    }
 }
 
 /// How long a unit may run before it says what it is.
@@ -293,7 +310,7 @@ impl WaitNotice {
             return WaitNotice { done, handle: None };
         }
         let flag = done.clone();
-        let line = format!("  {} {label}", dim("⋯"));
+        let line = dim(&format!("      … still working: {label}"));
         let handle = std::thread::spawn(move || {
             // Ticked rather than slept whole, so a fast unit's notice is cancelled
             // promptly instead of holding the thread for the full window.
@@ -390,6 +407,22 @@ impl Checklist {
     /// The unit changed something — it earns a permanent line.
     pub fn done(&self, label: &str) {
         self.emit(format!("  {} {label}", green("✓")));
+        self.advance();
+    }
+
+    /// As [`Checklist::done`], with how long the unit took — shown only past the
+    /// same threshold that prints a "still working" notice, so the pause a reader
+    /// just sat through is accounted for on the line that resolves it, and quick
+    /// units stay a bare `✓`.
+    pub fn done_after(&self, label: &str, elapsed: std::time::Duration) {
+        if elapsed < WAIT_NOTICE_AFTER {
+            return self.done(label);
+        }
+        self.emit(format!(
+            "  {} {label}  {}",
+            green("✓"),
+            dim(&human_secs(elapsed))
+        ));
         self.advance();
     }
 

@@ -188,6 +188,79 @@ fn step_finding(
     Ok(None)
 }
 
+/// Every step in this run that will escalate to root, named for the up-front ask.
+///
+/// Two sources. `sysfile` always escalates — temper itself shells out to
+/// `sudo install` to place it. And an `exec` step may declare `sudo = true`: the
+/// script still runs *as the user* (the chezmoi model temper keeps), the flag only
+/// says "this one escalates internally", which is precisely what temper needs to
+/// know in order to ask **before** the run instead of letting the script stop
+/// mid-list to prompt.
+///
+/// Gated and lifecycle-filtered exactly as the phase will filter them, because the
+/// promise is that a run with nothing to escalate never asks at all: a step that
+/// will be skipped must not cost the user a password prompt.
+fn root_steps(
+    home: &Path,
+    machine: &Machine,
+    vars: &BTreeMap<String, String>,
+    resolved: &Resolved,
+    update: bool,
+) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for (_, step) in &resolved.steps {
+        if !is_step(step) {
+            continue;
+        }
+        if update {
+            match lifecycle(step) {
+                "always" => {}
+                "ensure" => {
+                    if !ensure_should_apply(home, machine, step, vars)? {
+                        continue;
+                    }
+                }
+                _ => continue,
+            }
+        } else if lifecycle(step) == "manual" {
+            continue;
+        }
+        let escalates = step.sysfile.is_some() || (step.exec.is_some() && step.sudo);
+        if !escalates {
+            continue;
+        }
+        if !matches!(gate_step(home, step), Gate::Apply) {
+            continue;
+        }
+        out.push(step_parts(step).1);
+    }
+    Ok(out)
+}
+
+/// Ask for root **once**, up front, for everything in this run that needs it.
+///
+/// The keyboard is here now; it may not be in twenty minutes, and a prompt that
+/// arrives mid-run has nowhere good to land — it collides with progress output, and
+/// a fingerprint or password request buried in a list of results is easy to miss
+/// entirely. Silent when nothing needs root, which is the common case.
+fn acquire_root_once(casks: &[String], steps: &[String]) {
+    if casks.is_empty() && steps.is_empty() {
+        return;
+    }
+    let mut what = Vec::new();
+    if !casks.is_empty() {
+        what.push(format!("{} via a system installer: {}", casks.len(), casks.join(", ")));
+    }
+    if !steps.is_empty() {
+        what.push(format!("{} step(s): {}", steps.len(), steps.join(", ")));
+    }
+    crate::sudo::acquire(&format!(
+        "this run needs your password for {} — asking once now, so nothing stops to \
+         prompt part-way through",
+        what.join(" · ")
+    ));
+}
+
 /// Apply one step, giving an `exec` the terminal to itself.
 ///
 /// Every other primitive is a file/key write that cannot talk to the user, so it
@@ -196,12 +269,6 @@ fn step_finding(
 /// cannot see (or protect) them. So the region is cleared for its duration: the
 /// prompt gets a clean line, stays on screen, and leaves no fused progress line
 /// behind. See `ui::Checklist::suspend`.
-struct StepUi<'a> {
-    cl: &'a crate::ui::Checklist,
-    /// The label this step's `✓`/`⚠` line will carry.
-    label: &'a str,
-}
-
 fn apply_one(
     home: &Path,
     machine: &Machine,
@@ -209,13 +276,13 @@ fn apply_one(
     vars: &BTreeMap<String, String>,
     journal: &mut Journal,
     verbose: bool,
-    ui: StepUi<'_>,
+    cl: &crate::ui::Checklist,
 ) -> Result<bool> {
     if step.exec.is_some() {
-        return ui.cl.suspend(|| {
-            // Same label the `✓` will carry, so a slow script reads as one item
-            // moving from `⋯` to `✓` rather than as a separate announcement.
-            let _notice = crate::ui::WaitNotice::new(ui.label);
+        return cl.suspend(|| {
+            // The script, not the whole aligned row: this is a subordinate detail
+            // line, not a second entry in the results list.
+            let _notice = crate::ui::WaitNotice::new(&step_parts(step).1);
             apply_step(home, machine, step, vars, journal, verbose)
         });
     }
@@ -660,17 +727,18 @@ pub fn run_install(
     // the multi-GB downloads in between. So: find out up front whether root is
     // needed at all, ask once here (at the keyboard, before anything downloads),
     // and hold the timestamp open for the rest of the run.
-    let _sudo = (!dry_run).then(|| {
-        let root = providers::casks_needing_root(&effective);
-        if !root.is_empty() {
-            crate::sudo::acquire(&format!(
-                "{} package(s) install with a system installer and need your password: {}",
-                root.len(),
-                root.join(", ")
-            ));
-        }
-        crate::sudo::keep_alive()
-    });
+    // Resolved here rather than in phase 2, so a `sysfile`/`sudo = true` step's
+    // password request joins the package one in a single ask before any work starts.
+    let resolved = resolve(home, machine)?;
+    let _sudo = if dry_run {
+        None
+    } else {
+        acquire_root_once(
+            &providers::casks_needing_root(&effective),
+            &root_steps(home, machine, vars, &resolved, false)?,
+        );
+        Some(crate::sudo::keep_alive())
+    };
     if !dry_run {
         providers::trust_taps(brew_trust, verbose)?;
     }
@@ -698,8 +766,7 @@ pub fn run_install(
         });
     }
 
-    // Phase 2 — config steps.
-    let resolved = resolve(home, machine)?;
+    // Phase 2 — config steps (`resolved` was needed above, for the root ask).
     let mut journal = Journal::begin();
     let (mut changed, mut total) = (0usize, 0usize);
     let mut skipped = Vec::new();
@@ -745,19 +812,25 @@ pub fn run_install(
                 changed += 1;
                 cl.noted(&format!("would apply {label}"));
             }
-        } else if apply_one(
-            home,
-            machine,
-            step,
-            vars,
-            &mut journal,
-            verbose,
-            StepUi { cl: &cl, label: &label },
-        )? {
-            changed += 1;
-            cl.done(&label);
         } else {
-            cl.unchanged();
+            let started = std::time::Instant::now();
+            let did = apply_one(
+                home,
+                machine,
+                step,
+                vars,
+                &mut journal,
+                verbose,
+                &cl,
+            )?;
+            if did {
+                changed += 1;
+                // The elapsed time accounts for a pause the reader just sat through
+                // (and is dropped for the quick ones).
+                cl.done_after(&label, started.elapsed());
+            } else {
+                cl.unchanged();
+            }
         }
     }
     cl.finish();
@@ -947,14 +1020,11 @@ pub fn run_update(
     // Same one-password-per-run deal as `install`: upgrading a pkg-based cask
     // needs root just like installing it, and `sysfile` steps below shell out to
     // `sudo install`. Ask once, up front, only if something actually needs it.
-    let root = providers::casks_needing_root(&effective);
-    if !root.is_empty() {
-        crate::sudo::acquire(&format!(
-            "{} package(s) upgrade with a system installer and need your password: {}",
-            root.len(),
-            root.join(", ")
-        ));
-    }
+    let resolved = resolve(home, machine)?;
+    acquire_root_once(
+        &providers::casks_needing_root(&effective),
+        &root_steps(home, machine, vars, &resolved, true)?,
+    );
     let _sudo = crate::sudo::keep_alive();
     // Report the *effect*, not the invocation: snapshot installed versions either
     // side of the upgrade and count what actually moved. A failed or partly-applied
@@ -972,7 +1042,6 @@ pub fn run_update(
         upgraded = Some(providers::upgraded_between(&before, &after));
     }
 
-    let resolved = resolve(home, machine)?;
     let mut journal = Journal::begin();
     let (mut changed, mut total) = (0usize, 0usize);
     let mut skipped = Vec::new();
@@ -1015,17 +1084,19 @@ pub fn run_update(
             Gate::Apply => {}
         }
         total += 1;
-        if apply_one(
+        let started = std::time::Instant::now();
+        let did = apply_one(
             home,
             machine,
             step,
             vars,
             &mut journal,
             verbose,
-            StepUi { cl: &cl, label: &label },
-        )? {
+            &cl,
+        )?;
+        if did {
             changed += 1;
-            cl.done(&label);
+            cl.done_after(&label, started.elapsed());
         } else {
             cl.unchanged();
         }
@@ -1093,5 +1164,70 @@ mod remediation_tests {
     fn all_in_sync_yields_no_remediation() {
         let items = vec![f("copy", true), f("package", true)];
         assert!(remediations(&items).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod root_step_tests {
+    use super::*;
+
+    /// A home with one bundle, so `resolve` can be driven from real TOML rather
+    /// than hand-built structs (the parser is part of what's being tested).
+    fn home_with(bundle: &str) -> (tempfile::TempDir, Machine) {
+        let d = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(d.path().join("apps")).unwrap();
+        std::fs::write(d.path().join("apps/a.toml"), bundle).unwrap();
+        std::fs::write(
+            d.path().join("temper.toml"),
+            format!(
+                "[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"a\"]\n",
+                crate::machine::current_os()
+            ),
+        )
+        .unwrap();
+        let ft = manifest::load_fleet(d.path()).unwrap();
+        let m = crate::machine::resolve(&ft, Some("t")).unwrap();
+        (d, m)
+    }
+
+    fn root_targets(bundle: &str) -> Vec<String> {
+        let (d, m) = home_with(bundle);
+        let resolved = resolve(d.path(), &m).unwrap();
+        let vars = BTreeMap::new();
+        root_steps(d.path(), &m, &vars, &resolved, false).unwrap()
+    }
+
+    #[test]
+    fn sysfile_and_declared_sudo_are_asked_for_up_front() {
+        // `sysfile` escalates by construction (temper runs `sudo install`), and an
+        // `exec` can declare that it escalates internally.
+        let found = root_targets(
+            "[[step]]\nsysfile = \"assets/x\"\nto = \"/etc/x.conf\"\n\n\
+             [[step]]\nexec = \"assets/needs-root.sh\"\nsudo = true\n",
+        );
+        assert_eq!(found, vec!["/etc/x.conf", "assets/needs-root.sh"]);
+    }
+
+    #[test]
+    fn a_run_with_nothing_to_escalate_never_asks() {
+        // The promise is no prompt at all on a run that needs no root — so a plain
+        // `exec` and a `copy` must contribute nothing.
+        let found = root_targets(
+            "[[step]]\nexec = \"assets/plain.sh\"\n\n\
+             [[step]]\ncopy = \"assets/f\"\nto = \"~/.f\"\n",
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_step_that_will_be_skipped_costs_no_password() {
+        // Gated out by `when`, and `manual` — neither will run, so neither may
+        // trigger a prompt for root it never needs.
+        let found = root_targets(
+            "[[step]]\nexec = \"assets/gated.sh\"\nsudo = true\n\
+             when = { binary = \"definitely-not-installed-anywhere\" }\n\n\
+             [[step]]\nexec = \"assets/manual.sh\"\nsudo = true\nrun = \"manual\"\n",
+        );
+        assert!(found.is_empty(), "{found:?}");
     }
 }

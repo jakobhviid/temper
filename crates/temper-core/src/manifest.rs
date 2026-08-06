@@ -311,9 +311,12 @@ pub struct Step {
     /// Companion drift-hook: exit 0 = in sync. Also gates whether `exec` re-runs.
     #[serde(default)]
     pub check: Option<String>,
-    /// Deprecated no-op: temper always runs exec as the user (chezmoi model);
-    /// escalate inside the script with `sudo <cmd>` for specific ops. Kept so
-    /// existing manifests parse.
+    /// "This script escalates internally." temper still runs it **as the user**
+    /// (the chezmoi model — escalate per-command inside the script), so this does
+    /// not change how it runs; it declares that root will be needed, which lets
+    /// temper fold the step into the single up-front password ask instead of the
+    /// script stopping mid-run to prompt. `sysfile` steps are included without a
+    /// declaration, since temper escalates for those itself.
     #[serde(default)]
     pub sudo: bool,
     /// Env var names that must be present and are passed through to the script.

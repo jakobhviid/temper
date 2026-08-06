@@ -70,7 +70,18 @@ one item finishing:
   ✓ 1password  exec  assets/scripts/1password-setup.sh
 ```
 
-A script that finishes quickly prints only the `✓`.
+A script that finishes quickly prints only the `✓`. The waiting line is deliberately
+**not** shaped like a row of the list: the leftmost glyph there is a status column
+(`✓`/`⚠`/`✗`) that the eye scans for exceptions, so a progress marker sitting in it
+would read as "this step has a problem". It is indented as a detail, dimmed, and says
+what it is — and the `✓` that resolves it carries the elapsed time, so the pause you
+just sat through is accounted for:
+
+```text
+  ✓ ptyxis             exec    assets/scripts/ptyxis-load.sh
+      … still working: assets/scripts/1password-setup.sh
+  ✓ 1password          exec    assets/scripts/1password-setup.sh    12s
+```
 
 Rows are **column-aligned** — app, kind, then target — so a run reads down the
 page instead of zig-zagging with the app-name length:
@@ -93,8 +104,14 @@ every tool's — and every `exec`'s — full output instead of the spinner when
 debugging. (An idempotent `exec` that re-runs each `update` should carry a `check`
 hook so it's skipped, not just hushed, when already in sync.)
 
-**One password per run.** Some casks install through a system installer
-(`mactex`, `zoom`, `dotnet-sdk`, …) and need root. Homebrew asks per cask, and
+**One password per run.** Two things in a run can need root: some casks install
+through a system installer (`mactex`, `zoom`, `dotnet-sdk`, …), and your own steps —
+a `sysfile` (temper places it with `sudo install`) or an `exec` script that declares
+`sudo = true` because it calls `sudo` internally. temper collects all of them before
+anything starts and asks **once**, at the keyboard, naming what needs it. Declaring
+`sudo = true` is what keeps a script from stopping in the middle of the run to
+prompt — a password or fingerprint request buried in a list of results is easy to
+miss, and the keyboard may not still be there twenty minutes in. Homebrew asks per cask, and
 because sudo's timestamp expires (5 min by default) during the multi-GB downloads
 in between, a big converge used to prompt over and over, hours apart. temper now
 checks up front whether this run will touch any such package, names them, and
