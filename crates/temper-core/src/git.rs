@@ -149,17 +149,49 @@ pub fn pull(home: &Path, rebase: bool) -> Pull {
 /// What a `save`/auto-commit did.
 pub struct SaveReport {
     pub committed: bool,
+    /// Whether a push **succeeded and moved the remote**. Not "we ran push":
+    /// `git push` with nothing to send exits 0 saying "Everything up-to-date", and
+    /// claiming a push there is the same defect as a child's "nothing to update"
+    /// standing in for temper's verdict.
     pub pushed: bool,
     pub message: String,
     /// A non-fatal warning (e.g. pull/push couldn't complete).
     pub warning: Option<String>,
 }
 
+/// Push, reporting whether the remote actually moved. The remote ref's commit is
+/// compared before and after, so "up to date" and "pushed" are distinguishable
+/// without reading git's (localized) prose. A failure is a warning string.
+fn push(home: &Path) -> (bool, Option<String>) {
+    let upstream = || {
+        git(home, &["rev-parse", "@{u}"])
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    let before = upstream();
+    match git(home, &["push"]) {
+        Some(o) if o.status.success() => {
+            let after = upstream();
+            // Both known and different → the remote moved. Unknown upstream (a
+            // brand-new branch push) counts as moved: the push succeeded and there
+            // was nothing there before.
+            let moved = match (&before, &after) {
+                (Some(b), Some(a)) => b != a,
+                (None, Some(_)) => true,
+                _ => false,
+            };
+            (moved, None)
+        }
+        Some(o) => (false, Some(format!("push failed: {}", reason(&o.stderr)))),
+        None => (false, Some("could not run git push".into())),
+    }
+}
+
 /// Stage everything, commit with `message`, and (if `push`) push — pulling
 /// first (`--rebase` when `rebase`, else `--ff-only`) so the push isn't
 /// rejected by a diverged remote. A clean tree is not an error
 /// (`committed=false`). Errors only on a genuine git failure at commit time.
-pub fn save(home: &Path, message: &str, push: bool, rebase: bool) -> Result<SaveReport> {
+pub fn save(home: &Path, message: &str, push_it: bool, rebase: bool) -> Result<SaveReport> {
     if !is_repo(home) {
         bail!("{} is not a git repo — nothing to save", home.display());
     }
@@ -167,15 +199,21 @@ pub fn save(home: &Path, message: &str, push: bool, rebase: bool) -> Result<Save
 
     if !is_dirty(home) {
         // Nothing local to commit; still offer to push if we're ahead.
-        if push {
+        let mut pushed = false;
+        if push_it {
             if let Pull::Warn(w) = pull(home, rebase) {
                 warning = Some(w);
             }
-            let _ = git(home, &["push"]);
+            // Was `let _ = git(&["push"])` with `pushed: push_it` returned — i.e.
+            // "we intended to push", which printed `✓ pushed` on a clean tree with
+            // nothing to send, and even when the push failed outright.
+            let (moved, w) = push(home);
+            pushed = moved;
+            warning = warning.or(w);
         }
         return Ok(SaveReport {
             committed: false,
-            pushed: push,
+            pushed,
             message: message.to_string(),
             warning,
         });
@@ -197,16 +235,14 @@ pub fn save(home: &Path, message: &str, push: bool, rebase: bool) -> Result<Save
 
     // Push, pulling first so a diverged remote doesn't reject us.
     let mut pushed = false;
-    if push {
+    if push_it {
         if let Pull::Warn(w) = pull(home, rebase) {
             warning = Some(w);
         }
-        match git(home, &["push"]) {
-            Some(o) if o.status.success() => pushed = true,
-            Some(o) => {
-                warning = Some(format!("committed, but push failed: {}", reason(&o.stderr)));
-            }
-            None => warning = Some("committed, but could not run git push".into()),
+        let (moved, w) = push(home);
+        pushed = moved;
+        if let Some(w) = w {
+            warning = Some(format!("committed, but {w}"));
         }
     }
     Ok(SaveReport {

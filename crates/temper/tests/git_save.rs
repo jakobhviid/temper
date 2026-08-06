@@ -181,3 +181,49 @@ fn auto_pull_reports_commits_that_landed_then_stays_quiet() {
         .success()
         .stdout(predicates::str::contains("spec updated").not());
 }
+
+/// `pushed` must mean the remote moved, not that a push was attempted: `git push`
+/// with nothing to send exits 0 ("Everything up-to-date"), and reporting a push
+/// there is the same defect as letting a tool's no-op stand as temper's verdict.
+#[test]
+fn save_claims_a_push_only_when_the_remote_moved() {
+    let origin = TempDir::new().unwrap();
+    git(origin.path(), &["init", "-q", "--bare"]);
+    let home = TempDir::new().unwrap();
+    let h = home.path();
+    let url = origin.path().to_string_lossy().to_string();
+    assert!(Proc::new("git")
+        .args(["clone", "-q", &url])
+        .arg(h)
+        .output()
+        .unwrap()
+        .status
+        .success());
+    git(h, &["config", "user.email", "t@t"]);
+    git(h, &["config", "user.name", "t"]);
+    fs::write(
+        h.join("temper.toml"),
+        format!("[[machine]]\nname = \"t\"\nos = \"{}\"\n", os()),
+    )
+    .unwrap();
+    git(h, &["add", "-A"]);
+    git(h, &["commit", "-qm", "init"]);
+    git(h, &["push", "-q", "-u", "origin", "HEAD:main"]);
+    git(h, &["branch", "-q", "--set-upstream-to=origin/main"]);
+
+    // Dirty tree → a real commit and a real push.
+    fs::write(h.join("note.txt"), "hi\n").unwrap();
+    temper(h)
+        .arg("save")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("pushed"));
+
+    // Clean tree, remote already current → nothing was pushed, so don't say it was.
+    temper(h)
+        .arg("save")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("nothing to commit"))
+        .stdout(predicates::str::contains("pushed").not());
+}
