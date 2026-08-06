@@ -537,6 +537,11 @@ fn step_would_change(
 pub struct InstallReport {
     /// Declared packages considered by the converge phase.
     pub packages: usize,
+    /// Packages actually **brought up to date** by an `update` — measured as the
+    /// drop in the outdated count across the upgrade, so a failed or partial
+    /// upgrade reports what really landed rather than what was attempted.
+    /// `None` on flows that don't upgrade (`install`, `install-missing`).
+    pub upgraded: Option<usize>,
     pub steps_changed: usize,
     pub steps_total: usize,
     /// A layered rpm was added and the machine needs a reboot.
@@ -607,6 +612,7 @@ pub fn run_install(
     if packages_only {
         return Ok(InstallReport {
             packages,
+            upgraded: None, // `install-missing` adds, never upgrades
             steps_changed: 0,
             steps_total: 0,
             reboot,
@@ -648,6 +654,7 @@ pub fn run_install(
     }
     Ok(InstallReport {
         packages,
+        upgraded: None, // `install` converges the declared set; `update` upgrades
         steps_changed: changed,
         steps_total: total,
         reboot,
@@ -837,9 +844,23 @@ pub fn run_update(
         ));
     }
     let _sudo = crate::sudo::keep_alive();
+    // Report the *effect*, not the invocation: count what is outdated before the
+    // upgrade and again after, and the drop is what actually landed. A failed or
+    // partly-applied upgrade then reports what it really did (the failure itself
+    // has already warned), and a converged machine says so honestly instead of
+    // reciting how many packages it declares. The second probe is skipped when
+    // nothing was outdated — that is the common case, and it costs ~1s.
+    let mut upgraded = None;
     if !effective.is_empty() {
         providers::trust_taps(brew_trust, verbose)?;
+        let before = providers::outdated_count();
         providers::upgrade(verbose)?;
+        let after = if before > 0 {
+            providers::outdated_count()
+        } else {
+            0
+        };
+        upgraded = Some(before.saturating_sub(after));
     }
 
     let resolved = resolve(home, machine)?;
@@ -876,6 +897,7 @@ pub fn run_update(
     journal.commit()?;
     Ok(InstallReport {
         packages: effective.len(),
+        upgraded,
         steps_changed: changed,
         steps_total: total,
         reboot: false,

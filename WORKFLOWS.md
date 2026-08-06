@@ -105,6 +105,14 @@ that are missing. It does **not** add newly-declared apps wholesale (that's an
 `install`), and it never runs `restore` (reloading a snapshot would clobber live
 tweaks). *(RIS: `just update`, which deliberately excludes gnome-restore.)*
 
+The summary reports what the run **changed**, not what the machine declares —
+`upgraded 6 packages` (measured as the drop in the outdated count across the
+upgrade, so a failed upgrade doesn't claim credit) or `packages already current`.
+The package managers' own output is captured: a converged machine is near-silent
+except for a spinner, warnings and errors always print, and a tool's private
+verdict ("Nothing to update.", about *its* remotes) is never shown as temper's.
+`-v` streams everything the tools print.
+
 > **Keep temper itself current across the fleet before using a new manifest
 > field.** Because unknown fields are rejected (`deny_unknown_fields`), a machine
 > on an older temper doesn't *skip* a field it doesn't know — it fails to parse

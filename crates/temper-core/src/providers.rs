@@ -636,6 +636,35 @@ pub fn trusted_taps() -> Result<Option<Vec<String>>> {
     Ok(Some(parsed.taps))
 }
 
+/// How many installed packages are **out of date right now**: brew formulae and
+/// casks plus flatpak apps with a pending update. This is the number an `update`
+/// is actually about, as against `effective.len()` — which is what the machine
+/// *declares* and says nothing about what a run changed.
+///
+/// Best-effort and guarded: 0 without the CLIs, and a probe that fails counts as
+/// nothing rather than failing the run. `brew outdated` costs ~1s, so callers
+/// measure the "after" side only when the "before" side found something. The
+/// flatpak side reads whatever remote metadata is already synced (the same data
+/// `flatpak update` would refresh), so it can undercount on a stale cache — an
+/// undercount is fine here, an invented number would not be.
+pub fn outdated_count() -> usize {
+    let mut n = 0;
+    if have("brew") {
+        n += run_lines("brew", &["outdated", "--quiet"])
+            .unwrap_or_default()
+            .len();
+    }
+    if have("flatpak") {
+        n += run_lines(
+            "flatpak",
+            &["remote-ls", "--updates", "--columns=application"],
+        )
+        .unwrap_or_default()
+        .len();
+    }
+    n
+}
+
 /// Upgrade installed packages (brew + flatpak). Best-effort; VM-verified. The
 /// caller only invokes this when packages are actually declared, so a machine
 /// with an empty set never triggers a global upgrade.

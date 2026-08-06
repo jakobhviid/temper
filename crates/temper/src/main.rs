@@ -1001,14 +1001,25 @@ fn cmd_update(json: bool, verbose: bool) -> Result<()> {
             "{}",
             serde_json::json!({
                 "machine": m.name, "packages": r.packages,
+                // What the run actually changed, beside what the machine declares.
+                "upgraded": r.upgraded,
                 "reapplied": r.steps_changed, "total": r.steps_total,
                 "skipped": r.skipped
             })
         );
     } else {
+        // The package half of the line reports an effect. "upgraded 210 package
+        // set" used to recite the *declared* count, so a run that changed nothing
+        // and a run that upgraded a dozen packages printed the same number.
+        let pkgs = match r.upgraded {
+            _ if r.packages == 0 => "no packages declared".to_string(),
+            Some(0) | None => "packages already current".to_string(),
+            Some(1) => "upgraded 1 package".to_string(),
+            Some(n) => format!("upgraded {n} packages"),
+        };
         println!(
-            "update {}: upgraded {} package set, re-applied {} of {} always-step(s)",
-            m.name, r.packages, r.steps_changed, r.steps_total
+            "update {}: {pkgs}, re-applied {} of {} always-step(s)",
+            m.name, r.steps_changed, r.steps_total
         );
         announce_skipped(&r.skipped);
     }

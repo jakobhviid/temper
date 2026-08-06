@@ -111,10 +111,11 @@ fn child_chatter_never_reaches_stdout() {
         !stdout.contains("Looking for updates"),
         "flatpak's progress leaked into temper's stdout: {stdout:?}"
     );
-    // temper still speaks for itself.
+    // temper still speaks for itself — and reports an effect, not the declared
+    // count: nothing was outdated, so it says so rather than "upgraded 1 package".
     assert!(
-        stdout.contains("update test:"),
-        "temper's own summary is missing: {stdout:?}"
+        stdout.contains("update test: packages already current"),
+        "temper's own summary is missing or not effect-based: {stdout:?}"
     );
 }
 
@@ -147,4 +148,7 @@ fn json_stays_parseable_through_a_chatty_child() {
     let v: serde_json::Value = serde_json::from_str(stdout.trim())
         .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {stdout:?}"));
     assert_eq!(v["machine"], "test");
+    // `packages` is what the machine declares; `upgraded` is what the run did.
+    assert_eq!(v["packages"], 1);
+    assert_eq!(v["upgraded"], 0);
 }
