@@ -220,6 +220,17 @@ sudo    = false              # "this script escalates internally" — it still r
                              #   the keyboard may not be there in 20 minutes). Set it on any
                              #   script that calls sudo/pkexec. `sysfile` steps are included
                              #   automatically — temper escalates for those itself.
+                             #   LIMIT: this can only save a prompt where sudo caches
+                             #   credentials per terminal (`timestamp_type=tty`) or
+                             #   globally. Where they are cached per PARENT PROCESS
+                             #   (`ppid` — the effective default on some Fedora builds,
+                             #   whatever the man page says), a script's own `sudo` has a
+                             #   different parent and authenticates again no matter what
+                             #   temper did; temper detects that and says so instead of
+                             #   promising otherwise. `sysfile` is unaffected — temper is
+                             #   the parent there. Also asked only when root is REALLY
+                             #   needed: an in-sync `sysfile`, or an `exec` whose `check`
+                             #   passes, costs no prompt.
 secrets = ["ACOUSTID_KEY"]   # env vars passed through to the script. A live apply
                              # errors if a declared secret is missing; a read-only
                              # `drift`/`install --dry-run` DEGRADES that step to

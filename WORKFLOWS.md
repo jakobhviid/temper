@@ -111,7 +111,20 @@ a `sysfile` (temper places it with `sudo install`) or an `exec` script that decl
 anything starts and asks **once**, at the keyboard, naming what needs it. Declaring
 `sudo = true` is what keeps a script from stopping in the middle of the run to
 prompt — a password or fingerprint request buried in a list of results is easy to
-miss, and the keyboard may not still be there twenty minutes in. Homebrew asks per cask, and
+miss, and the keyboard may not still be there twenty minutes in. temper asks only
+for root it will **really** need: an in-sync `sysfile`, or an `exec` whose `check`
+passes, costs no prompt at all, because that work won't happen.
+
+> **Where one prompt isn't possible.** Reusing a credential across processes depends
+> on how this machine's sudo caches it. With `timestamp_type=tty` (sudo's documented
+> default) or global caching, temper's single up-front prompt covers everything. Where
+> credentials are cached per **parent process** (`ppid` — the effective default on
+> some Fedora builds regardless of what `man 5 sudoers` states), a script's own `sudo`
+> has a different parent and must authenticate again; no amount of asking early can
+> change that. temper measures this rather than assuming, and says so plainly instead
+> of promising a quiet run it can't deliver — `Defaults timestamp_type=tty` in sudoers
+> is the fix. Steps temper escalates *itself* (`sysfile`) are unaffected, since temper
+> is the parent. Homebrew asks per cask, and
 because sudo's timestamp expires (5 min by default) during the multi-GB downloads
 in between, a big converge used to prompt over and over, hours apart. temper now
 checks up front whether this run will touch any such package, names them, and

@@ -188,26 +188,29 @@ fn step_finding(
     Ok(None)
 }
 
-/// Every step in this run that will escalate to root, named for the up-front ask.
+/// The root work this run will really do, split by **who** escalates.
 ///
-/// Two sources. `sysfile` always escalates — temper itself shells out to
-/// `sudo install` to place it. And an `exec` step may declare `sudo = true`: the
-/// script still runs *as the user* (the chezmoi model temper keeps), the flag only
-/// says "this one escalates internally", which is precisely what temper needs to
-/// know in order to ask **before** the run instead of letting the script stop
-/// mid-list to prompt.
+/// `.0` — temper's own escalations (`sysfile`: temper shells out to `sudo install`).
+/// These are direct children of temper, so they can spend a credential temper
+/// acquired even where sudo keys its timestamp to the parent process.
 ///
-/// Gated and lifecycle-filtered exactly as the phase will filter them, because the
-/// promise is that a run with nothing to escalate never asks at all: a step that
-/// will be skipped must not cost the user a password prompt.
+/// `.1` — scripts that escalate for themselves (`exec` with `sudo = true`). Their
+/// `sudo` has the script's shell as its parent, so under parent-keyed timestamps
+/// they authenticate again no matter what temper did — see
+/// [`crate::sudo::reusable_by_children`].
+///
+/// Both lists consult **reality, not the declaration**: a `sysfile` already in sync
+/// and an `exec` whose `check` hook passes will not run, so they must not cost a
+/// password. Asking for work that provably won't happen is the same defect as any
+/// other count of intentions in this codebase.
 fn root_steps(
     home: &Path,
     machine: &Machine,
     vars: &BTreeMap<String, String>,
     resolved: &Resolved,
     update: bool,
-) -> Result<Vec<String>> {
-    let mut out = Vec::new();
+) -> Result<(Vec<String>, Vec<String>)> {
+    let (mut own, mut scripts) = (Vec::new(), Vec::new());
     for (_, step) in &resolved.steps {
         if !is_step(step) {
             continue;
@@ -225,40 +228,107 @@ fn root_steps(
         } else if lifecycle(step) == "manual" {
             continue;
         }
-        let escalates = step.sysfile.is_some() || (step.exec.is_some() && step.sudo);
-        if !escalates {
-            continue;
-        }
         if !matches!(gate_step(home, step), Gate::Apply) {
             continue;
         }
-        out.push(step_parts(step).1);
+
+        if let (Some(sysfile), Some(to)) = (&step.sysfile, &step.to) {
+            // In sync → nothing to write → no root needed. `sysfile_state` answers
+            // this without privilege when the destination is readable, and degrades
+            // to `Unavailable` when it isn't — which we treat as "might need root",
+            // since not being able to look is not evidence of being in sync.
+            let state = primitives::sysfile_state(
+                &home.join(sysfile),
+                &expand_tilde(to),
+                &sysfile_opts(step),
+            )?;
+            if state != FileState::InSync {
+                own.push(to.clone());
+            }
+            continue;
+        }
+
+        if step.exec.is_some() && step.sudo {
+            // A passing `check` means the phase will skip the script entirely, so
+            // its `sudo` never happens. Evaluated here and again in the phase: a
+            // check is contractually read-only and instant, and a needless password
+            // prompt costs the user more than a second probe costs the machine. If
+            // the check can't be evaluated (a missing secret), assume root *is*
+            // needed rather than promise a quiet run we can't deliver.
+            if let Some(check) = &step.check {
+                let opts = exec_opts(home, machine, step);
+                if primitives::exec_missing_secret(&opts).is_none()
+                    && primitives::exec_check(&home.join(check), &opts)?
+                {
+                    continue;
+                }
+            }
+            scripts.push(step_parts(step).1);
+        }
     }
-    Ok(out)
+    Ok((own, scripts))
 }
 
-/// Ask for root **once**, up front, for everything in this run that needs it.
+/// Ask for root **once**, up front, for everything in this run that needs it — and
+/// say only what this machine can actually deliver.
 ///
 /// The keyboard is here now; it may not be in twenty minutes, and a prompt that
-/// arrives mid-run has nowhere good to land — it collides with progress output, and
-/// a fingerprint or password request buried in a list of results is easy to miss
-/// entirely. Silent when nothing needs root, which is the common case.
-fn acquire_root_once(casks: &[String], steps: &[String]) {
-    if casks.is_empty() && steps.is_empty() {
+/// arrives mid-run has nowhere good to land. But the promise "nothing will stop to
+/// prompt" is only true when the credential outlives temper's own process tree, so
+/// it is no longer printed as a guarantee: temper states what it needs the password
+/// for, and if a script won't be able to reuse it, says that plainly with the
+/// remedy. Silent when nothing needs root, which is the common case.
+fn acquire_root_once(casks: &[String], own: &[String], scripts: &[String]) {
+    if casks.is_empty() && own.is_empty() && scripts.is_empty() {
         return;
     }
+    // Who can actually spend a credential temper acquires? Only temper's own
+    // escalations (`own`). A `sudo = true` script's sudo has the script's shell as
+    // its parent — and Homebrew's has brew's Ruby process — so under parent-keyed
+    // timestamps neither can, which makes `casks` no safer than `scripts` here.
+    let beyond_temper: Vec<String> = casks.iter().chain(scripts).cloned().collect();
+
+    // If a credential already exists we can learn the scope *before* spending a
+    // prompt — and skip asking altogether when the only reason would be work that
+    // cannot reuse it anyway.
+    if own.is_empty() && crate::sudo::cached() && !crate::sudo::reusable_by_children() {
+        warn_parent_scoped(&beyond_temper);
+        return;
+    }
+
     let mut what = Vec::new();
     if !casks.is_empty() {
-        what.push(format!("{} via a system installer: {}", casks.len(), casks.join(", ")));
+        what.push(format!("{} package installer(s): {}", casks.len(), casks.join(", ")));
     }
-    if !steps.is_empty() {
-        what.push(format!("{} step(s): {}", steps.len(), steps.join(", ")));
+    if !own.is_empty() {
+        what.push(format!("{} file(s) written as root: {}", own.len(), own.join(", ")));
     }
-    crate::sudo::acquire(&format!(
-        "this run needs your password for {} — asking once now, so nothing stops to \
-         prompt part-way through",
+    if !scripts.is_empty() {
+        what.push(format!("{} script(s) that escalate: {}", scripts.len(), scripts.join(", ")));
+    }
+    let got = crate::sudo::acquire(&format!(
+        "this run needs your password for {} — asking once, up front",
         what.join(" · ")
     ));
+    // Now that a credential exists, find out whether anything outside temper's own
+    // process tree could ever use it.
+    if got && !beyond_temper.is_empty() && !crate::sudo::reusable_by_children() {
+        warn_parent_scoped(&beyond_temper);
+    }
+}
+
+/// Say — once, plainly, with the remedy — that this machine cannot deliver the one
+/// prompt temper would otherwise imply. Covers both a script's own `sudo` and
+/// Homebrew's: each runs sudo from *its* process, not temper's.
+fn warn_parent_scoped(beyond_temper: &[String]) {
+    eprintln!(
+        "{} this machine's sudo keeps credentials per parent process, so temper's \
+         password cannot be reused by {} — {} will ask again when reached. \
+         `Defaults timestamp_type=tty` in sudoers is what makes one prompt possible.",
+        crate::ui::yellow("⚠"),
+        if beyond_temper.len() == 1 { "it" } else { "them" },
+        beyond_temper.join(", ")
+    );
 }
 
 /// Apply one step, giving an `exec` the terminal to itself.
@@ -733,9 +803,11 @@ pub fn run_install(
     let _sudo = if dry_run {
         None
     } else {
+        let (own_root, script_root) = root_steps(home, machine, vars, &resolved, false)?;
         acquire_root_once(
             &providers::casks_needing_root(&effective),
-            &root_steps(home, machine, vars, &resolved, false)?,
+            &own_root,
+            &script_root,
         );
         Some(crate::sudo::keep_alive())
     };
@@ -1021,9 +1093,11 @@ pub fn run_update(
     // needs root just like installing it, and `sysfile` steps below shell out to
     // `sudo install`. Ask once, up front, only if something actually needs it.
     let resolved = resolve(home, machine)?;
+    let (own_root, script_root) = root_steps(home, machine, vars, &resolved, true)?;
     acquire_root_once(
         &providers::casks_needing_root(&effective),
-        &root_steps(home, machine, vars, &resolved, true)?,
+        &own_root,
+        &script_root,
     );
     let _sudo = crate::sudo::keep_alive();
     // Report the *effect*, not the invocation: snapshot installed versions either
@@ -1190,7 +1264,8 @@ mod root_step_tests {
         (d, m)
     }
 
-    fn root_targets(bundle: &str) -> Vec<String> {
+    /// (temper's own escalations, scripts that escalate for themselves)
+    fn root_targets(bundle: &str) -> (Vec<String>, Vec<String>) {
         let (d, m) = home_with(bundle);
         let resolved = resolve(d.path(), &m).unwrap();
         let vars = BTreeMap::new();
@@ -1198,36 +1273,107 @@ mod root_step_tests {
     }
 
     #[test]
-    fn sysfile_and_declared_sudo_are_asked_for_up_front() {
-        // `sysfile` escalates by construction (temper runs `sudo install`), and an
-        // `exec` can declare that it escalates internally.
-        let found = root_targets(
+    fn sysfile_and_declared_sudo_are_split_by_who_escalates() {
+        // `sysfile` is temper's own escalation (it can spend temper's credential);
+        // a `sudo = true` exec escalates for itself (under parent-keyed timestamps
+        // it cannot), so the two are tracked apart and reported differently.
+        let (own, scripts) = root_targets(
             "[[step]]\nsysfile = \"assets/x\"\nto = \"/etc/x.conf\"\n\n\
              [[step]]\nexec = \"assets/needs-root.sh\"\nsudo = true\n",
         );
-        assert_eq!(found, vec!["/etc/x.conf", "assets/needs-root.sh"]);
+        assert_eq!(own, vec!["/etc/x.conf"]);
+        assert_eq!(scripts, vec!["assets/needs-root.sh"]);
+    }
+
+    #[test]
+    fn a_script_whose_check_passes_costs_no_password() {
+        // A passing `check` means the phase skips the script, so its `sudo` never
+        // happens — asking for it would be charging the user for work that provably
+        // will not occur.
+        let d = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(d.path().join("apps")).unwrap();
+        std::fs::create_dir_all(d.path().join("assets")).unwrap();
+        std::fs::write(d.path().join("assets/in-sync.sh"), "exit 0\n").unwrap();
+        std::fs::write(
+            d.path().join("apps/a.toml"),
+            "[[step]]\nexec = \"assets/needs-root.sh\"\nsudo = true\n\
+             check = \"assets/in-sync.sh\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.path().join("temper.toml"),
+            format!(
+                "[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"a\"]\n",
+                crate::machine::current_os()
+            ),
+        )
+        .unwrap();
+        let ft = manifest::load_fleet(d.path()).unwrap();
+        let m = crate::machine::resolve(&ft, Some("t")).unwrap();
+        let resolved = resolve(d.path(), &m).unwrap();
+        let (own, scripts) = root_steps(d.path(), &m, &BTreeMap::new(), &resolved, false).unwrap();
+        assert!(own.is_empty() && scripts.is_empty(), "{own:?} {scripts:?}");
+    }
+
+    #[test]
+    fn a_sysfile_already_in_sync_costs_no_password() {
+        // The converged case, and the whole point of consulting reality: temper can
+        // see the file already matches — without privilege, since the destination is
+        // readable — so there is nothing to write and nothing to ask for.
+        let d = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(d.path().join("apps")).unwrap();
+        std::fs::create_dir_all(d.path().join("assets")).unwrap();
+        std::fs::write(d.path().join("assets/x"), "managed\n").unwrap();
+        let dest = d.path().join("dest.conf");
+        std::fs::write(&dest, "managed\n").unwrap();
+        std::fs::write(
+            d.path().join("apps/a.toml"),
+            format!(
+                "[[step]]\nsysfile = \"assets/x\"\nto = \"{}\"\n",
+                dest.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            d.path().join("temper.toml"),
+            format!(
+                "[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"a\"]\n",
+                crate::machine::current_os()
+            ),
+        )
+        .unwrap();
+        let ft = manifest::load_fleet(d.path()).unwrap();
+        let m = crate::machine::resolve(&ft, Some("t")).unwrap();
+        let resolved = resolve(d.path(), &m).unwrap();
+        let (own, scripts) = root_steps(d.path(), &m, &BTreeMap::new(), &resolved, false).unwrap();
+        assert!(own.is_empty() && scripts.is_empty(), "{own:?} {scripts:?}");
+
+        // …and it *is* asked for when the file really differs.
+        std::fs::write(&dest, "drifted\n").unwrap();
+        let (own, _) = root_steps(d.path(), &m, &BTreeMap::new(), &resolved, false).unwrap();
+        assert_eq!(own.len(), 1, "{own:?}");
     }
 
     #[test]
     fn a_run_with_nothing_to_escalate_never_asks() {
         // The promise is no prompt at all on a run that needs no root — so a plain
         // `exec` and a `copy` must contribute nothing.
-        let found = root_targets(
+        let (own, scripts) = root_targets(
             "[[step]]\nexec = \"assets/plain.sh\"\n\n\
              [[step]]\ncopy = \"assets/f\"\nto = \"~/.f\"\n",
         );
-        assert!(found.is_empty(), "{found:?}");
+        assert!(own.is_empty() && scripts.is_empty(), "{own:?} {scripts:?}");
     }
 
     #[test]
     fn a_step_that_will_be_skipped_costs_no_password() {
         // Gated out by `when`, and `manual` — neither will run, so neither may
         // trigger a prompt for root it never needs.
-        let found = root_targets(
+        let (own, scripts) = root_targets(
             "[[step]]\nexec = \"assets/gated.sh\"\nsudo = true\n\
              when = { binary = \"definitely-not-installed-anywhere\" }\n\n\
              [[step]]\nexec = \"assets/manual.sh\"\nsudo = true\nrun = \"manual\"\n",
         );
-        assert!(found.is_empty(), "{found:?}");
+        assert!(own.is_empty() && scripts.is_empty(), "{own:?} {scripts:?}");
     }
 }

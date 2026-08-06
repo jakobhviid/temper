@@ -98,6 +98,33 @@ pub fn keep_alive() -> KeepAlive {
     }
 }
 
+/// Whether a credential temper holds is usable by the **processes temper spawns**
+/// — the only question that matters for the "one password per run" promise.
+///
+/// [`cached`] cannot answer it. It probes as temper's own child, and sudo may key
+/// its timestamp to the **parent process** (`timestamp_type=ppid`), which makes
+/// temper's own children the one case that always succeeds. Observed on Fedora 44
+/// (sudo 1.9.17) with *no* sudoers override and a `man 5 sudoers` that documents
+/// the default as `tty` — so the runtime default cannot be assumed from the docs,
+/// only measured.
+///
+/// The probe deliberately runs **two** commands. `sh -c 'sudo …'` with a single
+/// command is `exec`'d rather than forked, which leaves sudo's parent as the
+/// caller's own — silently reintroducing the case we are trying to exclude, and
+/// exactly the trap that made an earlier diagnosis of this read "not reproducible".
+pub fn reusable_by_children() -> bool {
+    which("sudo").is_some()
+        && Command::new("sh")
+            .arg("-c")
+            .arg("sudo -n -v >/dev/null 2>&1; exit $?")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+}
+
 /// Whether a usable sudo timestamp already exists (never prompts).
 pub fn cached() -> bool {
     which("sudo").is_some()
@@ -148,17 +175,15 @@ pub fn acquire(reason: &str) -> bool {
         );
         return false;
     }
-    // Verify rather than assume. The whole promise of asking up front is that
-    // nothing prompts later, and that rests on the credential being *reusable* by
-    // the children that need it — which depends on this machine's sudo policy
-    // (`timestamp_timeout`, `timestamp_type`), not on our good intentions. If it
-    // isn't reusable, say so here, where it is still one line of explanation,
-    // instead of letting it surface as a second prompt mid-run with no context.
+    // Verify rather than assume — but verify the way the run will actually *spend*
+    // the credential. An earlier version checked `cached()` here, which probes as
+    // temper's own child and therefore passes even when nothing else can reuse it;
+    // the caller asks [`reusable_by_children`] for that, because only the caller
+    // knows whether this run's root work is temper's own or a script's.
     if !cached() {
         eprintln!(
-            "{} this machine's sudo does not keep the credential for other \
-             processes, so a step may still prompt (see `timestamp_timeout` / \
-             `timestamp_type` in sudoers)",
+            "{} the password was accepted but no credential was kept, so a step may \
+             still prompt (see `timestamp_timeout` in sudoers)",
             crate::ui::yellow("⚠")
         );
         return false;
