@@ -67,8 +67,15 @@ Folder discovery (built, `discovery.rs`) — first hit wins:
    `~/OneDrive`, `~/ProtonDrive`, `~/Google Drive`, `~/Sync`), `/media`,
    `/run/media/$USER`.
 
-So a folder cloned/synced to e.g. `~/steel` or `~/Developer/steel` is found with
-**no configuration** — that's why machines "just know where steel is." A fresh
+   `steel` is in that list because it is the name of the folder temper was built
+   for — the author's own fleet spec. Nothing about temper depends on it: name
+   yours `temper-home` or `.temper` for the same zero-config discovery, or call it
+   whatever you like and point temper at it with `temper setup` or `$TEMPER_DIR`.
+   Where these docs show a path like `~/Developer/steel`, read it as "wherever
+   your folder lives".
+
+So a folder cloned/synced to e.g. `~/temper-home` or `~/Developer/temper-home` is
+found with **no configuration** — machines just find it. A fresh
 box with none of these errors with a message telling you to `temper setup <dir>`
 or set `$TEMPER_DIR`. (Discovery only *locates* the folder — temper never clones
 or syncs it; that's git/Nextcloud/rsync's job.)
@@ -418,13 +425,13 @@ recipes too (a `bootstrap.sh`, an image tier), so this is parity, not a gap.
 
 ---
 
-## Folder layout — building your own "steel"
+## Folder layout — building your own spec folder
 
 temper *requires* only `temper.toml` at the root; everything else is convention.
 The recommended shape (app-first recipes, real files under `assets/`):
 
 ```
-<your-steel>/            a git repo, a synced cloud folder, or a USB copy
+<your-folder>/           a git repo, a synced cloud folder, or a USB copy
   temper.toml            machines (name/os/role) + apps + loose pkgs + [vars] + [ignore] + [brew] + [eq_import]
   apps/                  one file per app — the composable, code-free recipes
     shell.toml           copy/block/setkey/exec steps, os/role/when-gated
@@ -439,6 +446,6 @@ The recommended shape (app-first recipes, real files under `assets/`):
 ```
 
 Get the folder onto a box however you like, then let temper find it (§discovery:
-drop it at a scanned location like `~/steel` or `~/Developer/steel`, or run
-`temper setup <dir>`). See `SPEC.md` for the schema of each file, `WORKFLOWS.md`
+drop it at a scanned location like `~/temper-home` or `~/Developer/temper-home`,
+or run `temper setup <dir>`). See `SPEC.md` for the schema of each file, `WORKFLOWS.md`
 for the day-to-day loops, and `PRINCIPLES.md` for the guardrails.

@@ -33,7 +33,7 @@ what `drift`'s Next steps print.
 (bootstrap is out of scope — a separate script).
 
 ```sh
-temper setup ~/steel   # once: record where the folder is (optional)
+temper setup ~/my-spec # once: record where your folder is (optional)
 temper install       # full converge: packages + all config + one-time setup
 temper restore       # Linux desktop only: load the dconf snapshot back
 ```
@@ -73,17 +73,19 @@ so does `--dry-run`. Set `TEMPER_NO_SUDO_KEEPALIVE=1` to opt out (you'll get
 Homebrew's per-cask prompts back). App Store prompts are Apple's own and can't be
 cached this way — `mas` may still ask per app.
 
-**How temper finds the folder (why it "just knows where steel is").** temper
+**How temper finds the folder (why you rarely have to tell it).** temper
 resolves its home in this order, first hit wins: `$TEMPER_DIR` → walk up from the
 cwd → a saved pointer (`temper setup <dir>`) → **auto-scan** a folder named
-`steel`/`temper-home`/`.temper` under `~`, a dev parent
+`steel`/`temper-home`/`.temper` (`steel` is the author's own fleet spec, the
+folder temper was built for — kept as a scanned name; yours can use it, or one of
+the other two, or any name plus `temper setup`) under `~`, a dev parent
 (`~/Developer`, `~/developer`, `~/dev`, `~/src`, `~/code`, `~/projects`, `~/git`,
 `~/repos`, …), or a cloud-sync root — the same set `dotsync` probes: each
 `~/Library/CloudStorage/*` client, iCloud Drive, `~/Nextcloud`, `~/Dropbox`,
 `~/OneDrive`, `~/ProtonDrive`, `~/Google Drive`, `~/Sync`, plus `/media` and
 `/run/media/$USER`. So on a
 fresh box you have three no-fuss options: clone/sync your folder to one of those
-locations (e.g. `~/Developer/steel`) and it's found automatically; or run
+locations (e.g. `~/Developer/temper-home`) and it's found automatically; or run
 `temper setup` — with no argument it lists the discovered libraries and lets you
 pick one (or paste a path), saving the pointer; `temper setup <dir>` sets one
 directly. Or export `TEMPER_DIR`. If several libraries are found and none is
@@ -267,7 +269,7 @@ you persist those changes so it doesn't silently drift:
 - Whenever the folder is left dirty, **any** command hints — the spec-writing
   verbs above *and* the read/apply ones (`drift`, `install`, `update`, `prune`,
   `adopt`, `restore`), so a stray hand edit surfaces whatever you run next:
-  `ⓘ steel has uncommitted spec changes — temper save …`.
+  `ⓘ my-spec has uncommitted spec changes — temper save …` (it names your folder).
 - **`temper save`** = `pull → add -A → commit → push`, with an
   auto-generated message (`reconcile chronos-redux: +2 -1 ~0`) unless you pass
   `-m "…"`. `--no-push` to hold. Works after hand edits too (message from the
@@ -291,7 +293,7 @@ you persist those changes so it doesn't silently drift:
 spec; if it can't pull (offline, diverged) it warns and continues — never blocks.
 With `auto_rebase` a diverged local is replayed on top instead of warned past.
 
-While it runs you see what it is doing (`⠹ pulling ~/Developer/steel`), and it
+While it runs you see what it is doing (`⠹ pulling ~/Developer/my-spec`), and it
 reports the **effect**: `✓ spec updated (2 commits)` when work landed — which is
 also the explanation for a plan that differs from last time — and nothing at all
 when the spec was already current. Inside `install`/`update` the pull is a
@@ -319,7 +321,7 @@ temper acts on the **machine it runs on**. The machine *argument* selects which
   git/Nextcloud/USB. On each box, `temper setup <dir>` records where it lives.
 - **Run per-machine, no argument.** On a machine, `temper install` / `update` /
   `drift` with **no machine name** resolves *this* machine by hostname. Drive
-  remotes over ssh — `ssh atlas 'cd ~/steel && temper drift'` — so atlas resolves
+  remotes over ssh — `ssh atlas 'cd ~/my-spec && temper drift'` — so atlas resolves
   and converges *itself*.
 - **The machine argument selects a spec, not a remote target.** `temper drift
   atlas` on another box checks *this* box's live state against *atlas's* spec

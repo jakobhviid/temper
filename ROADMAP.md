@@ -69,7 +69,8 @@ feature:
 
 ## Verification gap (a state, not a feature)
 
-The Linux half of the `steel` migration is transcribed + parse-valid but has
+The Linux half of the `steel` migration (`steel` = the author's own fleet spec,
+the folder temper was built for) is transcribed + parse-valid but has
 **never run** — the dconf loads, 1Password NMH surgery, PWAs, speaker-eq exec
 scripts await a VM. See the README "VM run checklist". Mac config is
 drift-verified against a real machine. ReinstallScripts stays as the fallback

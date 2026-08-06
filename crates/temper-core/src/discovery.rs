@@ -127,6 +127,11 @@ pub fn scan_candidates() -> Vec<PathBuf> {
 /// The scan over a given home root — split out so it's testable without touching
 /// the process-global `$HOME` (which is racy under parallel tests).
 fn scan_in(home: &Path) -> Vec<PathBuf> {
+    // `steel` is the folder temper was built for (the author's own fleet spec), kept
+    // here so those machines need no configuration; `temper-home`/`.temper` are the
+    // generic names anyone else can use for the same zero-config discovery. Adding
+    // to this list is cheap — it is a convenience, never a requirement (`setup` and
+    // `$TEMPER_DIR` cover any name).
     let names = ["steel", "temper-home", ".temper"];
     // Parent dirs a checkout tends to live in. `Developer` is the macOS
     // convention; a Linux box just as often uses a lowercase `developer` or a
