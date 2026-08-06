@@ -139,7 +139,10 @@ pub fn cached() -> bool {
 }
 
 /// Take the password **once, up front**, having established that this run needs
-/// root — `reason` says what for, in temper's words, before the prompt appears.
+/// root. `work` is a bare description of what needs it ("2 file(s) written as
+/// root: /etc/a, /etc/b"); every sentence around it belongs here, because only
+/// this function knows which one applies — asking for the password, or explaining
+/// why it cannot be asked for.
 ///
 /// Why temper asks rather than letting Homebrew ask: brew prompts at the moment
 /// it reaches each pkg-based cask, which is minutes-to-hours into an unattended
@@ -150,18 +153,35 @@ pub fn cached() -> bool {
 /// Returns whether a timestamp is now held. `false` (no `sudo`, no tty, or a
 /// refused/failed prompt) is not fatal: the run continues exactly as it did
 /// before, with Homebrew prompting for itself when it gets there.
-pub fn acquire(reason: &str) -> bool {
+pub fn acquire(work: &str) -> bool {
     if which("sudo").is_none() {
+        eprintln!(
+            "{} this run needs root but `sudo` is not installed, so it will fail when \
+             it gets there: {work}",
+            crate::ui::yellow("⚠")
+        );
         return false;
     }
     if cached() {
         return true; // already valid — don't ask for what we have
     }
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        return false; // unattended: nothing to type a password into
+        // Unattended (cron, ssh without a tty, piped stdin): there is nowhere to type
+        // a password. Say so *now*, naming the work — otherwise the run looks fine
+        // until the escalation itself fails with a bare `sudo install … failed`,
+        // which explains neither what wanted root nor why it could not be granted.
+        eprintln!(
+            "{} this run needs root and there is no terminal to ask on, so it will \
+             fail when it gets there: {work}",
+            crate::ui::yellow("⚠")
+        );
+        return false;
     }
     // stderr, so `--json` stays pipe-clean.
-    eprintln!("{} {reason}", crate::ui::cyan("→"));
+    eprintln!(
+        "{} this run needs your password for {work} — asking once, up front",
+        crate::ui::cyan("→")
+    );
     let answered = Command::new("sudo")
         .arg("-v")
         .status() // inherits the tty: sudo's own prompt, typed into directly

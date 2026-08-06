@@ -306,10 +306,9 @@ fn acquire_root_once(casks: &[String], own: &[String], scripts: &[String]) {
     if !scripts.is_empty() {
         what.push(format!("{} script(s) that escalate: {}", scripts.len(), scripts.join(", ")));
     }
-    let got = crate::sudo::acquire(&format!(
-        "this run needs your password for {} — asking once, up front",
-        what.join(" · ")
-    ));
+    // `what` is a bare description of the work; `sudo::acquire` frames it, because
+    // only it knows which sentence applies — asking, or explaining why it can't.
+    let got = crate::sudo::acquire(&what.join(" · "));
     // Now that a credential exists, find out whether anything outside temper's own
     // process tree could ever use it.
     if got && !beyond_temper.is_empty() && !crate::sudo::reusable_by_children() {
