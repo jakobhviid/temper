@@ -19,23 +19,32 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  # One job per OS, building BOTH of that OS's targets — not one job per target.
+  # Every hosted-runner request is a chance to be denied ("The job was not acquired
+  # by Runner of type hosted even after multiple attempts"), and during GitHub's
+  # Actions outage on 2026-08-06 that cost three consecutive releases, each time on
+  # a different leg. Two requests instead of four halves the exposure, and the
+  # second target costs only build minutes on a runner we already hold — which is
+  # why x86_64-apple-darwin stays: Intel Macs are retired, but shipping them a
+  # bottle is now free rather than a whole extra runner acquisition.
+  #
+  # Safe because nothing downstream keys off artifact *names*: the release job
+  # downloads with `merge-multiple: true` and addresses everything by filename in
+  # `art/`, so one artifact carrying two targets is indistinguishable from two.
   build:
     needs: test
     runs-on: ${{ matrix.os }}
     strategy:
+      # A denied runner on one OS must not cancel the other: with fail-fast the
+      # healthy leg was killed alongside the unlucky one and re-run for nothing.
+      fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
+          - os: ubuntu-latest
+            targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
             cross: true
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            cross: true
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            cross: false
-          - target: aarch64-apple-darwin
-            os: macos-latest
+          - os: macos-latest
+            targets: x86_64-apple-darwin,aarch64-apple-darwin
             cross: false
     steps:
       - uses: actions/checkout@v5
@@ -51,41 +60,52 @@ jobs:
           echo "stamped $v"
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.targets }}
       - name: Install cross
         if: matrix.cross
         uses: taiki-e/install-action@v2
         with:
           tool: cross
-      - name: Build
-        run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
-          else
-            cargo build --release --target ${{ matrix.target }}
-          fi
-      - name: Package
+      - name: Build + package each target
+        env:
+          TARGETS: ${{ matrix.targets }}
+          CROSS: ${{ matrix.cross }}
         run: |
           mkdir -p dist
-          tar czf "dist/temper-${{ matrix.target }}.tar.gz" \
-            -C "target/${{ matrix.target }}/release" temper
-      - name: Emit Homebrew bottle tag (macOS)
+          for t in ${TARGETS//,/ }; do
+            echo "::group::build $t"
+            if [ "$CROSS" = "true" ]; then
+              cross build --release --target "$t"
+            else
+              cargo build --release --target "$t"
+            fi
+            tar czf "dist/temper-$t.tar.gz" -C "target/$t/release" temper
+            echo "::endgroup::"
+          done
+      - name: Emit Homebrew bottle tags (macOS)
         if: runner.os == 'macOS'
+        env:
+          TARGETS: ${{ matrix.targets }}
         run: |
           # macos-latest is Apple Silicon, so the host tag is like "arm64_sequoia".
           # Its codename drives both the arm64 and the (cross-built) Intel bottle
           # tag. brew's developer-mode notice goes to stderr; the tag is on stdout.
           host=$(brew ruby -e 'puts Utils::Bottles.tag.to_s' 2>/dev/null)
           codename=${host#arm64_}
-          case "${{ matrix.target }}" in
-            aarch64-apple-darwin) tag="arm64_${codename}" ;;
-            x86_64-apple-darwin)  tag="${codename}" ;;
-          esac
-          printf '%s' "$tag" > "dist/${{ matrix.target }}.bottletag"
-          echo "bottle tag: $tag"
+          for t in ${TARGETS//,/ }; do
+            case "$t" in
+              aarch64-apple-darwin) tag="arm64_${codename}" ;;
+              x86_64-apple-darwin)  tag="${codename}" ;;
+              *) echo "no bottle tag rule for $t" >&2; exit 1 ;;
+            esac
+            printf '%s' "$tag" > "dist/$t.bottletag"
+            echo "bottle tag $t: $tag"
+          done
+      # One artifact per OS carrying both its targets' files — addressed downstream
+      # by filename, so the layout change is invisible to the release job.
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.target }}
+          name: ${{ matrix.os }}
           path: dist/*
 
   release:
