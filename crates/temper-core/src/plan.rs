@@ -592,8 +592,16 @@ pub fn run_install(
         providers::trust_taps(brew_trust, verbose)?;
     }
     let packages = providers::converge(&effective, dry_run, verbose)?;
-    providers::gext_converge(&providers::effective_extensions(home, machine)?, dry_run)?;
-    let reboot = providers::rpm_converge(&providers::effective_rpm(home, machine)?, dry_run)?;
+    providers::gext_converge(
+        &providers::effective_extensions(home, machine)?,
+        dry_run,
+        verbose,
+    )?;
+    let reboot = providers::rpm_converge(
+        &providers::effective_rpm(home, machine)?,
+        dry_run,
+        verbose,
+    )?;
 
     // `install-missing`: packages only — skip the config-step phase entirely.
     if packages_only {

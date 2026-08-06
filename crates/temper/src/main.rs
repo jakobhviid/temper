@@ -42,12 +42,14 @@ struct Cli {
     #[arg(long, global = true)]
     llm: bool,
 
-    /// Show the underlying tools' full output (brew/mas/…) and stream `exec`
-    /// scripts live. Runs are quiet by default — only real installs, changes,
-    /// warnings, and errors are shown; an idempotent `exec`'s chatter is
-    /// captured and surfaced only if the script fails, and a package converge
-    /// shows a spinner naming the package being installed right now instead of
-    /// the package manager's own output (replayed in full if it fails).
+    /// Show the underlying tools' full output (brew/flatpak/mas/gext/rpm-ostree)
+    /// and stream `exec` scripts live. Runs are quiet by default — only real
+    /// installs, changes, warnings, and errors are shown; an idempotent `exec`'s
+    /// chatter is captured and surfaced only if the script fails, and every
+    /// package converge/upgrade shows a spinner naming what it is working on
+    /// right now instead of the package manager's own output (replayed in full if
+    /// it fails). A tool's own "already up to date" verdict is never temper's, so
+    /// it is not shown.
     #[arg(short = 'v', long, global = true)]
     verbose: bool,
 

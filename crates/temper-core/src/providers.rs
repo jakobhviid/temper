@@ -212,9 +212,14 @@ fn brew_progress_label(line: &str) -> Option<String> {
 /// Whether a captured line *starts* something worth surfacing even on a
 /// successful run — the capture-and-replay-on-failure pattern would otherwise
 /// swallow Homebrew's advisories, which the streamed (`--verbose`) path showed.
+/// Case-insensitive on the prefix: Homebrew capitalizes (`Warning:`), flatpak
+/// does not (`error: Failed to install …`), and an advisory must survive the
+/// quiet path whichever tool wrote it.
 fn is_noteworthy(line: &str) -> bool {
     let l = line.trim_start();
-    l.starts_with("Warning:") || l.starts_with("Error:")
+    let n = l.len().min(8);
+    let head = l[..n].to_ascii_lowercase();
+    head.starts_with("warning:") || head.starts_with("error:")
 }
 
 /// The lines to surface from a *successful* run: every `Warning:`/`Error:` line
@@ -255,9 +260,16 @@ fn noteworthy_lines(log: &str) -> Vec<&str> {
 /// Quiet by default is the repo-wide convention (exec steps, `brew upgrade`), but
 /// a silent 40-minute converge reads as a hang — so the spinner shows *which*
 /// package is being worked on right now, and warnings still print.
-fn run_with_spinner(mut cmd: Command, initial: &str) -> Result<(bool, String)> {
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd.spawn().context("spawning brew bundle")?;
+///
+/// `stdin` is explicitly **null**. Inheriting it would let a child that decides
+/// to prompt (a missing `-y`, a polkit fallback) block on the tty while its
+/// question disappears into the captured pipe — an invisible hang. Closed stdin
+/// turns that into a fast failure whose log we replay, which is debuggable.
+fn run_with_spinner(mut cmd: Command, what: &str, initial: &str) -> Result<(bool, String)> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().with_context(|| format!("spawning {what}"))?;
     let stdout = child.stdout.take().context("piped stdout")?;
     let stderr = child.stderr.take().context("piped stderr")?;
 
@@ -278,7 +290,10 @@ fn run_with_spinner(mut cmd: Command, initial: &str) -> Result<(bool, String)> {
         log.push_str(&line);
         log.push('\n');
     }
-    let ok = child.wait().context("waiting for brew bundle")?.success();
+    let ok = child
+        .wait()
+        .with_context(|| format!("waiting for {what}"))?
+        .success();
     let log = format!("{log}{}", errs.join().unwrap_or_default());
     pb.finish_and_clear();
 
@@ -288,6 +303,36 @@ fn run_with_spinner(mut cmd: Command, initial: &str) -> Result<(bool, String)> {
         }
     }
     Ok((ok, log))
+}
+
+/// Run a **best-effort** converge child: `--verbose` streams it live, otherwise
+/// it runs under [`run_with_spinner`] — silent on success, and on failure the
+/// swallowed log is replayed with a warning instead of aborting the run.
+///
+/// This is the one door every such child goes through, because a child's own
+/// output is about the child's domain, not about temper's run. Left inherited,
+/// `flatpak update`'s "Nothing to update." (its remotes) reads as a verdict on
+/// the whole converge, and — writing to temper's stdout — corrupts `--json`.
+/// Returns whether the child succeeded.
+fn run_child(mut cmd: Command, verbose: bool, what: &str, initial: &str) -> bool {
+    if verbose {
+        // The user asked to see it — stream live, exactly as before.
+        return cmd.status().map(|s| s.success()).unwrap_or(false);
+    }
+    match run_with_spinner(cmd, what, initial) {
+        Ok((true, _)) => true,
+        Ok((false, log)) => {
+            eprintln!("{} {what} failed:", crate::ui::yellow("⚠"));
+            if !log.is_empty() {
+                eprint!("{log}"); // replay what the capture swallowed
+            }
+            false
+        }
+        Err(e) => {
+            eprintln!("{} could not run {what}: {e:#}", crate::ui::yellow("⚠"));
+            false
+        }
+    }
 }
 
 /// The casks in `effective` that Homebrew will need **root** for — those with a
@@ -400,7 +445,7 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize
             let status = cmd.status().context("running brew bundle")?;
             (!status.success()).then(String::new)
         } else {
-            let (ok, log) = run_with_spinner(cmd, "converging packages")?;
+            let (ok, log) = run_with_spinner(cmd, "brew bundle", "converging packages")?;
             (!ok).then_some(log)
         };
         let _ = std::fs::remove_file(&tmp);
@@ -425,8 +470,9 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize
         for f in &flatpaks {
             cmd.arg(f);
         }
-        // best-effort: a missing remote or app shouldn't abort the whole run
-        let _ = cmd.status();
+        // best-effort: a missing remote or app shouldn't abort the whole run —
+        // but it must be *reported*, not swallowed the way `let _ = status()` did.
+        run_child(cmd, verbose, "flatpak install", "installing flatpaks");
     }
 
     // Forgiving mas: install each App Store app on its own; a failure is warned
@@ -551,7 +597,13 @@ pub fn untrust_taps(taps: &[String]) -> Result<()> {
     for t in taps {
         cmd.arg(t);
     }
-    let _ = cmd.status();
+    if !cmd.status().map(|s| s.success()).unwrap_or(false) {
+        eprintln!(
+            "{} brew untrust failed — {} tap(s) may still be trusted",
+            crate::ui::yellow("⚠"),
+            taps.len()
+        );
+    }
     Ok(())
 }
 
@@ -600,12 +652,17 @@ pub fn upgrade(verbose: bool) -> Result<()> {
         if !verbose {
             cmd.arg("--quiet");
         }
-        let _ = cmd.status();
+        run_child(cmd, verbose, "brew upgrade", "upgrading packages");
     }
     if have("flatpak") {
-        let _ = Command::new("flatpak")
-            .args(["update", "-y", "--noninteractive"])
-            .status();
+        let mut cmd = Command::new("flatpak");
+        cmd.args(["update", "-y", "--noninteractive"]);
+        // Captured (see `run_child`): flatpak prints `Nothing to update.` whenever
+        // its remotes carry nothing new, which — mid-run, in flatpak's voice —
+        // reads as temper's verdict on a converge that is about to install and
+        // upgrade plenty. The download progress it prints instead becomes a
+        // spinner, and a real failure is now reported rather than discarded.
+        run_child(cmd, verbose, "flatpak update", "upgrading flatpaks");
     }
     Ok(())
 }
@@ -657,7 +714,16 @@ pub fn prune_apply(effective: &[Pkg], extras: &[(Manager, String)]) -> Result<()
         for f in &flatpaks {
             cmd.arg(f);
         }
-        let _ = cmd.status();
+        // Streamed on purpose (unlike the converge children): `prune` is manual,
+        // confirmed and destructive, the user is at the keyboard, and *what was
+        // removed* is the deliverable. Only the discarded exit code was a bug.
+        if !cmd.status().map(|s| s.success()).unwrap_or(false) {
+            eprintln!(
+                "{} flatpak uninstall failed — {} extra(s) may remain",
+                crate::ui::yellow("⚠"),
+                flatpaks.len()
+            );
+        }
     }
     Ok(())
 }
@@ -730,12 +796,45 @@ pub fn gext_missing(effective: &[String]) -> Vec<String> {
 }
 
 /// Install missing extensions via `gext`. VM-verified.
-pub fn gext_converge(effective: &[String], dry_run: bool) -> Result<()> {
+///
+/// One spinner for the whole phase with a counter (the `mas` shape): extensions
+/// install one at a time, and `gext`'s own per-extension chatter would otherwise
+/// stand in temper's output as if it were temper speaking. A failure is warned
+/// and skipped — one unavailable extension must not fail a converge.
+pub fn gext_converge(effective: &[String], dry_run: bool, verbose: bool) -> Result<()> {
     if dry_run || !have("gext") {
         return Ok(());
     }
-    for uuid in gext_missing(effective) {
-        let _ = Command::new("gext").args(["install", &uuid]).status();
+    let missing = gext_missing(effective);
+    let pb = (!verbose && !missing.is_empty())
+        .then(|| crate::ui::spinner_counted(missing.len() as u64, "GNOME extensions"));
+    for uuid in &missing {
+        if let Some(pb) = &pb {
+            pb.set_message(format!("Installing {uuid}"));
+        }
+        let mut cmd = Command::new("gext");
+        cmd.args(["install", uuid]);
+        let ok = if verbose {
+            cmd.status().map(|s| s.success()).unwrap_or(false)
+        } else {
+            cmd.stdin(Stdio::null())
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
+        if let Some(pb) = &pb {
+            pb.inc(1);
+        }
+        if !ok {
+            let warn = || eprintln!("{} gext install {uuid} failed — skipped", crate::ui::yellow("⚠"));
+            match &pb {
+                Some(pb) => pb.suspend(warn),
+                None => warn(),
+            }
+        }
+    }
+    if let Some(pb) = pb {
+        pb.finish_and_clear();
     }
     Ok(())
 }
@@ -832,7 +931,7 @@ mod progress_tests {
             "-c",
             "echo '==> Installing Cask zoom'; echo 'Error: nope' 1>&2; exit 3",
         ]);
-        let (ok, log) = run_with_spinner(cmd, "test").unwrap();
+        let (ok, log) = run_with_spinner(cmd, "test child", "testing").unwrap();
         assert!(!ok, "non-zero exit must report failure");
         assert!(log.contains("Installing Cask zoom"), "stdout lost: {log:?}");
         assert!(log.contains("Error: nope"), "stderr lost: {log:?}");
@@ -842,7 +941,7 @@ mod progress_tests {
     fn capture_reports_success_and_drains_both_streams() {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "echo out; echo err 1>&2"]);
-        let (ok, log) = run_with_spinner(cmd, "test").unwrap();
+        let (ok, log) = run_with_spinner(cmd, "test child", "testing").unwrap();
         assert!(ok);
         assert!(log.contains("out") && log.contains("err"), "{log:?}");
     }
@@ -852,8 +951,24 @@ mod progress_tests {
         // Quiet-on-success must not swallow advisories the streamed path showed.
         assert!(is_noteworthy("Warning: wget 1.25.0 is already installed"));
         assert!(is_noteworthy("  Error: cask 'x' is unavailable"));
+        // flatpak lower-cases its prefixes — an EOL-runtime advisory must survive
+        // the quiet path exactly like Homebrew's.
+        assert!(is_noteworthy("error: Failed to install org.x.App"));
+        assert!(is_noteworthy("warning: org.gnome.Platform is end-of-life"));
         assert!(!is_noteworthy("==> Fetching llvm"));
         assert!(!is_noteworthy("Using wget"));
+        assert!(!is_noteworthy("Nothing to update."));
+    }
+
+    #[test]
+    fn captured_children_get_a_closed_stdin() {
+        // Inherited stdin is an invisible hang: the child blocks on the tty while
+        // its prompt vanishes into the pipe. Closed stdin makes it fail fast.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "if read line; then echo \"got: $line\"; else echo eof; fi"]);
+        let (ok, log) = run_with_spinner(cmd, "test child", "testing").unwrap();
+        assert!(ok);
+        assert!(log.contains("eof"), "stdin was not closed: {log:?}");
     }
 
     #[test]
@@ -966,7 +1081,10 @@ mod gating_tests {
 
 /// Layer missing rpms via `rpm-ostree install --idempotent`. Returns whether a
 /// reboot is needed. VM-verified.
-pub fn rpm_converge(effective: &[String], dry_run: bool) -> Result<bool> {
+///
+/// Captured like every other converge child (see `run_child`) — rpm-ostree is
+/// chatty and slow, so it gets the spinner rather than the terminal.
+pub fn rpm_converge(effective: &[String], dry_run: bool, verbose: bool) -> Result<bool> {
     let missing = rpm_missing(effective);
     if dry_run || missing.is_empty() || !have("rpm-ostree") {
         return Ok(false);
@@ -976,7 +1094,7 @@ pub fn rpm_converge(effective: &[String], dry_run: bool) -> Result<bool> {
     for p in &missing {
         cmd.arg(p);
     }
-    let _ = cmd.status();
+    run_child(cmd, verbose, "rpm-ostree install", "layering rpms");
     Ok(true) // layered rpms require a reboot to take effect
 }
 
