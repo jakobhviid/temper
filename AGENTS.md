@@ -73,3 +73,26 @@ appears (a stale binary keeps installing). `cargo build`/`cargo test` alone is
 not enough — **clippy is the gate** (warnings are errors), so run
 `cargo clippy --workspace --all-targets -- -D warnings` locally before every
 push. (There is deliberately **no** `cargo fmt` gate — don't add one.)
+
+Two failure modes look identical from the outside — "no release appeared" — and are
+worth telling apart before you go looking for a bug:
+
+- **Tests/clippy red** → your code. Fix and push again.
+- **A build job cancelled without failing**, annotated *"The job was not acquired by
+  Runner of type hosted even after multiple attempts"* → GitHub could not allocate a
+  runner (seen 2026-08-06: three of four matrix legs cancelled at the same second,
+  ~15 min after queueing, while the leg that got a machine passed). Nothing is wrong
+  with the commit; re-run the failed jobs and the same SHA publishes normally:
+
+  ```sh
+  gh run rerun <run-id> --failed
+  ```
+
+  Because the version is derived from commit history, nothing is lost by re-running —
+  the same SHA yields the same version. Do **not** push an empty commit to "retry".
+
+Also worth knowing when tests touch the environment: run the suite once with an
+isolated git config before pushing, or a local setting can hide a CI failure —
+`GIT_CONFIG_GLOBAL=/dev/null cargo test --workspace`. A machine whose
+`init.defaultBranch` is `main` will pass tests that assume the branch name and fail
+on a stock git, which cost a published release once.
