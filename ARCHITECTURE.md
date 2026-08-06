@@ -111,6 +111,14 @@ apply to new code as much as old:
    let warnings through. Stream only where the child's output *is* the operation:
    `prune`'s removals (destructive, confirmed, the user is watching) and the
    self-update's `brew upgrade temper -y`.
+
+   **But a prompt is not chatter.** `sudo`, polkit and PAM write to `/dev/tty`,
+   which no pipe of ours can capture — so a live progress region gets *fused* onto
+   the prompt and the next tick erases the one message the run is blocked on. Any
+   step that may prompt therefore gets the terminal to itself: the step phase
+   clears its region for the duration of an `exec` (and says which script it is
+   waiting on if that takes more than a few seconds), and `sudo::acquire` asks up
+   front, before any region exists.
 2. **Report the effect, never the invocation.** Not "we ran the upgrade" but how
    many packages moved version; not "we called push" but whether the remote moved;
    not "we pulled" but how many commits landed. Measured, never assumed.

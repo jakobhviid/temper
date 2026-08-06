@@ -178,6 +178,24 @@ impl Checklist {
         self.advance();
     }
 
+    /// Run `f` with the live region **cleared**, for a unit that may talk to the
+    /// terminal itself.
+    ///
+    /// An `exec` step runs arbitrary code, and what that code says to the human is
+    /// not chatter to be hushed: `sudo`/polkit/PAM write prompts straight to
+    /// `/dev/tty`, bypassing the pipes we capture, so they arrive *on top of* a
+    /// live region — fusing "Place your finger on the fingerprint reader" onto the
+    /// spinner's line, where the next 90 ms tick can erase the one message the run
+    /// is waiting on, and leaving the half-drawn line behind as permanent debris.
+    /// Clearing the region first gives the prompt a clean line of its own, keeps it
+    /// on screen, and leaves nothing fused behind it.
+    pub fn suspend<R>(&self, f: impl FnOnce() -> R) -> R {
+        match &self.pb {
+            Some(pb) => pb.suspend(f),
+            None => f(),
+        }
+    }
+
     /// A warning from inside the phase, kept off the region's line.
     pub fn warn(&self, msg: &str) {
         match &self.pb {

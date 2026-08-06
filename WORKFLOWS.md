@@ -56,7 +56,14 @@ Homebrew's warnings (with their bodies, which carry the remedy) print even on
 success. Your own **`exec` scripts are hushed the same way**: their output is
 captured and stays hidden on success (so an idempotent script's "nothing to do"
 chatter can't masquerade as temper's own verdict), and is surfaced only if the
-script fails. Pass **`-v`/`--verbose`** (a global flag, like `--json`) to stream
+script fails. While a script runs, the progress region **steps aside**: an `exec`
+is arbitrary code, and `sudo`/polkit/PAM write their prompts straight to the
+terminal where a redrawing spinner would fuse itself onto them ("Place your finger
+on the fingerprint reader" landing mid-progress-line, then erased by the next
+tick). So the region clears for the script's duration — a prompt gets a clean line
+of its own and stays there — and a script still running after a few seconds says
+which one it is, so a long one isn't a silent terminal either. Pass
+**`-v`/`--verbose`** (a global flag, like `--json`) to stream
 every tool's — and every `exec`'s — full output instead of the spinner when
 debugging. (An idempotent `exec` that re-runs each `update` should carry a `check`
 hook so it's skipped, not just hushed, when already in sync.)

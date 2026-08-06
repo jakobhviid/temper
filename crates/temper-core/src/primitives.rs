@@ -531,6 +531,45 @@ pub fn exec_missing_secret(opts: &ExecOpts) -> Option<String> {
         .cloned()
 }
 
+/// How long a captured script may run before temper says what it is waiting on.
+const EXEC_NOTICE_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// `cmd.output()`, but if the script is still running after [`EXEC_NOTICE_AFTER`]
+/// it says which script it is waiting on — once, on stderr.
+///
+/// The step phase clears its progress region for an `exec` (the script may prompt
+/// on the tty, and a region would fuse itself onto that prompt), so without this a
+/// slow script — `topgrade` pulling an OS image, a big download — would leave the
+/// terminal silent for minutes. Plain text, because it shares the terminal with
+/// whatever the script itself decides to print.
+fn run_captured(
+    mut cmd: std::process::Command,
+    script: &Path,
+    home: &Path,
+) -> Result<std::process::Output> {
+    // Name the script the way the spec does (`assets/scripts/foo.sh`), not as the
+    // absolute path we happen to have joined.
+    let label = script.strip_prefix(home).unwrap_or(script).display().to_string();
+    use std::sync::mpsc;
+    let (tx, rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _ = tx.send(cmd.output());
+    });
+    let out = match rx.recv_timeout(EXEC_NOTICE_AFTER) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            eprintln!("  {} still running {label} …", crate::ui::dim("⋯"));
+            rx.recv()
+                .map_err(|e| anyhow!("exec worker vanished while running {}: {e}", script.display()))?
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            bail!("exec worker vanished while running {}", script.display())
+        }
+    };
+    let _ = worker.join();
+    out.with_context(|| format!("running {}", script.display()))
+}
+
 /// Run a drift-hook: true if it exits 0 (in sync). A check is a yes/no probe, so
 /// its output is captured (never leaked to the terminal) — only the exit code
 /// matters, and probe chatter would masquerade as temper's own reporting.
@@ -572,9 +611,7 @@ pub fn exec_apply(
     } else {
         // Capture and stay silent on success; on failure, replay the captured
         // output (attributed to the failing script) before bailing.
-        let out = cmd
-            .output()
-            .with_context(|| format!("running {}", script.display()))?;
+        let out = run_captured(cmd, script, opts.home)?;
         if !out.status.success() {
             use std::io::Write;
             let _ = std::io::stdout().write_all(&out.stdout);

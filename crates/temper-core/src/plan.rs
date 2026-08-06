@@ -188,6 +188,29 @@ fn step_finding(
     Ok(None)
 }
 
+/// Apply one step, giving an `exec` the terminal to itself.
+///
+/// Every other primitive is a file/key write that cannot talk to the user, so it
+/// runs under the live region. `exec` is the escape hatch — arbitrary code that may
+/// invoke `sudo`, polkit or PAM, all of which prompt on `/dev/tty` where the region
+/// cannot see (or protect) them. So the region is cleared for its duration: the
+/// prompt gets a clean line, stays on screen, and leaves no fused progress line
+/// behind. See `ui::Checklist::suspend`.
+fn apply_one(
+    home: &Path,
+    machine: &Machine,
+    step: &Step,
+    vars: &BTreeMap<String, String>,
+    journal: &mut Journal,
+    verbose: bool,
+    cl: &crate::ui::Checklist,
+) -> Result<bool> {
+    if step.exec.is_some() {
+        return cl.suspend(|| apply_step(home, machine, step, vars, journal, verbose));
+    }
+    apply_step(home, machine, step, vars, journal, verbose)
+}
+
 /// A short `kind target` label for a step, for the progress region and the `✓`
 /// lines. Pure and cheap on purpose — unlike `step_finding` it probes nothing, so
 /// naming a step costs nothing before we know whether it will change anything.
@@ -689,7 +712,7 @@ pub fn run_install(
                 changed += 1;
                 cl.noted(&format!("would apply {label}"));
             }
-        } else if apply_step(home, machine, step, vars, &mut journal, verbose)? {
+        } else if apply_one(home, machine, step, vars, &mut journal, verbose, &cl)? {
             changed += 1;
             cl.done(&label);
         } else {
@@ -948,7 +971,7 @@ pub fn run_update(
             Gate::Apply => {}
         }
         total += 1;
-        if apply_step(home, machine, step, vars, &mut journal, verbose)? {
+        if apply_one(home, machine, step, vars, &mut journal, verbose, &cl)? {
             changed += 1;
             cl.done(&label);
         } else {

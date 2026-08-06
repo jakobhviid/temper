@@ -170,3 +170,42 @@ fn exec_output_is_quiet_unless_verbose_or_failing() {
         .failure()
         .stdout(predicates::str::contains("BOOM_DETAIL"));
 }
+
+/// A captured script that runs long must say what the run is waiting on.
+///
+/// The step phase clears its progress region while an `exec` runs — the script may
+/// prompt on the tty (`sudo`/polkit/PAM), and a live region drawn over that prompt
+/// both hides the message the run is blocked on and leaves the half-drawn line
+/// behind. With the region stood down, a slow script would otherwise be a silent
+/// terminal, so temper names it after a few seconds.
+#[test]
+fn a_slow_exec_says_what_it_is_waiting_on() {
+    let home = TempDir::new().unwrap();
+    let fake_home = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    let h = home.path();
+    fs::create_dir_all(h.join("apps")).unwrap();
+    fs::create_dir_all(h.join("assets")).unwrap();
+    // Longer than the notice threshold, and noisy — the chatter must stay hidden
+    // even though the notice appears.
+    fs::write(h.join("assets/slow.sh"), "sleep 4\necho chatter\n").unwrap();
+    fs::write(
+        h.join("temper.toml"),
+        format!("[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
+    )
+    .unwrap();
+    fs::write(
+        h.join("apps/demo.toml"),
+        "[[step]]\nexec = \"assets/slow.sh\"\nrun = \"always\"\n",
+    )
+    .unwrap();
+
+    temper(h, fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .success()
+        // Named the way the spec names it, not as an absolute path.
+        .stderr(predicates::str::contains("still running assets/slow.sh"))
+        // Quiet-on-success still holds for the script's own output.
+        .stdout(predicates::str::contains("chatter").not());
+}
