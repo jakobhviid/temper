@@ -1137,6 +1137,23 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
 
     println!("{} {}\n", ui::dim("drift ·"), ui::bold(machine));
 
+    // Measured across every row this view may print, before any of it prints — the
+    // findings are all in hand here, exactly as the step phase has its plan in hand.
+    // `44` caps the target column so one long `setkey` key can't push status and
+    // kind off the screen; the target (column 0) is what gives way when narrow.
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .filter(|f| !f.ok)
+        .map(|f| {
+            vec![
+                f.target.clone(),
+                f.status.clone(),
+                format!("[{}]", f.kind),
+            ]
+        })
+        .collect();
+    let cols = ui::Columns::measure(&rows, 6, &[44, 0, 0], 0);
+
     let mut clean_apps: Vec<&str> = Vec::new();
     let mut drifted_groups = 0usize;
     for app in &order {
@@ -1154,13 +1171,21 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
         drifted_groups += 1;
         println!("  {}", ui::bold(app));
         for f in &drifted {
-            println!(
-                "    {} {:<32} {} {}",
-                ui::red("✗"),
-                f.target,
-                ui::yellow(&f.status),
-                ui::dim(&format!("[{}]", f.kind)),
-            );
+            // Same column machinery the step phase uses, so the two views line up
+            // instead of each guessing a width — this was a hard-coded `{:<32}`,
+            // which every `~/.config/…:key` target overran. `parts` keeps the
+            // padding measured on plain text while each cell is still coloured.
+            let cells = cols.parts(&[&f.target, &f.status, &format!("[{}]", f.kind)]);
+            let mut line = format!("    {} ", ui::red("✗"));
+            for (i, (cell, pad)) in cells.iter().enumerate() {
+                line.push_str(&match i {
+                    1 => ui::yellow(cell),
+                    2 => ui::dim(cell),
+                    _ => cell.clone(),
+                });
+                line.push_str(&" ".repeat(*pad));
+            }
+            println!("{line}");
         }
         let in_sync = g.len() - drifted.len();
         if in_sync > 0 {

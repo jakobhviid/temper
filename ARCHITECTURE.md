@@ -121,6 +121,15 @@ apply to new code as much as old:
    prompt arrives at a moment we cannot predict (in practice within the first
    seconds), so a slow step is announced **once**, in the same shape as its `✓`
    (`⋯ <label>` then `✓ <label>`), which is the safe half of a spinner.
+
+   Rows are aligned by `ui::Columns`, shared with `drift` so both views measure the
+   same way rather than each hard-coding a width. It works because temper **plans
+   before it applies**: the item list exists before the first row prints, so widths
+   are exact without buffering. Three rules it encodes — measure *display* width
+   (a `ø` is one column, two bytes), elide a path from the **head** (the tail names
+   the step), and never shorten anything when stdout is not a terminal (a redirected
+   log is evidence). Column *order* still differs between the two: `drift` groups
+   under an app header, so repeating the app per row would be noise.
 2. **Report the effect, never the invocation.** Not "we ran the upgrade" but how
    many packages moved version; not "we called push" but whether the remote moved;
    not "we pulled" but how many commits landed. Measured, never assumed.
@@ -269,7 +278,7 @@ installed. Probe vocabulary (declarative, exactly one per probe): `binary` /
 skips the step when the probe fails; `needs` errors (a hard requirement).
 
 **Skips are loud** (Principle #6): install/update print
-`⚠ ghostty · copy ~/.config/ghostty/config — skipped: binary \`ghostty\` absent`
+`⚠ ghostty  copy  ~/.config/ghostty/config — skipped: binary \`ghostty\` absent`
 as the phase reaches the step, and `drift` reports the gated-out step status-only
 (never as red drift). (The implicit "my declared package is installed" default is
 not inferred — declare the probe explicitly.)

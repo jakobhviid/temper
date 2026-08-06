@@ -204,9 +204,13 @@ fn a_slow_exec_says_what_it_is_waiting_on() {
         .arg("install")
         .assert()
         .success()
-        // The waiting line carries the same label the `✓` will, so the step reads
-        // as one item moving from `⋯` to `✓`.
-        .stderr(predicates::str::contains("⋯ demo · exec assets/slow.sh"))
+        // The waiting line carries the same (column-aligned) label the `✓` will, so
+        // the step reads as one item moving from `⋯` to `✓`. Matched per-cell rather
+        // than as one string: the padding between them depends on the widest app and
+        // kind in the phase, which is the whole point of the alignment.
+        .stderr(predicates::str::contains("⋯ demo"))
+        .stderr(predicates::str::contains("exec"))
+        .stderr(predicates::str::contains("assets/slow.sh"))
         // Quiet-on-success still holds for the script's own output.
         .stdout(predicates::str::contains("chatter").not());
 }

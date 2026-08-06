@@ -15,6 +15,9 @@ serde_json = "1"
 jsonc-parser = { version = "0.23", features = ["serde"] }
 blake3 = "1"
 indicatif = "0.17"
+# Already in the tree (indicatif depends on it) — used directly for display-width
+# measurement and the terminal size behind `ui::Columns`.
+console = "0.15"
 
 [dev-dependencies]
 tempfile = "3"

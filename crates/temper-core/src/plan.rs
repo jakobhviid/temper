@@ -222,33 +222,48 @@ fn apply_one(
     apply_step(home, machine, step, vars, journal, verbose)
 }
 
-/// A short `kind target` label for a step, for the progress region and the `✓`
-/// lines. Pure and cheap on purpose — unlike `step_finding` it probes nothing, so
-/// naming a step costs nothing before we know whether it will change anything.
-fn step_label(step: &Step) -> String {
+/// A step's `(kind, target)` — the two cells the progress region and the `✓` lines
+/// render beside its app. Pure and cheap on purpose: unlike `step_finding` it
+/// probes nothing, so naming a step costs nothing before we know whether it will
+/// change anything. Kinds match `Finding::kind`, so the step phase and `drift`
+/// speak of the same step by the same name.
+fn step_parts(step: &Step) -> (&'static str, String) {
     if let (Some(_), Some(to)) = (&step.copy, &step.to) {
-        return format!("copy {to}");
+        return ("copy", to.clone());
     }
     if let (Some(_), Some(in_file)) = (&step.block, &step.in_file) {
-        return format!("block {in_file}");
+        return ("block", in_file.clone());
     }
     if let Some(sk) = &step.setkey {
-        return format!(
-            "setkey {}:{}",
-            sk.file.as_deref().unwrap_or(&sk.backend),
-            sk.key
+        return (
+            "setkey",
+            format!("{}:{}", sk.file.as_deref().unwrap_or(&sk.backend), sk.key),
         );
     }
     if let Some(exec) = &step.exec {
-        return format!("exec {exec}");
+        return ("exec", exec.clone());
     }
     if let Some(profile) = &step.profile {
-        return format!("profile {profile}");
+        return ("profile", profile.clone());
     }
     if let (Some(_), Some(to)) = (&step.sysfile, &step.to) {
-        return format!("sysfile {to}");
+        return ("sysfile", to.clone());
     }
-    "step".into()
+    ("step", String::new())
+}
+
+/// The widest app and kind among the steps a phase will render, so its rows line
+/// up from the first one printed. `18` caps the app column: one long bundle name
+/// must not shove every path to the right, but the cap is set above the realistic
+/// names (`desktop-overrides` is 17) — eliding a word to save one column costs more
+/// legibility than it buys. Prefix `4` is `"  ✓ "`; the target (column 2) is what
+/// gives way on a narrow terminal.
+fn step_columns(rows: &[(String, &'static str)]) -> crate::ui::Columns {
+    let cells: Vec<Vec<String>> = rows
+        .iter()
+        .map(|(app, kind)| vec![app.clone(), kind.to_string(), String::new()])
+        .collect();
+    crate::ui::Columns::measure(&cells, 4, &[18, 0, 0], 2)
 }
 
 /// A suggested next command to resolve drift — the "what to run next" hand-off
@@ -690,19 +705,26 @@ pub fn run_install(
     let mut skipped = Vec::new();
     // Candidates are known before any of them runs, so the phase has an honest
     // denominator. A dry-run reports rather than applies — no live region for it.
-    let candidates = resolved
+    let planned: Vec<(String, &'static str)> = resolved
         .steps
         .iter()
         .filter(|(_, s)| is_step(s) && lifecycle(s) != "manual")
-        .count();
-    let cl = crate::ui::Checklist::new(if dry_run { 0 } else { candidates }, "config", verbose);
+        .map(|(app, s)| (app.clone(), step_parts(s).0))
+        .collect();
+    let cols = step_columns(&planned);
+    let cl = crate::ui::Checklist::new(
+        if dry_run { 0 } else { planned.len() },
+        "config",
+        verbose,
+    );
     for (app, step) in &resolved.steps {
         // `manual` steps are never run by an automated flow (e.g. speaker-eq's
         // interactive picker) — only when explicitly invoked.
         if !is_step(step) || lifecycle(step) == "manual" {
             continue;
         }
-        let label = format!("{app} · {}", step_label(step));
+        let (kind, target) = step_parts(step);
+        let label = cols.row(&[app, kind, &target]);
         cl.start(&label);
         // Presence gate — skip loudly when absent, error on a failed `needs`.
         match gate_step(home, step) {
@@ -957,12 +979,14 @@ pub fn run_update(
     // `always` + `ensure` are what an update re-applies; `ensure` is filtered
     // again inside the loop (it needs a probe), so this is an upper bound — the
     // counter can finish short of its total, which beats a total that grows.
-    let candidates = resolved
+    let planned: Vec<(String, &'static str)> = resolved
         .steps
         .iter()
         .filter(|(_, s)| is_step(s) && matches!(lifecycle(s), "always" | "ensure"))
-        .count();
-    let cl = crate::ui::Checklist::new(candidates, "config", verbose);
+        .map(|(app, s)| (app.clone(), step_parts(s).0))
+        .collect();
+    let cols = step_columns(&planned);
+    let cl = crate::ui::Checklist::new(planned.len(), "config", verbose);
     for (app, step) in &resolved.steps {
         if !is_step(step) {
             continue;
@@ -977,7 +1001,8 @@ pub fn run_update(
             }
             _ => continue, // install-only + manual are not applied on update
         }
-        let label = format!("{app} · {}", step_label(step));
+        let (kind, target) = step_parts(step);
+        let label = cols.row(&[app, kind, &target]);
         cl.start(&label);
         // Presence gate — same as install.
         match gate_step(home, step) {

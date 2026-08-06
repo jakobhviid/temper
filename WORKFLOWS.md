@@ -66,12 +66,29 @@ in the phase's own shape, so a long one isn't a silent terminal either and reads
 one item finishing:
 
 ```text
-  ⋯ 1password · exec assets/scripts/1password-setup.sh
-  ✓ 1password · exec assets/scripts/1password-setup.sh
+  ⋯ 1password  exec  assets/scripts/1password-setup.sh
+  ✓ 1password  exec  assets/scripts/1password-setup.sh
 ```
 
-A script that finishes quickly prints only the `✓`. Pass
-**`-v`/`--verbose`** (a global flag, like `--json`) to stream
+A script that finishes quickly prints only the `✓`.
+
+Rows are **column-aligned** — app, kind, then target — so a run reads down the
+page instead of zig-zagging with the app-name length:
+
+```text
+  ✓ shell              exec    assets/scripts/retire-sesh-tap.sh
+  ✓ zsh                copy    ~/.zshrc
+  ✓ desktop-overrides  copy    ~/Bibliotek/Programstøtte/overrides.conf
+  ✓ opencode           setkey  ~/.config/opencode/opencode.jsonc:share
+```
+
+The widths come from the run's own plan (known before the first line prints), and
+`drift` sizes its table the same way, so the two views line up with each other. On
+a narrow terminal the target is elided from the left (`…/retire-sesh-tap.sh` still
+tells you which step); redirected output is never shortened, because a log is
+evidence.
+
+Pass **`-v`/`--verbose`** (a global flag, like `--json`) to stream
 every tool's — and every `exec`'s — full output instead of the spinner when
 debugging. (An idempotent `exec` that re-runs each `update` should carry a `check`
 hook so it's skipped, not just hushed, when already in sync.)
@@ -258,7 +275,7 @@ Each item is named as it goes — `✓ <path>` for a revert, and a skip says **w
 (`changed since temper wrote it`, `gone since temper wrote it`), because that is
 the thing you need before deciding what to do next. `--dry-run` lists the same
 items as `· would revert <path>` and touches nothing. Likewise `install
---dry-run` now names the steps behind its count (`· would apply zsh · copy
+--dry-run` now names the steps behind its count (`· would apply zsh  copy
 ~/.zshrc`) instead of only totalling them.
 
 ## 8. Pull calibrated speaker profiles
