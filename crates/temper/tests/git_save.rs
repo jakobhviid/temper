@@ -120,7 +120,11 @@ fn non_git_home_is_dormant() {
 #[test]
 fn auto_pull_reports_commits_that_landed_then_stays_quiet() {
     let origin = TempDir::new().unwrap();
-    git(origin.path(), &["init", "-q", "--bare"]);
+    // `--initial-branch` pins the bare repo's HEAD: without it the branch name
+    // comes from the machine's `init.defaultBranch` (`master` on a stock git,
+    // `main` on many developers'), and a clone of a repo whose HEAD names a
+    // nonexistent branch checks nothing out at all.
+    git(origin.path(), &["init", "-q", "--bare", "--initial-branch=main"]);
 
     // The home: a clone that declares auto_pull.
     let home = TempDir::new().unwrap();
@@ -145,8 +149,9 @@ fn auto_pull_reports_commits_that_landed_then_stays_quiet() {
     .unwrap();
     git(h, &["add", "-A"]);
     git(h, &["commit", "-qm", "init"]);
-    git(h, &["push", "-q", "-u", "origin", "HEAD:main"]);
-    git(h, &["branch", "-q", "--set-upstream-to=origin/main"]);
+    // Whatever `init.defaultBranch` produced, this branch is `main` from here on.
+    git(h, &["branch", "-M", "main"]);
+    git(h, &["push", "-q", "-u", "origin", "main"]);
 
     // A second clone pushes two commits.
     let other = TempDir::new().unwrap();
@@ -188,7 +193,11 @@ fn auto_pull_reports_commits_that_landed_then_stays_quiet() {
 #[test]
 fn save_claims_a_push_only_when_the_remote_moved() {
     let origin = TempDir::new().unwrap();
-    git(origin.path(), &["init", "-q", "--bare"]);
+    // `--initial-branch` pins the bare repo's HEAD: without it the branch name
+    // comes from the machine's `init.defaultBranch` (`master` on a stock git,
+    // `main` on many developers'), and a clone of a repo whose HEAD names a
+    // nonexistent branch checks nothing out at all.
+    git(origin.path(), &["init", "-q", "--bare", "--initial-branch=main"]);
     let home = TempDir::new().unwrap();
     let h = home.path();
     let url = origin.path().to_string_lossy().to_string();
@@ -208,8 +217,9 @@ fn save_claims_a_push_only_when_the_remote_moved() {
     .unwrap();
     git(h, &["add", "-A"]);
     git(h, &["commit", "-qm", "init"]);
-    git(h, &["push", "-q", "-u", "origin", "HEAD:main"]);
-    git(h, &["branch", "-q", "--set-upstream-to=origin/main"]);
+    // Whatever `init.defaultBranch` produced, this branch is `main` from here on.
+    git(h, &["branch", "-M", "main"]);
+    git(h, &["push", "-q", "-u", "origin", "main"]);
 
     // Dirty tree → a real commit and a real push.
     fs::write(h.join("note.txt"), "hi\n").unwrap();
