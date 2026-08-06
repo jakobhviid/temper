@@ -636,33 +636,58 @@ pub fn trusted_taps() -> Result<Option<Vec<String>>> {
     Ok(Some(parsed.taps))
 }
 
-/// How many installed packages are **out of date right now**: brew formulae and
-/// casks plus flatpak apps with a pending update. This is the number an `update`
-/// is actually about, as against `effective.len()` — which is what the machine
-/// *declares* and says nothing about what a run changed.
+/// `name → version` for every installed package (brew formulae **and** casks,
+/// plus flatpak apps). Read from list output with explicit columns — never from a
+/// tool's human sentence — so it is locale-proof.
 ///
-/// Best-effort and guarded: 0 without the CLIs, and a probe that fails counts as
-/// nothing rather than failing the run. `brew outdated` costs ~1s, so callers
-/// measure the "after" side only when the "before" side found something. The
-/// flatpak side reads whatever remote metadata is already synced (the same data
-/// `flatpak update` would refresh), so it can undercount on a stale cache — an
-/// undercount is fine here, an invented number would not be.
-pub fn outdated_count() -> usize {
-    let mut n = 0;
+/// This is the ground truth an upgrade is measured against, and it deliberately
+/// does not ask a package manager what it considers "outdated": measured on a real
+/// machine, `brew outdated --quiet` reported **nothing** while `brew upgrade`
+/// went on to upgrade twelve packages. Trusting that number would have printed
+/// "packages already current" over a run that upgraded a dozen — the very defect
+/// this reporting exists to remove. Comparing versions before and after cannot
+/// disagree with what happened.
+///
+/// Best-effort and guarded: empty without the CLIs, and a probe that fails
+/// contributes nothing rather than failing the run. ~0.4s per brew snapshot.
+pub fn installed_versions() -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
     if have("brew") {
-        n += run_lines("brew", &["outdated", "--quiet"])
-            .unwrap_or_default()
-            .len();
+        // `brew list --versions` → "name 1.2.3" (sometimes several versions).
+        for line in run_lines("brew", &["list", "--versions"]).unwrap_or_default() {
+            if let Some((name, vers)) = line.split_once(char::is_whitespace) {
+                out.insert(format!("brew:{name}"), vers.trim().to_string());
+            }
+        }
     }
     if have("flatpak") {
-        n += run_lines(
+        for line in run_lines(
             "flatpak",
-            &["remote-ls", "--updates", "--columns=application"],
+            &["list", "--app", "--columns=application,version"],
         )
         .unwrap_or_default()
-        .len();
+        {
+            let mut cols = line.split('\t');
+            if let Some(app) = cols.next() {
+                let ver = cols.next().unwrap_or("").trim().to_string();
+                out.insert(format!("flatpak:{app}"), ver);
+            }
+        }
     }
-    n
+    out
+}
+
+/// How many packages changed version between two [`installed_versions`]
+/// snapshots. Only names present in **both** count: a transitive dependency that
+/// an upgrade pulled in for the first time is not itself an upgrade.
+pub fn upgraded_between(
+    before: &std::collections::BTreeMap<String, String>,
+    after: &std::collections::BTreeMap<String, String>,
+) -> usize {
+    after
+        .iter()
+        .filter(|(name, now)| before.get(*name).is_some_and(|was| was != *now))
+        .count()
 }
 
 /// Upgrade installed packages (brew + flatpak). Best-effort; VM-verified. The
@@ -987,6 +1012,28 @@ mod progress_tests {
         assert!(!is_noteworthy("==> Fetching llvm"));
         assert!(!is_noteworthy("Using wget"));
         assert!(!is_noteworthy("Nothing to update."));
+    }
+
+    #[test]
+    fn upgrade_count_is_a_version_diff_not_a_head_count() {
+        let snap = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let before = snap(&[("brew:node", "26.6.0"), ("brew:jq", "1.7"), ("flatpak:org.x.A", "1.0")]);
+        let after = snap(&[
+            ("brew:node", "26.7.0"), // upgraded
+            ("brew:jq", "1.7"),      // untouched
+            ("flatpak:org.x.A", "1.0"),
+            ("brew:libnew", "1.0"), // a dependency pulled in — not an upgrade
+        ]);
+        assert_eq!(upgraded_between(&before, &after), 1);
+        // Nothing moved → nothing claimed.
+        assert_eq!(upgraded_between(&before, &before), 0);
+        // A failed upgrade leaves versions where they were.
+        assert_eq!(upgraded_between(&after, &after), 0);
     }
 
     #[test]

@@ -566,8 +566,8 @@ fn step_would_change(
 pub struct InstallReport {
     /// Declared packages considered by the converge phase.
     pub packages: usize,
-    /// Packages actually **brought up to date** by an `update` — measured as the
-    /// drop in the outdated count across the upgrade, so a failed or partial
+    /// Packages actually **brought up to date** by an `update` — measured by
+    /// diffing installed versions across the upgrade, so a failed or partial
     /// upgrade reports what really landed rather than what was attempted.
     /// `None` on flows that don't upgrade (`install`, `install-missing`).
     pub upgraded: Option<usize>,
@@ -888,23 +888,20 @@ pub fn run_update(
         ));
     }
     let _sudo = crate::sudo::keep_alive();
-    // Report the *effect*, not the invocation: count what is outdated before the
-    // upgrade and again after, and the drop is what actually landed. A failed or
-    // partly-applied upgrade then reports what it really did (the failure itself
-    // has already warned), and a converged machine says so honestly instead of
-    // reciting how many packages it declares. The second probe is skipped when
-    // nothing was outdated — that is the common case, and it costs ~1s.
+    // Report the *effect*, not the invocation: snapshot installed versions either
+    // side of the upgrade and count what actually moved. A failed or partly-applied
+    // upgrade then reports what really landed (the failure has warned separately),
+    // and a converged machine says so instead of reciting how many packages it
+    // declares. Asking a package manager what it thinks is outdated would not do:
+    // `brew outdated` was observed reporting nothing while `brew upgrade` upgraded
+    // twelve packages — see `installed_versions`.
     let mut upgraded = None;
     if !effective.is_empty() {
         providers::trust_taps(brew_trust, verbose)?;
-        let before = providers::outdated_count();
+        let before = providers::installed_versions();
         providers::upgrade(verbose)?;
-        let after = if before > 0 {
-            providers::outdated_count()
-        } else {
-            0
-        };
-        upgraded = Some(before.saturating_sub(after));
+        let after = providers::installed_versions();
+        upgraded = Some(providers::upgraded_between(&before, &after));
     }
 
     let resolved = resolve(home, machine)?;

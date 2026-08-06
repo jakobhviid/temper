@@ -106,8 +106,8 @@ that are missing. It does **not** add newly-declared apps wholesale (that's an
 tweaks). *(RIS: `just update`, which deliberately excludes gnome-restore.)*
 
 The summary reports what the run **changed**, not what the machine declares —
-`upgraded 6 packages` (measured as the drop in the outdated count across the
-upgrade, so a failed upgrade doesn't claim credit) or `packages already current`.
+`upgraded 6 packages` (measured by diffing installed versions across the upgrade,
+so a failed upgrade can't claim credit) or `packages already current`.
 The package managers' own output is captured: a converged machine is near-silent
 except for a spinner, warnings and errors always print, and a tool's private
 verdict ("Nothing to update.", about *its* remotes) is never shown as temper's.
