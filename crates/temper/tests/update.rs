@@ -71,7 +71,9 @@ fn update_reapplies_always_not_install_only() {
         .arg("update")
         .assert()
         .success()
-        .stdout(predicates::str::contains("re-applied 1 of 1"));
+        // One step re-applied, and it changed something — stated as two facts
+        // rather than "1 of 1", which used to read as "left the others alone".
+        .stdout(predicates::str::contains("re-applied 1 step(s), 1 changed"));
     assert_eq!(
         fs::read_to_string(&always).unwrap(),
         "managed\n",

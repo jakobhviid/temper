@@ -1028,11 +1028,22 @@ fn cmd_install(
             println!("  ⚠ reboot required (rpm-ostree layered a package)");
         }
     } else {
-        let verb = if dry_run { "would apply" } else { "applied" };
-        println!(
-            "install {}: {} package(s), {verb} {} of {} config step(s)",
-            m.name, r.packages, r.steps_changed, r.steps_total
-        );
+        // "applied 11 of 44" read as "applied 11, left 33 alone" — the opposite of
+        // what happened: all 44 were applied and 11 of them changed something. Both
+        // numbers are worth having, so state each as what it is. A dry run applies
+        // nothing at all, so there it *checked*, and the changed count is a forecast.
+        let steps = if dry_run {
+            format!(
+                "checked {} config step(s), {} would change",
+                r.steps_total, r.steps_changed
+            )
+        } else {
+            format!(
+                "applied {} config step(s), {} changed",
+                r.steps_total, r.steps_changed
+            )
+        };
+        println!("install {}: {} package(s), {steps}", m.name, r.packages);
         if r.reboot {
             println!("  ⚠ reboot required (rpm-ostree layered a package)");
         }
@@ -1072,9 +1083,13 @@ fn cmd_update(json: bool, verbose: bool) -> Result<()> {
             Some(1) => "upgraded 1 package".to_string(),
             Some(n) => format!("upgraded {n} packages"),
         };
+        // Same correction as `install`, plus a second one: these are not only
+        // `always` steps — an `ensure` step whose target was missing is applied here
+        // too, and calling that "re-applied" describes the wrong thing entirely,
+        // since it had never been applied before.
         println!(
-            "update {}: {pkgs}, re-applied {} of {} always-step(s)",
-            m.name, r.steps_changed, r.steps_total
+            "update {}: {pkgs}, re-applied {} step(s), {} changed",
+            m.name, r.steps_total, r.steps_changed
         );
     }
     remind_if_dirty(&home, &manifest::effective_git(&ft.git, &m.git));
