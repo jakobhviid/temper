@@ -19,7 +19,8 @@ pub fn set_json(on: bool) {
     let _ = JSON.set(on);
 }
 
-fn json_mode() -> bool {
+/// Whether stdout is reserved for a single `--json` document.
+pub fn json_mode() -> bool {
     *JSON.get().unwrap_or(&false)
 }
 

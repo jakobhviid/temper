@@ -284,6 +284,13 @@ you persist those changes so it doesn't silently drift:
 spec; if it can't pull (offline, diverged) it warns and continues — never blocks.
 With `auto_rebase` a diverged local is replayed on top instead of warned past.
 
+While it runs you see what it is doing (`⠹ pulling ~/Developer/steel`), and it
+reports the **effect**: `✓ spec updated (2 commits)` when work landed — which is
+also the explanation for a plan that differs from last time — and nothing at all
+when the spec was already current. Inside `install`/`update` the pull is a
+precondition, not the point, so "already current" is not news; in `temper refresh`,
+where the pull *is* the deliverable, it says so explicitly.
+
 **Per-run override.** `auto_pull` is the persistent default; two global flags
 override it for a single run on **any** verb: **`--pull`** forces a pull even
 when `auto_pull` is off (handy after a known fleet change), and **`--no-pull`**

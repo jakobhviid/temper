@@ -92,26 +92,55 @@ pub fn status_line(home: &Path) -> String {
     format!("{branch} ({ahead_behind}) — {dirty}")
 }
 
-/// Outcome of a best-effort pull.
+/// Outcome of a best-effort pull — the *effect*, not "we ran git".
 pub enum Pull {
-    /// Up to date or fast-forwarded.
-    Ok,
+    /// Already current: the pull succeeded and moved nothing.
+    UpToDate,
+    /// Fast-forwarded or rebased onto new upstream work — how many commits landed.
+    Updated(u32),
     /// Couldn't pull — carries a short human reason (offline, diverged, dirty…).
     Warn(String),
     /// Not a git repo (or git absent) — nothing to do.
     NotRepo,
 }
 
+/// The current commit, for measuring what a pull moved.
+fn head(home: &Path) -> Option<String> {
+    git(home, &["rev-parse", "HEAD"])
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
 /// `git pull` the home — `--rebase` when `rebase`, else `--ff-only` (the safe
 /// default). Never aborts the caller — a failure is a `Warn` with the reason, so
 /// a run continues on a possibly-stale spec.
+///
+/// The effect is measured by comparing HEAD before and after and counting the
+/// commits between them, **never** by reading git's own report: "Already up to
+/// date." is localized (`LANG=da_DK` says something else entirely), so matching it
+/// would work on the author's machine and quietly stop working on someone else's.
 pub fn pull(home: &Path, rebase: bool) -> Pull {
     if !is_repo(home) {
         return Pull::NotRepo;
     }
+    let before = head(home);
     let mode = if rebase { "--rebase" } else { "--ff-only" };
     match git(home, &["pull", mode]) {
-        Some(o) if o.status.success() => Pull::Ok,
+        Some(o) if o.status.success() => {
+            let after = head(home);
+            match (before, after) {
+                (Some(b), Some(a)) if b != a => {
+                    let n = git(home, &["rev-list", "--count", &format!("{b}..{a}")])
+                        .filter(|o| o.status.success())
+                        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+                        // HEAD moved but the range doesn't count (a rebase replayed
+                        // local work): "something landed" is still true and useful.
+                        .unwrap_or(1);
+                    Pull::Updated(n)
+                }
+                _ => Pull::UpToDate,
+            }
+        }
         Some(o) => Pull::Warn(reason(&o.stderr)),
         None => Pull::Warn("could not run git".into()),
     }

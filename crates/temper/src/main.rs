@@ -199,7 +199,8 @@ enum Cmd {
     /// `git pull` in your temper-home — the pull-side counterpart to `save`, so
     /// you can grab a fleet change without hunting for where the folder lives or
     /// `cd`-ing into it. `--rebase` (or `[git].auto_rebase`) rebases instead of
-    /// fast-forward-only. A no-op that just says so if the home isn't a git repo.
+    /// fast-forward-only. Reports how many commits landed, or that the spec was
+    /// already current. A no-op that just says so if the home isn't a git repo.
     #[command(alias = "pull")]
     Refresh {
         /// Pull with `--rebase` instead of `--ff-only` (overrides `[git].auto_rebase`).
@@ -368,11 +369,32 @@ fn find_home_pulling() -> Result<std::path::PathBuf> {
         None => manifest::peek_pull_mode(&home),
     };
     if mode != manifest::PullMode::Off {
-        if let git::Pull::Warn(w) = git::pull(&home, mode == manifest::PullMode::Rebase) {
-            eprintln!(
+        // A pull reaches the network, so it can take seconds — long enough that
+        // silence reads as a hang at the very start of a run. The region names what
+        // it is doing and is erased the moment it's done.
+        //
+        // It must also be strictly scoped: a version skew handled just below may
+        // `exec` a freshly upgraded temper, and an exec never runs a destructor —
+        // an open progress region would leave the terminal with its cursor hidden.
+        let quiet = ui::json_mode();
+        let pb = (!quiet).then(|| ui::spinner(&format!("pulling {}", home.display())));
+        let outcome = git::pull(&home, mode == manifest::PullMode::Rebase);
+        if let Some(pb) = pb {
+            pb.finish_and_clear();
+        }
+        match outcome {
+            // Silence when nothing landed: the spec was already current, and the
+            // run is about the machine, not about git.
+            git::Pull::UpToDate | git::Pull::NotRepo => {}
+            git::Pull::Updated(n) if !quiet => {
+                let s = if n == 1 { "commit" } else { "commits" };
+                println!("  {} spec updated ({n} {s})", ui::green("✓"));
+            }
+            git::Pull::Updated(_) => {}
+            git::Pull::Warn(w) => eprintln!(
                 "{} couldn't pull — working on a possibly-stale spec: {w}",
                 ui::yellow("⚠")
-            );
+            ),
         }
     }
     Ok(home)
@@ -510,6 +532,15 @@ fn self_update() -> Result<()> {
 /// since the old Cellar path is gone after the upgrade). A `TEMPER_SELF_UPDATED`
 /// sentinel stops a loop if the required version isn't on Homebrew yet. Only
 /// returns if it can't exec.
+///
+/// **Invariant: no live progress region may be open here.** `exec` replaces the
+/// process image, so no destructor runs — an unfinished indicatif region would
+/// leave the user's terminal with a hidden cursor and no way to know why. Every
+/// region in this binary is finished before the call that can reach this point
+/// (the pre-run pull clears its own; the phase checklists start later). The
+/// self-update itself deliberately keeps the terminal: `brew upgrade temper -y`
+/// *is* the operation at that moment, not chatter about someone else's run, and
+/// capturing a bottle download would only turn it into dead air.
 fn reexec_after_update() {
     eprintln!("{} updated — re-running…\n", ui::green("✓"));
     #[cfg(unix)]
@@ -637,18 +668,43 @@ fn cmd_refresh(rebase: bool, json: bool) -> Result<()> {
         return Ok(());
     }
     let rebase = rebase || manifest::peek_auto_rebase(&home);
-    let (ok, warning) = match git::pull(&home, rebase) {
-        git::Pull::Ok => (true, None),
-        git::Pull::Warn(w) => (false, Some(w)),
-        git::Pull::NotRepo => (false, Some("not a git repo".into())), // unreachable (checked above)
+    let pb = (!json).then(|| ui::spinner(&format!("pulling {}", home.display())));
+    let outcome = git::pull(&home, rebase);
+    if let Some(pb) = pb {
+        pb.finish_and_clear();
+    }
+    // `refresh` is the one verb whose deliverable IS the pull, so here "nothing
+    // new" is the answer to the question asked — not a stray verdict mid-converge.
+    let (ok, pulled, warning) = match outcome {
+        git::Pull::UpToDate => (true, Some(0), None),
+        git::Pull::Updated(n) => (true, Some(n), None),
+        git::Pull::Warn(w) => (false, None, Some(w)),
+        git::Pull::NotRepo => (false, None, Some("not a git repo".into())), // unreachable
     };
     if json {
         println!(
             "{}",
-            serde_json::json!({ "refreshed": ok, "home": home.display().to_string(), "warning": warning })
+            serde_json::json!({
+                "refreshed": ok, "commits": pulled,
+                "home": home.display().to_string(), "warning": warning
+            })
         );
     } else if ok {
-        println!("{} refreshed {}", ui::green("✓"), home.display());
+        match pulled {
+            Some(0) | None => println!(
+                "{} {} is already current — nothing new in the spec.",
+                ui::green("✓"),
+                home.display()
+            ),
+            Some(n) => {
+                let s = if n == 1 { "commit" } else { "commits" };
+                println!(
+                    "{} refreshed {} ({n} {s})",
+                    ui::green("✓"),
+                    home.display()
+                );
+            }
+        }
     } else if let Some(w) = warning {
         eprintln!(
             "{} couldn't refresh {}: {w}",

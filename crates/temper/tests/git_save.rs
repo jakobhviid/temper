@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::Command as Proc;
 
 use assert_cmd::Command;
+use predicates::prelude::*;
 use tempfile::TempDir;
 
 fn os() -> &'static str {
@@ -111,4 +112,72 @@ fn non_git_home_is_dormant() {
         .assert()
         .success()
         .stdout(predicates::str::contains("dormant"));
+}
+
+/// A pull must report what it *did*, not that it ran. Two commits waiting
+/// upstream produce one line naming them; a pull that moves nothing says nothing
+/// (during a converge, "already current" is git's business, not the user's).
+#[test]
+fn auto_pull_reports_commits_that_landed_then_stays_quiet() {
+    let origin = TempDir::new().unwrap();
+    git(origin.path(), &["init", "-q", "--bare"]);
+
+    // The home: a clone that declares auto_pull.
+    let home = TempDir::new().unwrap();
+    let h = home.path();
+    let url = origin.path().to_string_lossy().to_string();
+    assert!(Proc::new("git")
+        .args(["clone", "-q", &url])
+        .arg(h)
+        .output()
+        .unwrap()
+        .status
+        .success());
+    git(h, &["config", "user.email", "t@t"]);
+    git(h, &["config", "user.name", "t"]);
+    fs::write(
+        h.join("temper.toml"),
+        format!(
+            "[git]\nauto_pull = true\n\n[[machine]]\nname = \"t\"\nos = \"{}\"\n",
+            os()
+        ),
+    )
+    .unwrap();
+    git(h, &["add", "-A"]);
+    git(h, &["commit", "-qm", "init"]);
+    git(h, &["push", "-q", "-u", "origin", "HEAD:main"]);
+    git(h, &["branch", "-q", "--set-upstream-to=origin/main"]);
+
+    // A second clone pushes two commits.
+    let other = TempDir::new().unwrap();
+    assert!(Proc::new("git")
+        .args(["clone", "-q", &url])
+        .arg(other.path())
+        .output()
+        .unwrap()
+        .status
+        .success());
+    let o = other.path();
+    git(o, &["config", "user.email", "t@t"]);
+    git(o, &["config", "user.name", "t"]);
+    for (n, f) in [("one", "a.txt"), ("two", "b.txt")] {
+        fs::write(o.join(f), format!("{n}\n")).unwrap();
+        git(o, &["add", "-A"]);
+        git(o, &["commit", "-qm", n]);
+    }
+    git(o, &["push", "-q"]);
+
+    // The pre-run pull lands both and says so, with the count.
+    temper(h)
+        .args(["install", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("spec updated (2 commits)"));
+
+    // Nothing new the second time → no git line at all.
+    temper(h)
+        .args(["install", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("spec updated").not());
 }
