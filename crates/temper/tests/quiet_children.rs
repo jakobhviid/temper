@@ -152,3 +152,51 @@ fn json_stays_parseable_through_a_chatty_child() {
     assert_eq!(v["packages"], 1);
     assert_eq!(v["upgraded"], 0);
 }
+
+/// A run that needs root must say so when it *cannot* ask, rather than looking
+/// healthy until the escalation fails.
+///
+/// Deterministic on any machine because `PATH` holds no `sudo` at all: that is the
+/// one branch whose outcome doesn't depend on the host's sudo policy (a CI runner
+/// with passwordless sudo would take the "already cached" path and never warn).
+#[test]
+fn a_run_that_cannot_ask_for_root_says_so() {
+    let home = TempDir::new().unwrap();
+    let fake_home = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    let stub = TempDir::new().unwrap(); // deliberately empty: no sudo, no anything
+    let h = home.path();
+    fs::create_dir_all(h.join("apps")).unwrap();
+    fs::create_dir_all(h.join("assets")).unwrap();
+    fs::write(h.join("assets/sys.conf"), "managed\n").unwrap();
+    // A destination that exists with different content, so the step has real work
+    // and root is genuinely required.
+    let dest = fake_home.path().join("dest.conf");
+    fs::write(&dest, "drifted\n").unwrap();
+    fs::write(
+        h.join("apps/a.toml"),
+        format!(
+            "[[step]]\nsysfile = \"assets/sys.conf\"\nto = \"{}\"\n",
+            dest.display()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        h.join("temper.toml"),
+        format!("[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"a\"]\n", os()),
+    )
+    .unwrap();
+
+    Command::cargo_bin("temper")
+        .unwrap()
+        .env("TEMPER_DIR", h)
+        .env("HOME", fake_home.path())
+        .env("TEMPER_STATE_DIR", state.path())
+        .env("PATH", stub.path())
+        .arg("install")
+        .assert()
+        .failure() // the escalation can't happen — that part is expected
+        // …but it must have been explained first, naming the file that needs root.
+        .stderr(predicates::str::contains("needs root"))
+        .stderr(predicates::str::contains("dest.conf"));
+}

@@ -135,6 +135,12 @@ so does `--dry-run`. Set `TEMPER_NO_SUDO_KEEPALIVE=1` to opt out (you'll get
 Homebrew's per-cask prompts back). App Store prompts are Apple's own and can't be
 cached this way — `mas` may still ask per app.
 
+**Unattended runs say so instead of dying mysteriously.** Over ssh without a tty, from
+cron, or with stdin piped, there is nowhere to type a password — so a run that needs
+root warns up front, naming what needs it, rather than looking healthy until the
+escalation itself fails with a bare `sudo install … failed`. Same if `sudo` isn't
+installed at all. A run needing no root is unaffected and stays silent.
+
 **How temper finds the folder (why you rarely have to tell it).** temper
 resolves its home in this order, first hit wins: `$TEMPER_DIR` → walk up from the
 cwd → a saved pointer (`temper setup <dir>`) → **auto-scan** a folder named
