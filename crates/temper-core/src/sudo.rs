@@ -63,8 +63,25 @@ pub fn keep_alive() -> KeepAlive {
         // Refresh straight away, then every REFRESH: whichever child process
         // prompted, we want to extend it as soon as it exists rather than
         // waiting out a full interval first.
+        //
+        // A refresh that fails *after* one has succeeded means the credential we
+        // were holding is gone — the run will prompt again later, and the user is
+        // owed that news now rather than as a surprise fingerprint request twenty
+        // minutes in. Warned once; a refresh that never succeeds is just the
+        // "nothing to keep alive" case and stays silent.
+        let mut held = false;
+        let mut warned = false;
         loop {
-            refresh();
+            let ok = refresh();
+            if held && !ok && !warned {
+                warned = true;
+                eprintln!(
+                    "{} lost the cached password (sudo timestamp gone) — a later step \
+                     may ask again",
+                    crate::ui::yellow("⚠")
+                );
+            }
+            held |= ok;
             let mut waited = Duration::ZERO;
             while waited < REFRESH {
                 if flag.load(Ordering::Relaxed) {
@@ -118,23 +135,49 @@ pub fn acquire(reason: &str) -> bool {
     }
     // stderr, so `--json` stays pipe-clean.
     eprintln!("{} {reason}", crate::ui::cyan("→"));
-    Command::new("sudo")
+    let answered = Command::new("sudo")
         .arg("-v")
         .status() // inherits the tty: sudo's own prompt, typed into directly
         .map(|s| s.success())
-        .unwrap_or(false)
+        .unwrap_or(false);
+    if !answered {
+        eprintln!(
+            "{} not authenticated — a step that needs root will ask again when it \
+             gets there",
+            crate::ui::yellow("⚠")
+        );
+        return false;
+    }
+    // Verify rather than assume. The whole promise of asking up front is that
+    // nothing prompts later, and that rests on the credential being *reusable* by
+    // the children that need it — which depends on this machine's sudo policy
+    // (`timestamp_timeout`, `timestamp_type`), not on our good intentions. If it
+    // isn't reusable, say so here, where it is still one line of explanation,
+    // instead of letting it surface as a second prompt mid-run with no context.
+    if !cached() {
+        eprintln!(
+            "{} this machine's sudo does not keep the credential for other \
+             processes, so a step may still prompt (see `timestamp_timeout` / \
+             `timestamp_type` in sudoers)",
+            crate::ui::yellow("⚠")
+        );
+        return false;
+    }
+    true
 }
 
 /// Extend an existing timestamp. `-n` guarantees this never prompts: with no
 /// cached credentials it just exits non-zero, which is the "nothing to keep
-/// alive yet" case and not an error.
-fn refresh() {
-    let _ = Command::new("sudo")
+/// alive yet" case and not an error. Returns whether a credential is being held.
+fn refresh() -> bool {
+    Command::new("sudo")
         .args(["-n", "-v"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status();
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 impl Drop for KeepAlive {
