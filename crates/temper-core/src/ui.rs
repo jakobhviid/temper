@@ -9,6 +9,20 @@
 use std::io::IsTerminal;
 use std::sync::OnceLock;
 
+/// Whether this process is emitting `--json`. Set once at startup, before any
+/// output. Everything that prints *during* a run (progress regions, per-item
+/// lines) consults this, so `--json` stdout stays exactly one document without
+/// every call site having to carry the flag down to where it prints.
+static JSON: OnceLock<bool> = OnceLock::new();
+
+pub fn set_json(on: bool) {
+    let _ = JSON.set(on);
+}
+
+fn json_mode() -> bool {
+    *JSON.get().unwrap_or(&false)
+}
+
 fn color_enabled() -> bool {
     static E: OnceLock<bool> = OnceLock::new();
     *E.get_or_init(|| std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal())
@@ -74,4 +88,106 @@ pub fn spinner_counted(len: u64, msg: &str) -> indicatif::ProgressBar {
     pb.set_message(msg.to_string());
     pb.enable_steady_tick(std::time::Duration::from_millis(90));
     pb
+}
+
+/// Live progress for a phase of discrete units — the config-step phase, a
+/// per-file restore, a per-entry undo — where the total is known up front.
+///
+/// Two surfaces, deliberately different in lifetime:
+///
+/// - a **transient** one-line region on stderr (`⠹ [12/26] zsh · copy ~/.zshrc
+///   0:02:14`), erased when the phase ends. It answers "what is it doing right
+///   now, and is it still alive" — the question a captured multi-minute child
+///   otherwise leaves unanswered. `{wide_msg}` truncates to the terminal width,
+///   so a long path can't wrap and leave debris behind the redraw.
+/// - a **permanent** `✓` line on stdout for each unit that actually changed
+///   something. A converged machine emits none of them and stays silent, which is
+///   the same contract the summary count has always described — this only makes it
+///   visible per item instead of totalled at the end.
+///
+/// Inert under `--json` (stdout carries one document) and spinner-free under
+/// `--verbose` (children stream their own output there, and a live region would
+/// fight them for the cursor — the `✓` lines still print).
+pub struct Checklist {
+    pb: Option<indicatif::ProgressBar>,
+}
+
+impl Checklist {
+    /// `len` units in `phase`. A zero-unit phase gets no region at all.
+    pub fn new(len: usize, phase: &str, verbose: bool) -> Checklist {
+        let live = len > 0 && !verbose && !json_mode();
+        let pb = live.then(|| {
+            let pb = indicatif::ProgressBar::new(len as u64);
+            pb.set_style(
+                indicatif::ProgressStyle::with_template(
+                    "  {spinner:.cyan} [{pos}/{len}] {wide_msg} {elapsed}",
+                )
+                .expect("static template")
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
+            );
+            pb.set_message(phase.to_string());
+            pb.enable_steady_tick(std::time::Duration::from_millis(90));
+            pb
+        });
+        Checklist { pb }
+    }
+
+    /// Print through the live region rather than over it.
+    fn emit(&self, line: String) {
+        if json_mode() {
+            return;
+        }
+        match &self.pb {
+            Some(pb) => pb.suspend(|| println!("{line}")),
+            None => println!("{line}"),
+        }
+    }
+
+    /// Name the unit about to be worked on.
+    pub fn start(&self, label: &str) {
+        if let Some(pb) = &self.pb {
+            pb.set_message(label.to_string());
+        }
+    }
+
+    /// The unit changed something — it earns a permanent line.
+    pub fn done(&self, label: &str) {
+        self.emit(format!("  {} {label}", green("✓")));
+        self.advance();
+    }
+
+    /// The unit was already in sync. Counted, never printed: silence is how a
+    /// converged machine reports itself.
+    pub fn unchanged(&self) {
+        self.advance();
+    }
+
+    /// A unit skipped by a failed presence gate — loud by design (Principle #6).
+    /// `why` is a probe description (`binary \`topgrade\``), so it reads as
+    /// "…skipped: binary `topgrade` absent".
+    pub fn skipped(&self, label: &str, why: &str) {
+        self.emit(format!("  {} {label} — skipped: {why} absent", yellow("⚠")));
+        self.advance();
+    }
+
+    /// A warning from inside the phase, kept off the region's line.
+    pub fn warn(&self, msg: &str) {
+        match &self.pb {
+            Some(pb) => pb.suspend(|| eprintln!("  {} {msg}", yellow("⚠"))),
+            None => eprintln!("  {} {msg}", yellow("⚠")),
+        }
+    }
+
+    fn advance(&self) {
+        if let Some(pb) = &self.pb {
+            pb.inc(1);
+        }
+    }
+
+    /// Erase the region — the permanent lines and the summary stay.
+    pub fn finish(self) {
+        if let Some(pb) = self.pb {
+            pb.finish_and_clear();
+        }
+    }
 }

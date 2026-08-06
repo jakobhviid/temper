@@ -312,6 +312,9 @@ static PULL_OVERRIDE: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::n
 fn run(cli: Cli) -> Result<()> {
     let json = cli.json;
     let verbose = cli.verbose;
+    // Before any output: the core's live renderers (progress regions, per-item
+    // lines) must know to stay off stdout so `--json` is one document.
+    ui::set_json(json);
     let _ = PULL_OVERRIDE.set(match (cli.pull, cli.no_pull) {
         (true, _) => Some(true),
         (_, true) => Some(false),
@@ -974,7 +977,6 @@ fn cmd_install(
             "install {}: {} package(s), {verb} {} of {} config step(s)",
             m.name, r.packages, r.steps_changed, r.steps_total
         );
-        announce_skipped(&r.skipped);
         if r.reboot {
             println!("  ⚠ reboot required (rpm-ostree layered a package)");
         }
@@ -983,12 +985,9 @@ fn cmd_install(
     Ok(())
 }
 
-/// Loudly report steps skipped by a failed `when` presence gate (Principle #6).
-fn announce_skipped(skipped: &[String]) {
-    for s in skipped {
-        println!("  {} skipped: {s} absent", ui::yellow("⚠"));
-    }
-}
+// Steps skipped by a failed `when` gate are announced *live* by the step phase's
+// checklist (Principle #6, now naming the step rather than only its probe), so
+// there is no after-the-fact replay here. `--json` still carries `skipped`.
 
 fn cmd_update(json: bool, verbose: bool) -> Result<()> {
     let home = find_home_pulling()?;
@@ -1021,7 +1020,6 @@ fn cmd_update(json: bool, verbose: bool) -> Result<()> {
             "update {}: {pkgs}, re-applied {} of {} always-step(s)",
             m.name, r.steps_changed, r.steps_total
         );
-        announce_skipped(&r.skipped);
     }
     remind_if_dirty(&home, &manifest::effective_git(&ft.git, &m.git));
     Ok(())

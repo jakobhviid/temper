@@ -188,6 +188,35 @@ fn step_finding(
     Ok(None)
 }
 
+/// A short `kind target` label for a step, for the progress region and the `✓`
+/// lines. Pure and cheap on purpose — unlike `step_finding` it probes nothing, so
+/// naming a step costs nothing before we know whether it will change anything.
+fn step_label(step: &Step) -> String {
+    if let (Some(_), Some(to)) = (&step.copy, &step.to) {
+        return format!("copy {to}");
+    }
+    if let (Some(_), Some(in_file)) = (&step.block, &step.in_file) {
+        return format!("block {in_file}");
+    }
+    if let Some(sk) = &step.setkey {
+        return format!(
+            "setkey {}:{}",
+            sk.file.as_deref().unwrap_or(&sk.backend),
+            sk.key
+        );
+    }
+    if let Some(exec) = &step.exec {
+        return format!("exec {exec}");
+    }
+    if let Some(profile) = &step.profile {
+        return format!("profile {profile}");
+    }
+    if let (Some(_), Some(to)) = (&step.sysfile, &step.to) {
+        return format!("sysfile {to}");
+    }
+    "step".into()
+}
+
 /// A suggested next command to resolve drift — the "what to run next" hand-off
 /// RIS emits at the moment of detection. Each is a human label + the exact,
 /// copy-pasteable invocation.
@@ -625,15 +654,26 @@ pub fn run_install(
     let mut journal = Journal::begin();
     let (mut changed, mut total) = (0usize, 0usize);
     let mut skipped = Vec::new();
+    // Candidates are known before any of them runs, so the phase has an honest
+    // denominator. A dry-run reports rather than applies — no live region for it.
+    let candidates = resolved
+        .steps
+        .iter()
+        .filter(|(_, s)| is_step(s) && lifecycle(s) != "manual")
+        .count();
+    let cl = crate::ui::Checklist::new(if dry_run { 0 } else { candidates }, "config", verbose);
     for (app, step) in &resolved.steps {
         // `manual` steps are never run by an automated flow (e.g. speaker-eq's
         // interactive picker) — only when explicitly invoked.
         if !is_step(step) || lifecycle(step) == "manual" {
             continue;
         }
+        let label = format!("{app} · {}", step_label(step));
+        cl.start(&label);
         // Presence gate — skip loudly when absent, error on a failed `needs`.
         match gate_step(home, step) {
             Gate::Skip(desc) => {
+                cl.skipped(&label, &desc);
                 skipped.push(desc);
                 continue;
             }
@@ -647,8 +687,12 @@ pub fn run_install(
             }
         } else if apply_step(home, machine, step, vars, &mut journal, verbose)? {
             changed += 1;
+            cl.done(&label);
+        } else {
+            cl.unchanged();
         }
     }
+    cl.finish();
     if !dry_run {
         journal.commit()?;
     }
@@ -867,6 +911,15 @@ pub fn run_update(
     let mut journal = Journal::begin();
     let (mut changed, mut total) = (0usize, 0usize);
     let mut skipped = Vec::new();
+    // `always` + `ensure` are what an update re-applies; `ensure` is filtered
+    // again inside the loop (it needs a probe), so this is an upper bound — the
+    // counter can finish short of its total, which beats a total that grows.
+    let candidates = resolved
+        .steps
+        .iter()
+        .filter(|(_, s)| is_step(s) && matches!(lifecycle(s), "always" | "ensure"))
+        .count();
+    let cl = crate::ui::Checklist::new(candidates, "config", verbose);
     for (app, step) in &resolved.steps {
         if !is_step(step) {
             continue;
@@ -875,14 +928,18 @@ pub fn run_update(
             "always" => {} // re-apply (fixes drift)
             "ensure" => {
                 if !ensure_should_apply(home, machine, step, vars)? {
+                    cl.unchanged();
                     continue; // present already → don't overwrite
                 }
             }
             _ => continue, // install-only + manual are not applied on update
         }
+        let label = format!("{app} · {}", step_label(step));
+        cl.start(&label);
         // Presence gate — same as install.
         match gate_step(home, step) {
             Gate::Skip(desc) => {
+                cl.skipped(&label, &desc);
                 skipped.push(desc);
                 continue;
             }
@@ -892,8 +949,12 @@ pub fn run_update(
         total += 1;
         if apply_step(home, machine, step, vars, &mut journal, verbose)? {
             changed += 1;
+            cl.done(&label);
+        } else {
+            cl.unchanged();
         }
     }
+    cl.finish();
     journal.commit()?;
     Ok(InstallReport {
         packages: effective.len(),
