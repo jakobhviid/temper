@@ -25,7 +25,7 @@ fn temper(home: &Path, fake_home: &Path, state: &Path) -> Command {
 }
 
 #[test]
-fn reconcile_without_brewfile_errors_helpfully() {
+fn reconcile_without_brewfile_skips_packages_instead_of_failing() {
     let home = TempDir::new().unwrap();
     let fake_home = TempDir::new().unwrap();
     let state = TempDir::new().unwrap();
@@ -35,11 +35,21 @@ fn reconcile_without_brewfile_errors_helpfully() {
     )
     .unwrap();
 
+    // No `brewfile` is no longer fatal: there is nothing to write a package to,
+    // but the desktop (dconf) half of reconcile still has to be reachable. With
+    // no snapshots declared either, that leaves nothing to do at all.
     temper(home.path(), fake_home.path(), state.path())
         .arg("reconcile")
         .assert()
-        .failure()
-        .stderr(predicates::str::contains("no `brewfile`"));
+        .success()
+        .stdout(predicates::str::contains("already in sync"));
+
+    temper(home.path(), fake_home.path(), state.path())
+        .args(["--json", "reconcile"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("\"brewfile\":null"))
+        .stdout(predicates::str::contains("\"dconf\":[]"));
 }
 
 #[test]

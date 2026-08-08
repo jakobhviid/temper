@@ -1059,7 +1059,7 @@ fn dconf_append_members(v: &toml::Value) -> Result<Vec<String>> {
 /// Parse a GVariant string array — `['a', 'b']`, an optional `@as` prefix, or
 /// empty — into its members. The inverse of `gvariant` for `as`: members are
 /// single-quoted with `\\` and `\'` escapes.
-fn parse_gvariant_as(s: &str) -> Result<Vec<String>> {
+pub(crate) fn parse_gvariant_as(s: &str) -> Result<Vec<String>> {
     let t = s.trim();
     let t = t.strip_prefix("@as").map(|r| r.trim()).unwrap_or(t);
     let inner = t

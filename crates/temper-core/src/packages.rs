@@ -139,10 +139,18 @@ pub fn effective_set(home: &Path, machine: &Machine) -> Result<Vec<Pkg>> {
     raw.extend(machine.packages.clone());
 
     // A referenced Brewfile: each non-comment, non-blank line is a package token.
+    // A declared file that doesn't exist yet contributes nothing rather than
+    // erroring — that's the seed case (`init`, or declaring `brewfile` before
+    // running `reconcile --current-state-wins`), where it's about to be created.
     if let Some(bf) = &machine.brewfile {
         let path = home.join(bf);
-        let content = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading brewfile {}", path.display()))?;
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => {
+                return Err(e).with_context(|| format!("reading brewfile {}", path.display()))
+            }
+        };
         for line in content.lines() {
             let l = line.trim();
             if !l.is_empty() && !l.starts_with('#') {

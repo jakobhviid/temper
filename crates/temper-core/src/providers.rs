@@ -782,29 +782,6 @@ pub fn prune_apply(effective: &[Pkg], extras: &[(Manager, String)]) -> Result<()
     Ok(())
 }
 
-/// Dump live package state into the folder at `machines/<name>/Brewfile` via
-/// `brew bundle dump`. Returns the written path. VM-verified.
-/// `brew bundle dump --force` to `dest` (creating parent dirs). The caller
-/// picks `dest` — for `backup` that's the machine's own `brewfile` so the dump
-/// lands in the file the machine actually reads.
-pub fn dump_to(dest: &Path) -> Result<()> {
-    if !have("brew") {
-        bail!("brew not found — cannot dump package state");
-    }
-    if let Some(p) = dest.parent() {
-        fs::create_dir_all(p).with_context(|| format!("creating {}", p.display()))?;
-    }
-    let status = Command::new("brew")
-        .args(["bundle", "dump", "--force", "--no-vscode", "--file"])
-        .arg(dest)
-        .status()
-        .context("running brew bundle dump")?;
-    if !status.success() {
-        bail!("brew bundle dump failed");
-    }
-    Ok(())
-}
-
 // --- gext: GNOME extensions (Linux desktop) -----------------------------------
 
 /// Union of a machine's composed apps' `extensions`, de-duplicated.
@@ -937,6 +914,31 @@ pub fn rpm_missing(effective: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod progress_tests {
     use super::*;
+
+    /// SPEC.md states, as a documented invariant, that a manager is only probed
+    /// if at least one of its packages is declared — that is why a VS Code
+    /// Settings Sync setup needs no opt-out setting: with nothing declared,
+    /// temper never runs `code --list-extensions` and never reports an
+    /// extension as an extra. If a refactor ever probes unconditionally, the
+    /// doc silently becomes a lie, so pin it here.
+    #[test]
+    fn an_undeclared_manager_is_never_probed() {
+        let declared = vec![crate::packages::parse("brew \"jq\"").unwrap()];
+        let inst = probe(&declared).unwrap();
+        for m in [Manager::Vscode, Manager::Flatpak, Manager::Mas] {
+            assert!(
+                !inst.probed(m),
+                "{} was probed despite nothing being declared for it",
+                m.as_str()
+            );
+        }
+        // …and an unprobed manager can therefore never yield an extra.
+        let extras = crate::packages::extras(&declared, &inst, &crate::manifest::Ignore::default());
+        assert!(
+            !extras.iter().any(|(m, _)| *m == Manager::Vscode),
+            "vscode extra reported without a declaration: {extras:?}"
+        );
+    }
 
     #[test]
     fn labels_the_package_being_installed() {

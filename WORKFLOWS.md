@@ -15,7 +15,8 @@ state**. Every loop either converges the machine toward the spec
 
 **How Jakob works it (the short version):** `drift` is the hub — run it, read the
 **Next steps**, run the command it names. Absorbing an ad-hoc change goes through
-`reconcile` (per-item), not a wholesale `backup`. The fleet is **authored in one
+`reconcile` (per-item), or `reconcile --csw` when the machine is simply right.
+The fleet is **authored in one
 place** (this folder, in git) and **run per-machine** (locally, or over ssh — see
 §Fleet). `restore` is used both when bringing a desktop back up *and* mid-life to
 snap GNOME/Ptyxis back to the known-good snapshot.
@@ -26,6 +27,25 @@ live `install <name>` then asks to confirm). The examples below omit it, matchin
 what `drift`'s Next steps print.
 
 ---
+
+## 0. Put a machine in the folder for the first time
+
+**When:** the box exists and is set up the way you like, but the folder has never
+heard of it. (If the machine is *already* declared, skip to §1.)
+
+```sh
+temper init            # name inferred from hostname; --role to skip the ask
+```
+
+`init` adds a `[[machine]]` block (creating `temper.toml` if the folder has
+none), wires up `brewfiles/<name>`, and then seeds it from the machine's live
+state — it is `reconcile --current-state-wins --include-trust` under the hood, so
+you get the full manager coverage, dependency-aware brew extras, `[ignore]`
+respected, canonical ordering, a preview, and an undo. It refuses to touch a
+machine that's already declared, pointing you at `reconcile` instead.
+
+`init` and `setup` are different jobs: **`setup` = which folder do I use**
+(records a pointer), **`init` = put this machine in the folder**.
 
 ## 1. Bring up a machine (fresh install / reinstall)
 
@@ -219,8 +239,9 @@ of the drift. You pick a direction and run what it prints:
   config churn) — the additive "install-missing" flow.
 - **Packages installed but not declared (extras):** decide the direction —
   - converge machine→spec: `temper prune` (uninstall them, asks first);
-  - absorb spec←machine: `temper reconcile` (interactively add/drop),
-    or `temper backup` (overwrite the machine Brewfile wholesale).
+  - absorb spec←machine: `temper reconcile` (interactively add/drop).
+    or `temper reconcile --csw` to take the machine's state for every item
+    at once (see §5).
 - **Tap-trust drifted** (`[brew].trust`): a declared tap that isn't trusted
   (brew silently skips its formulae) → `temper install`/`update` re-trusts it;
   a tap trusted on the machine but not declared → `temper reconcile` absorbs it
@@ -256,9 +277,11 @@ per-item and surgical, so nothing lands in the spec without you saying so.
 
 ```sh
 temper reconcile   # the go-to: interactively add extras / drop missing entries /
-                   #   route a flatpak extra to [ignore] / reconcile tap-trust
+                   #   route a flatpak extra to [ignore] / reconcile tap-trust /
+                   #   absorb changed desktop keys, per section
 temper adopt       # optional first look: just list the extras, mutate nothing
-temper backup      # rarely: wholesale dump of live state → Brewfile
+temper reconcile --current-state-wins   # take the machine's state for everything
+temper reconcile --csw                  #   (same thing, shorter)
 ```
 
 `reconcile` prompts per item (missing entries default to keep, extras default to
@@ -271,8 +294,53 @@ each group) so the Brewfile stays sorted instead of growing an unsorted tail.
 temper.toml) the same way: a tap trusted on the machine but not declared can be
 absorbed into `[brew].trust` (or routed to `[ignore].tap`), and a declared tap
 that isn't currently trusted can be dropped (default keep — `install`/`update`
-would re-trust it). `adopt` is the read-only preview; `backup` is the blunt "just
-capture everything" fallback when you'd rather diff-then-trim than answer prompts.
+would re-trust it). `adopt` is the read-only preview.
+
+### `--current-state-wins` (`--csw`) — absorb everything, no prompts
+
+When you know the machine is right and you'd rather review a diff than answer
+forty questions: `--csw` answers every item with "take the machine". Extras get
+added, declared-but-absent entries get dropped, changed desktop keys take the
+live value. It still prints the full plan and **confirms once** — the per-item
+prompts *were* the review step, so removing them without leaving anything would
+land a bulk write in your spec unreviewed. `--yes` waives that last confirm.
+
+Unlike the old wholesale dump, it makes the same surgical edits `reconcile`
+always makes: only the machine's own Brewfile, `[ignore]` respected, canonically
+sorted, comments intact, journaled and undoable. Taps ride along as ordinary
+Brewfile entries — a `tap "user/repo"` present on the machine but undeclared is
+absorbed (and sorted to the top), one declared but absent is dropped.
+
+> **Converge before you absorb.** `--csw` reads "declared but not installed" as
+> "not wanted", and on a machine that hasn't run `install` yet those are the same
+> thing — so it would strip the spec down to whatever happens to be present. Run
+> `temper drift` first: if it lists *missing* packages, converge (`temper install
+> --packages-only`) before absorbing, or you'll adopt an incomplete machine as the
+> spec. The preview and `temper undo` are your backstop either way.
+
+> **`--csw` writes machine-scoped files only.** `[brew].trust` and `[ignore]`
+> live in `temper.toml` at **fleet** scope — absorbing them from one machine
+> would silently change every other machine. So `--csw` reports tap-trust drift
+> and leaves it alone. An extra is therefore always *added*, never routed to
+> `[ignore]` (ignoring is a judgement, not a state — that stays interactive).
+>
+> **`--include-trust` adds, and only adds.** It records taps *this* machine
+> trusts that the fleet doesn't declare — real knowledge. It will **never remove**
+> a declared tap: a declared-but-untrusted tap almost always means the machine
+> hasn't run `install` yet (on a brand-new box it has trusted *nothing*), and
+> deleting on that basis would break every other machine in the fleet. Removing a
+> tap is a fleet decision, so it stays an interactive one — reported every time,
+> never automatic.
+
+It never goes quiet about what it skipped:
+
+```
+! 2 tap-trust difference(s) NOT absorbed (fleet-scope — affects every machine):
+    ublue-os/tap                 trusted here, not in [brew].trust
+    jakobhviid/tap               declared, not trusted here
+  → temper reconcile                          decide each interactively
+  → temper reconcile --csw --include-trust    take the machine's state too
+```
 
 ## 6. Capture / restore desktop (GNOME + Ptyxis) state
 
@@ -280,15 +348,33 @@ capture everything" fallback when you'd rather diff-then-trim than answer prompt
 machine to the snapshot — both on a fresh bring-up **and** mid-life when live
 GNOME/Ptyxis state has drifted and you want it back to known-good.
 
+Desktop state is **first-class drift**: `temper drift` compares each declared
+`[[machine.dconf]]` subtree against a live dump and reports it key by key, so
+you find out the desktop moved without having to capture-and-diff blind.
+
 ```sh
-temper backup      # also writes each [[machine.dconf]] snapshot (filtered)
-temper restore     # load the snapshot(s) back into live dconf (confirm-gated)
+temper drift       # per-key: missing / extra / changed, grouped per snapshot
+temper reconcile   # absorb per section (= per extension) — the surgical default
+temper snapshot    # capture whole subtree(s) into the spec (spec←machine)
+temper restore     # load the snapshot(s) back into live dconf (spec→machine)
 ```
 
-`backup`'s dconf dump runs through the `strip` filter (bookkeeping + per-monitor
-keys that would corrupt a round-trip). `restore` is confirm-gated and never part
-of `update` (so a routine `update` never clobbers live tweaks) — it's a
-deliberate, on-demand reset. *(RIS: `gnome-backup`/`gnome-restore`,
+Both captures run through the `strip` filter (bookkeeping + per-monitor keys
+that would corrupt a round-trip), and so does *each side* of a drift compare —
+a stripped key never reads as drift.
+
+`reconcile` prompts **per section**, which is the unit dconf itself defines: for
+a snapshot rooted at `/org/gnome/shell/extensions/` that means one ask per
+extension. A key holding a list (`enabled-extensions`, `favorite-apps`) is one
+key, so it is one ask, shown as a member-level `+2 −1` delta rather than two
+walls of GVariant. `snapshot` is the wholesale sibling when you'd rather
+diff-then-trim in git than answer prompts.
+
+`restore` is confirm-gated and never part of `update` (so a routine `update`
+never clobbers live tweaks) — it's a deliberate, on-demand reset. It is
+**journaled**: `temper undo` resets the subtree and reloads your prior state,
+guarded so it skips rather than clobbers if the desktop moved since.
+`temper restore --dry-run` previews which snapshots would load, touching nothing. *(RIS: `gnome-backup`/`gnome-restore`,
 `ptyxis-backup`/`-restore`.)*
 
 ## 7. Undo a run
@@ -302,10 +388,17 @@ temper undo <run-id>         # revert a specific one
 temper undo --dry-run        # show what would revert, touch nothing
 ```
 
-Reverts file writes (`copy`/`block`/`setkey` json/toml/ini) and `setkey(dconf)`
-values. `setkey(defaults)`, `sysfile`, and `exec` aren't journaled — undo skips
-them. Every revert is guarded: if the target changed since, it's skipped, not
-clobbered.
+Reverts file writes (`copy`/`block`/`setkey` json/toml/ini), `setkey(dconf)`
+values, and a whole-subtree `restore` (undo resets the subtree and reloads your
+prior dump — a bare reload would leave behind every key the restore introduced).
+`setkey(defaults)`, `sysfile`, and `exec` aren't journaled — undo skips them.
+Every revert is guarded: if the target changed since, it's skipped, not
+clobbered. For a subtree the guard is the **strip-filtered** dump, so ordinary
+desktop churn in stripped keys doesn't quietly disqualify the undo.
+
+A run written by a *newer* temper than the one reverting keeps its
+still-understood entries revertible: an unrecognized op is skipped and counted,
+not treated as a corrupt journal.
 
 Each item is named as it goes — `✓ <path>` for a revert, and a skip says **why**
 (`changed since temper wrote it`, `gone since temper wrote it`), because that is
@@ -330,7 +423,12 @@ This is folder-authoring: it writes *into* the folder, then you review + commit.
 
 ## Save spec changes to git (so the folder doesn't drift)
 
-`reconcile`, `backup`, and `eq-import` — and any hand edit — change the
+> **Used to run `temper backup`?** It was split: its dconf half is now
+> `temper snapshot` (§6), and its package half is `temper reconcile` — per item,
+> or `--csw` for all of them (§5). A machine that isn't in the folder at all
+> starts with `temper init` (§0). See the README's "If you used `temper backup`".
+
+`init`, `reconcile`, `snapshot`, and `eq-import` — and any hand edit — change the
 temper-home *folder*, not a machine. If that folder is a git repo, temper helps
 you persist those changes so it doesn't silently drift:
 
@@ -416,9 +514,11 @@ machine's app list can be generous without config landing where it shouldn't.
 |---|---|---|
 | Machine to match the spec (packages) | machine→spec | `install --packages-only` / `prune` |
 | Machine to match the spec (config) | machine→spec | `install` |
-| Spec to match the machine (surgical) | spec←machine | `reconcile` |
-| Spec to match the machine (wholesale) | spec←machine | `backup` |
+| Spec to match the machine (per item) | spec←machine | `reconcile` |
+| Spec to match the machine (everything) | spec←machine | `reconcile --csw` |
+| Desktop captured into the spec (wholesale) | spec←machine | `snapshot` |
 | Desktop reset to the snapshot | spec→machine | `restore` |
+| A machine that isn't in the folder yet | spec←machine | `init` (once) |
 | Undo the last change | — | `undo` |
 
 ## `--json` everywhere

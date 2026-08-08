@@ -2,7 +2,7 @@
 //! apply (install/update) them, with presence-gating (`when`/`needs`) and a
 //! both-direction remediation summary. Step primitives: `copy`, `block`,
 //! `setkey` (all backends), `exec`, `profile`, `sysfile`; assertions are
-//! drift-only. Flows `install` / `update` / `prune` / `backup` / `restore` /
+//! drift-only. Flows `install` / `update` / `prune` / `snapshot` / `restore` /
 //! `adopt` / `reconcile` are all live.
 
 use std::collections::BTreeMap;
@@ -411,9 +411,13 @@ pub struct Remediation {
 }
 
 /// Both-direction remediations for a drift report (RIS's four-branch package
-/// fork + a config line). Machine→spec: `install-missing` / `prune` /
-/// re-`install`. Spec←machine: `reconcile` / `backup`. Plus `undo` to revert.
-/// Empty when nothing is out of sync.
+/// fork + a config line + the dconf pair). Machine→spec: `install-missing` /
+/// `prune` / re-`install` / `restore`. Spec←machine: `reconcile` / `snapshot`.
+/// Plus `undo` to revert. Empty when nothing is out of sync.
+///
+/// Wholesale absorption is deliberately **not** offered here as its own line:
+/// `reconcile` already covers it (interactively, or with
+/// `--current-state-wins`), so there is nothing to name separately.
 ///
 /// Commands are **bare** (no machine name): every verb defaults to this host by
 /// hostname, and you run these on the machine they apply to — so the name is
@@ -424,6 +428,10 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
     let extra_pkg = drifted(&["package-extra"]);
     let trust_gap = drifted(&["trust"]);
     let trust_extra = drifted(&["trust-extra"]);
+    // dconf splits by direction: a `missing`/`changed` key can be pushed back
+    // out with `restore`; an `extra` only ever moves spec←machine.
+    let dconf_stale = drifted(&["dconf-key"]);
+    let dconf_capture = drifted(&["dconf-key", "dconf-extra", "dconf-uncaptured"]);
     let config_drift = items.iter().any(|f| {
         !f.ok
             && ![
@@ -433,6 +441,9 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
                 "rpm",
                 "trust",
                 "trust-extra",
+                "dconf-key",
+                "dconf-extra",
+                "dconf-uncaptured",
             ]
             .contains(&f.kind)
     });
@@ -469,19 +480,29 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
             "temper install --packages-only",
         );
     }
-    // Spec ← machine (absorb the machine's state into the spec).
-    if missing_pkg || extra_pkg || trust_extra || trust_gap {
+    if dconf_stale {
         push(
             &mut out,
-            "interactively add extras / drop missing entries (packages + tap-trust)",
-            "temper reconcile",
+            "reload the desktop snapshot, clobbering live tweaks (asks first)",
+            "temper restore",
         );
     }
-    if missing_pkg || extra_pkg {
+    // Spec ← machine (absorb the machine's state into the spec).
+    if missing_pkg || extra_pkg || trust_extra || trust_gap || dconf_capture {
+        let label = if dconf_capture && (missing_pkg || extra_pkg || trust_extra || trust_gap) {
+            "interactively add extras / drop missing entries (packages, tap-trust, desktop keys)"
+        } else if dconf_capture {
+            "interactively absorb changed desktop keys, per section"
+        } else {
+            "interactively add extras / drop missing entries (packages + tap-trust)"
+        };
+        push(&mut out, label, "temper reconcile");
+    }
+    if dconf_capture {
         push(
             &mut out,
-            "overwrite the machine Brewfile with live state",
-            "temper backup",
+            "capture the whole desktop subtree into the spec instead",
+            "temper snapshot",
         );
     }
     // Config drift: re-apply, or revert the last run.
@@ -663,6 +684,39 @@ pub fn run_drift(
             ok: false,
             status: "missing".into(),
         });
+    }
+
+    // Whole-desktop dconf snapshots (machine scope): the captured file versus a
+    // live dump, both filtered through the same `strip`. Grouped per snapshot so
+    // a narrow subtree (`…/shell/extensions/`) reads as its own section.
+    // Degraded, not failed, on a host without dconf (a Mac).
+    for snap in &machine.dconf {
+        let group = format!("dconf/{}", snap.name());
+        match crate::dconf::snapshot_state(home, snap)? {
+            crate::dconf::SnapshotState::NoDconf => {}
+            crate::dconf::SnapshotState::Uncaptured => findings.push(Finding {
+                app: group,
+                kind: "dconf-uncaptured",
+                target: snap.file.clone(),
+                ok: false,
+                status: "never captured".into(),
+            }),
+            crate::dconf::SnapshotState::Diffs(diffs) => {
+                for d in diffs {
+                    findings.push(Finding {
+                        app: group.clone(),
+                        kind: if d.status() == "extra" {
+                            "dconf-extra"
+                        } else {
+                            "dconf-key"
+                        },
+                        target: d.id(),
+                        ok: false,
+                        status: d.status().into(),
+                    });
+                }
+            }
+        }
     }
 
     Ok(findings)
@@ -1004,44 +1058,31 @@ pub fn commit_prune(home: &Path, machine: &Machine, plan: &PrunePlan) -> Result<
     Ok(())
 }
 
-/// What a `backup` wrote: the dumped Brewfile + any filtered dconf snapshots.
-pub struct BackupReport {
-    pub brewfile: std::path::PathBuf,
-    pub dconf: Vec<std::path::PathBuf>,
-}
-
-/// Backup: dump live package state into `machines/<name>/Brewfile`, plus each
-/// declared dconf snapshot (filtered) into its file. dconf is a no-op where the
-/// tool is absent (a Mac) or the machine declares none.
-pub fn run_backup(home: &Path, machine: &Machine) -> Result<BackupReport> {
-    // Dump into the machine's OWN brewfile (the file it actually reads), so a
-    // backup feeds back into the spec; fall back to machines/<name>/Brewfile if
-    // the machine declares no brewfile.
-    let bf_rel = machine
-        .brewfile
-        .clone()
-        .unwrap_or_else(|| format!("machines/{}/Brewfile", machine.name));
-    let dest = home.join(&bf_rel);
-    let before = std::fs::read(&dest).ok();
-    providers::dump_to(&dest)?;
-    let after = std::fs::read(&dest)
-        .map_err(|e| anyhow::anyhow!("reading dumped {}: {e}", dest.display()))?;
-
-    // Journal the writes so `undo` reverts a backup.
+/// Snapshot: capture each declared `[[machine.dconf]]` subtree (filtered) into
+/// its file — the spec←machine half of the capture/restore pair, and the
+/// wholesale sibling of a per-key `reconcile`. A **recurring** verb: it is the
+/// only way to update a snapshot wholesale.
+///
+/// Errors where `dconf` is absent rather than silently writing nothing.
+/// Journaled, so `undo` reverts it.
+pub fn run_snapshot(home: &Path, machine: &Machine) -> Result<Vec<std::path::PathBuf>> {
+    if machine.dconf.is_empty() {
+        return Ok(Vec::new());
+    }
+    if crate::primitives::which("dconf").is_none() {
+        bail!("dconf not found — cannot capture a dconf snapshot on this host");
+    }
     let mut journal = Journal::begin();
-    journal.record_write(&dest, before.as_deref(), &after)?;
-    let dconf = crate::dconf::backup(home, machine, &mut journal)?;
+    let written = crate::dconf::capture(home, machine, &mut journal)?;
     journal.commit()?;
-    Ok(BackupReport {
-        brewfile: dest,
-        dconf,
-    })
+    Ok(written)
 }
 
 /// Restore: load each declared dconf snapshot back into live dconf. The CLI
 /// confirms first — this clobbers live desktop state (never run by `update`).
-pub fn run_restore(home: &Path, machine: &Machine) -> Result<Vec<std::path::PathBuf>> {
-    crate::dconf::restore(home, machine)
+/// Journaled per subtree, so `undo` reverts it.
+pub fn run_restore(home: &Path, machine: &Machine, dry_run: bool) -> Result<Vec<std::path::PathBuf>> {
+    crate::dconf::restore(home, machine, dry_run)
 }
 
 /// Adopt (advisory v1): report the installed extras so they can be added to a
@@ -1211,11 +1252,40 @@ mod remediation_tests {
         assert!(cmds.contains(&"temper install --packages-only".to_string())); // add missing
         assert!(cmds.contains(&"temper prune".to_string())); // remove extras
         assert!(cmds.contains(&"temper reconcile".to_string())); // absorb (surgical)
-        assert!(cmds.contains(&"temper backup".to_string())); // absorb (wholesale)
-                                                              // never a machine name baked into a suggested command
+                                                                 // never a machine name baked into a suggested command
         assert!(!cmds
             .iter()
             .any(|c| c.split_whitespace().count() > 3 && !c.contains("--")));
+        // Seeding a machine is `init`'s job, never a drift remedy — offering it
+        // here would tell you to re-seed a spec you already have.
+        assert!(!cmds.iter().any(|c| c.contains("dump") || c.contains("init")));
+    }
+
+    #[test]
+    fn dconf_drift_offers_both_directions() {
+        let items = vec![f("dconf-key", false)];
+        let cmds: Vec<String> = remediations(&items)
+            .iter()
+            .map(|r| r.command.clone())
+            .collect();
+        assert!(cmds.contains(&"temper restore".to_string())); // spec → machine
+        assert!(cmds.contains(&"temper reconcile".to_string())); // spec ← machine, per key
+        assert!(cmds.contains(&"temper snapshot".to_string())); // spec ← machine, wholesale
+                                                                // dconf drift is not config drift — `install` never reloads a snapshot.
+        assert!(!cmds.contains(&"temper install".to_string()));
+    }
+
+    #[test]
+    fn a_live_only_dconf_key_never_offers_restore() {
+        // An `extra` exists only on the machine; there is nothing in the spec to
+        // push back out, so restore would silently drop it.
+        let items = vec![f("dconf-extra", false)];
+        let cmds: Vec<String> = remediations(&items)
+            .iter()
+            .map(|r| r.command.clone())
+            .collect();
+        assert!(!cmds.contains(&"temper restore".to_string()));
+        assert!(cmds.contains(&"temper reconcile".to_string()));
     }
 
     #[test]

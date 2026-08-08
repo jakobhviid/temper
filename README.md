@@ -26,7 +26,8 @@ temper undo        # revert the last run
 - **Drift is first-class.** `temper drift` is read-only and tells you what's out
   of sync **and the exact command to fix it** — in both directions.
 - **Two directions.** Converge the machine toward the spec, *or* absorb the
-  machine's live state back into the spec (`temper reconcile`).
+  machine's live state back into the spec (`temper reconcile`) — packages,
+  tap-trust, *and* whole-desktop GNOME state, per key.
 - **Reversible.** Every file write (and every dconf key) is journaled; `temper
   undo` rolls back the last run, guarded so it never clobbers a since-changed file.
 - **Keeps the spec in git (if it is git).** Spec-side writes can auto-commit +
@@ -84,6 +85,10 @@ temper install --dry-run  # what an install would change — writes nothing
 temper install            # converge for real
 ```
 
+Already have a machine set up the way you like, and no spec for it? `temper init`
+writes the `[[machine]]` block for you (name inferred from the hostname) and seeds
+it from what's actually installed.
+
 `drift` is the hub: its report ends with **Next steps** — the exact command for
 each way out of the drift (add the missing packages, remove the extras, absorb
 them into the spec, re-apply config, or undo). See **[WORKFLOWS.md](WORKFLOWS.md)**
@@ -113,13 +118,40 @@ open tool and leaving the *data* in a folder anyone can bring. It's built in the
 same Rust-on-a-shared-tap style as its siblings [`grove`], [`amdl`], and
 [`dotsync`].
 
+## If you used `temper backup`
+
+**`temper backup` is gone.** It fused two captures with opposite lifecycles — a
+package dump that is only ever correct *once*, and a dconf capture that is the
+*recurring* half of a capture/restore pair. They are separate verbs now, and the
+package half is no longer a wholesale overwrite at all:
+
+| what you used `backup` for | run instead | why |
+|---|---|---|
+| capturing desktop (dconf) state | **`temper snapshot`** | same behaviour, honest name; now errors where dconf is absent instead of silently writing nothing |
+| capturing installed packages | **`temper reconcile`**, or `temper reconcile --csw` | per-item and surgical: only the machine's own Brewfile, `[ignore]` respected, canonically sorted, comments intact, undoable |
+| seeding a machine that has no spec yet | **`temper init`** | writes the `[[machine]]` block for you, then seeds it |
+
+Nothing in your folder needs to change — `[[machine.dconf]]` is unchanged (the
+new `label` is optional). Only the commands you type do.
+
+Two behaviours also changed:
+
+- **`drift` no longer suggests a wholesale absorb.** It names `reconcile`, in
+  both directions. Re-dumping a spec you already have was never the right fix.
+- **`restore` is now undoable** (`temper undo`) and takes `--dry-run`.
+
+If your folder declares `[[machine.dconf]]`, run `temper drift` after upgrading:
+desktop state is now compared key-by-key, so you will likely see drift that was
+invisible before. That is the point — decide it with `temper reconcile` (per
+section, so one prompt per extension) or take it wholesale with `temper snapshot`.
+
 ## Known Limitations
 
 - **`setkey(toml)`** preserves comments and formatting, *except* the changed
   key's own inline comment.
 - **`setkey(defaults)`, `sysfile`, and `exec` aren't undoable** — they mutate
   system-side or arbitrary state, not a file temper can snapshot (dconf writes
-  *are* journaled and undoable).
+  *are* journaled and undoable, per key and per restored subtree).
 - **`profile`** (macOS `.mobileconfig`) install is a manual System-Settings step;
   drift on it is status-only.
 

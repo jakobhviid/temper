@@ -10,6 +10,8 @@
 //!   bytes if the file still hashes to what temper left.
 //! - `DconfKey` — a `setkey(dconf)` write; undo restores the prior value (or
 //!   resets a previously-unset key), guarded on the live value.
+//! - `DconfTree` — a whole-subtree `dconf load` (`restore`); undo resets the
+//!   subtree and reloads the prior dump, guarded on the strip-filtered live dump.
 //!
 //! Every revert is guarded by an after check: if the target changed since, the
 //! entry is skipped, never clobbered.
@@ -59,6 +61,24 @@ enum Entry {
         before: Option<String>,
         after: String,
     },
+    /// A whole-subtree `dconf load` (`restore`). `before` = the object hash of
+    /// the **unfiltered** dump taken just before the load, so undo restores the
+    /// machine's exact prior state; `after` = the hash of the **strip-filtered**
+    /// dump just after it, the revert guard (a raw-dump guard would go stale
+    /// within minutes of normal desktop churn). `strip` is stored so undo can
+    /// reproduce that same filter.
+    DconfTree {
+        path: String,
+        #[serde(default)]
+        strip: Vec<String>,
+        before: String,
+        after: String,
+    },
+    /// An op written by a NEWER temper than the one reading. Undo skips and
+    /// reports it rather than failing to parse the whole run — a downgrade
+    /// loses the ability to revert that entry, not the ability to revert at all.
+    #[serde(other)]
+    Unknown,
 }
 
 fn dconf_read(key: &str) -> Option<String> {
@@ -84,6 +104,44 @@ fn dconf_reset(key: &str) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+fn dconf_dump(path: &str) -> Option<String> {
+    let out = std::process::Command::new("dconf")
+        .args(["dump", path])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Reverting a subtree needs a **reset then load**, not a bare load: `dconf
+/// load` merges, so replaying the prior dump would restore old values but leave
+/// behind every key the restore newly introduced.
+fn dconf_load_tree(path: &str, content: &[u8]) -> bool {
+    use std::io::Write as _;
+    if !std::process::Command::new("dconf")
+        .args(["reset", "-f", path])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    let Ok(mut child) = std::process::Command::new("dconf")
+        .args(["load", path])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    else {
+        return false;
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        if stdin.write_all(content).is_err() {
+            return false;
+        }
+    }
+    child.wait().map(|s| s.success()).unwrap_or(false)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -142,6 +200,26 @@ impl Journal {
             before,
             after,
         });
+    }
+
+    /// Record a whole-subtree `dconf load` for undo. `before` is the unfiltered
+    /// prior dump (stored as an object); `after_filtered` is the post-load dump
+    /// already put through `strip` — the guard.
+    pub fn record_dconf_tree(
+        &mut self,
+        path: &str,
+        strip: &[String],
+        before: &[u8],
+        after_filtered: &str,
+    ) -> Result<()> {
+        let before = self.store_object(before)?;
+        self.entries.push(Entry::DconfTree {
+            path: path.to_string(),
+            strip: strip.to_vec(),
+            before,
+            after: hash(after_filtered.as_bytes()),
+        });
+        Ok(())
     }
 
     fn store_object(&self, bytes: &[u8]) -> Result<String> {
@@ -269,10 +347,40 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
             continue;
         }
 
+        // A whole-subtree restore guards on the strip-filtered live dump.
+        if let Entry::DconfTree {
+            path,
+            strip,
+            before,
+            after,
+        } = entry
+        {
+            let live = dconf_dump(path).map(|d| crate::dconf::strip_dump(&d, strip));
+            if live.as_deref().map(|d| hash(d.as_bytes())) != Some(after.clone()) {
+                skipped += 1; // desktop changed since the restore → don't clobber
+                continue;
+            }
+            if dry_run {
+                reverted += 1;
+                continue;
+            }
+            match fs::read(root.join("objects").join(before)) {
+                Ok(bytes) if dconf_load_tree(path, &bytes) => reverted += 1,
+                _ => skipped += 1,
+            }
+            continue;
+        }
+
+        // Written by a newer temper — nothing this binary can invert.
+        if matches!(entry, Entry::Unknown) {
+            skipped += 1;
+            continue;
+        }
+
         let (path, expect_after) = match entry {
             Entry::Create { path, hash } => (path, hash),
             Entry::Restore { path, after, .. } => (path, after),
-            Entry::DconfKey { .. } => unreachable!(),
+            _ => unreachable!("handled above"),
         };
         cl.start(path);
         let p = PathBuf::from(path);
@@ -307,7 +415,7 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
                     Err(_) => false,
                 }
             }
-            Entry::DconfKey { .. } => unreachable!(),
+            _ => unreachable!("handled above"),
         };
         if done {
             reverted += 1;
@@ -323,4 +431,63 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
         fs::remove_dir_all(&run_dir).ok();
     }
     Ok((reverted, skipped))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_op_from_a_newer_temper_parses_as_unknown() {
+        // Downgrade safety: a manifest containing an op this binary has never
+        // heard of must still load, so the *rest* of the run stays revertible.
+        // Without `#[serde(other)]` this fails to parse and `undo` dies whole.
+        let rf: RunFile = serde_json::from_str(
+            r#"{"argv":["temper"],"entries":[
+                 {"op":"Create","path":"/tmp/x","hash":"abc"},
+                 {"op":"SomeFutureOp","whatever":42}
+               ]}"#,
+        )
+        .expect("unknown op must not fail the whole manifest");
+        assert_eq!(rf.entries.len(), 2);
+        assert!(matches!(rf.entries[1], Entry::Unknown));
+    }
+
+    #[test]
+    fn a_dconf_tree_entry_round_trips() {
+        let e = Entry::DconfTree {
+            path: "/org/gnome/shell/".into(),
+            strip: vec!["monitors/".into()],
+            before: "objhash".into(),
+            after: "guardhash".into(),
+        };
+        let s = serde_json::to_string(&e).unwrap();
+        assert!(s.contains("\"op\":\"DconfTree\""), "{s}");
+        let back: Entry = serde_json::from_str(&s).unwrap();
+        match back {
+            Entry::DconfTree {
+                path, strip, after, ..
+            } => {
+                assert_eq!(path, "/org/gnome/shell/");
+                assert_eq!(strip, vec!["monitors/".to_string()]);
+                assert_eq!(after, "guardhash");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn the_tree_guard_hashes_the_filtered_dump_not_the_raw_one() {
+        // Why it matters: a live subtree churns constantly, so a raw-dump guard
+        // would go stale within minutes and every undo would silently skip.
+        let strip = vec!["last-selected".to_string()];
+        let raw_a = "[/]\nk='v'\nlast-selected='a'\n";
+        let raw_b = "[/]\nk='v'\nlast-selected='b'\n";
+        assert_ne!(hash(raw_a.as_bytes()), hash(raw_b.as_bytes()));
+        assert_eq!(
+            hash(crate::dconf::strip_dump(raw_a, &strip).as_bytes()),
+            hash(crate::dconf::strip_dump(raw_b, &strip).as_bytes()),
+            "churn in a stripped key must not invalidate the undo guard"
+        );
+    }
 }

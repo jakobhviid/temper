@@ -195,7 +195,7 @@ pub struct Machine {
     /// `{{ var "NAME" }}` like the globals.
     #[serde(default)]
     pub vars: std::collections::BTreeMap<String, String>,
-    /// Whole-desktop dconf snapshots this machine owns: `backup` dumps each
+    /// Whole-desktop dconf snapshots this machine owns: `snapshot` captures each
     /// (filtered by `strip`) to its `file`; `restore` loads them back. The
     /// machine-scope GNOME/Ptyxis state RIS captured with gnome-backup/restore.
     #[serde(default)]
@@ -213,14 +213,26 @@ pub struct DconfSnapshot {
     /// The dconf path prefix to dump/load (must end in `/`, e.g.
     /// `/org/gnome/shell/`).
     pub path: String,
-    /// Snapshot file, relative to the temper-home (`backup` writes, `restore`
+    /// Snapshot file, relative to the temper-home (`snapshot` writes, `restore`
     /// reads).
     pub file: String,
-    /// Substrings of a dumped `section/key` line to drop on backup — the
+    /// Substrings of a dumped `section/key` line to drop on capture — the
     /// strip-keys filter (bookkeeping + per-monitor panel keys that would
-    /// corrupt a backup→restore round-trip).
+    /// corrupt a capture→restore round-trip). Applied to **both** sides of a
+    /// drift comparison, so a stripped key never reads as drift.
     #[serde(default)]
     pub strip: Vec<String>,
+    /// Optional human name for drift/reconcile output ("extensions: 3 keys
+    /// drifted") in place of the raw dconf path.
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+impl DconfSnapshot {
+    /// What to call this snapshot in output: its `label`, else its `path`.
+    pub fn name(&self) -> &str {
+        self.label.as_deref().unwrap_or(&self.path)
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]

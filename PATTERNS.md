@@ -31,7 +31,7 @@ on **reality** (`when` probes), not on assumptions about the machine.
 - **Register your one entry in a shared list** — a keybinding path, a PATH-like
   array → `setkey append = true` (`json`/`toml`, or `dconf` for a GVariant `as`
   list). Idempotent union; other members survive. Use it only where temper is the
-  member's *sole registrar*: if a dconf **snapshot** (backup/restore) captures the
+  member's *sole registrar*: if a dconf **snapshot** (snapshot/restore) captures the
   whole array — curated whole-desktop state like `enabled-extensions` that mixes
   image-baked, userspace, and the user's own toggles — the snapshot owns it, not
   append.

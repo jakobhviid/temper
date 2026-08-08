@@ -41,7 +41,7 @@ dest = "assets/speaker-eq"  # default; each <x>.calibrated.conf lands as <x>.con
 [git]                       # optional; convenience for a GIT-backed home (no-op
                             #   on a non-git folder). Set via `temper configure set git.*`.
 remind      = true          # hint whenever any command finds the folder dirty (unless auto_commit)
-auto_commit = false         # commit right after reconcile/backup/eq-import (auto message)
+auto_commit = false         # commit right after reconcile/dump/snapshot/eq-import (auto message)
 auto_push   = false         # …and push
 auto_pull   = true          # `git pull` before a run; warn (never abort) if it can't
 auto_rebase = false         # when auto_pull runs, `--rebase` instead of `--ff-only`
@@ -74,9 +74,27 @@ BREW_PREFIX = "/home/linuxbrew/.linuxbrew"   # e.g. override a Mac-valued global
 
 [[machine.dconf]]           # optional; whole-desktop dconf snapshots (Linux)
 path  = "/org/gnome/shell/"                 # subtree to dump/load (trailing /)
-file  = "assets/gnome/shell.chronos.dconf"  # backup writes here; restore reads
-strip = ["monitors/", "last-selected"]      # drop these key substrings on backup
+file  = "assets/gnome/shell.chronos.dconf"  # snapshot writes here; restore reads
+strip = ["monitors/", "last-selected"]      # drop these key substrings — applied to
+                                            #   BOTH sides of a drift compare, so a
+                                            #   stripped key never reads as drift
+label = "shell"                             # optional; name used in drift/reconcile
+                                            #   output instead of the raw path
 ```
+
+**Declare narrow subtrees, not one blob.** `[[machine.dconf]]` is repeatable, and
+drift/reconcile group by the sections the dump itself defines. A snapshot rooted
+at `/org/gnome/shell/extensions/` therefore yields one section — and one
+reconcile prompt — *per extension*, with no GNOME knowledge in the tool. One
+rooted at `/org/gnome/shell/` lumps far more into each prompt. Split by the
+subtree you actually want to reason about, and `label` each one.
+
+Drift on a snapshot is key-level and reported in the same vocabulary as
+packages: `missing` (in the file, not on the machine), `extra` (on the machine,
+not captured), `changed` (both, differing), plus `never captured` when the file
+doesn't exist yet. `reconcile` absorbs per section/key (spec←machine — a
+`missing` key is absorbed by *dropping* it from the file); `restore` pushes the
+file back out (spec→machine). Both directions are named in drift's Next steps.
 
 > **TOML ordering:** `[machine.vars]` and each `[[machine.dconf]]` bind to the
 > **preceding** `[[machine]]` — they must sit between that header and the next
@@ -89,12 +107,23 @@ per machine — it resolves `brew --prefix` on the box, so one template works on
 both OSes.
 
 Effective package set for a machine = union(each app's `packages`(+`_mac`/
-`_linux`), the machine `packages`, and the machine `brewfile` lines). `[ignore]`
+`_linux`), the machine `packages`, and the machine `brewfile` lines). A declared
+`brewfile` that doesn't exist yet contributes nothing rather than erroring — that
+is the seed case (`init`). `[ignore]`
 is **not** subtracted here — it only stops installed-but-undeclared packages from
 being flagged as extras by `drift`/`prune`. A package that is both declared and
 ignored is still installed (declaration wins). `[ignore].tap` does double duty: it
 also silences a *trusted-but-undeclared* tap so `drift`/`reconcile` stop offering
 it as `[brew].trust` (see `[brew].trust` above).
+
+> **A manager is only probed if you declare at least one of its packages.** This
+> is load-bearing, not an accident: with no `vscode "…"` entry anywhere, temper
+> never runs `code --list-extensions`, so a VS Code Settings Sync setup stays the
+> sole registrar of your extensions and nothing is ever reported as an extra.
+> The same holds for `flatpak`, `mas`, and `gext`. Declaring *one* opts that
+> manager in — thereafter its installed-but-undeclared entries are reported, with
+> `[ignore].<manager>` as the escape hatch. (brew-family is the exception: any
+> declaration at all enables the dependency-aware brew extras computation.)
 
 ## `apps/<name>.toml` (a bundle)
 

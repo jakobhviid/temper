@@ -16,7 +16,7 @@
 //! The ReinstallScripts migration this crate grew out of is complete: every
 //! module below is implemented and exercised end-to-end (see ../../README.md).
 
-pub mod dconf; // whole-desktop dconf snapshots: backup (filtered) + restore
+pub mod dconf; // whole-desktop dconf snapshots: capture (filtered) + drift + restore
 pub mod discovery; // find the temper-home folder across any delivery backend
 pub mod drift; // assertions, exec-hooks, status-only reporting
 pub mod eq_import; // folder-authoring: pull calibrated speaker profiles into the folder

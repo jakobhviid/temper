@@ -30,13 +30,31 @@ pub struct AddItem {
     pub is_flatpak: bool,
 }
 
+/// One declared dconf snapshot's reconcile candidates, grouped into the
+/// **sections** the dump itself defines. For a snapshot rooted at
+/// `/org/gnome/shell/extensions/` each section is one extension, so
+/// per-extension prompts fall out of dconf's own structure — the engine never
+/// learns what an extension is. A single-key change (`enabled-extensions`) is
+/// one section with one key, hence exactly one prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DconfPlan {
+    /// Display name — the snapshot's `label`, else its dconf path.
+    pub name: String,
+    /// The snapshot file, relative to the temper-home.
+    pub file_rel: String,
+    /// Drifted keys grouped by section header, both sorted.
+    pub sections: Vec<(String, Vec<crate::dconf::KeyDiff>)>,
+}
+
 /// The computed reconcile plan: what could be added to / dropped from the
-/// machine's Brewfile, plus the fleet-level `[brew].trust` tap-trust drift. The
-/// CLI turns each into a per-item prompt.
+/// machine's Brewfile, the fleet-level `[brew].trust` tap-trust drift, and the
+/// machine's dconf snapshots. The CLI turns each into a per-item prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReconcilePlan {
-    /// The machine's Brewfile, relative to the temper-home.
-    pub brewfile_rel: String,
+    /// The machine's Brewfile, relative to the temper-home. `None` when the
+    /// machine declares none — there is nowhere to write an absorbed package, so
+    /// the package half is skipped (the desktop half still runs).
+    pub brewfile_rel: Option<String>,
     /// Installed, not declared — candidates to add (or, for flatpak, ignore).
     pub adds: Vec<AddItem>,
     /// Brewfile lines that are declared-but-absent — candidates to drop.
@@ -47,6 +65,10 @@ pub struct ReconcilePlan {
     /// Taps in `[brew].trust` that aren't currently trusted — candidates to drop
     /// from `[brew].trust`. (Keeping one instead is the `install`/`update` fix.)
     pub trust_drops: Vec<String>,
+    /// Per-snapshot desktop-key candidates (empty off a dconf host). Absorbing
+    /// is spec←machine only — pushing a key back OUT is `restore`'s direction,
+    /// which drift names separately.
+    pub dconf: Vec<DconfPlan>,
 }
 
 /// The Brewfile token (line) for a `(manager, name)` pair.
@@ -75,13 +97,20 @@ pub fn plan(
     ignore: &manifest::Ignore,
     brew_trust: &[String],
 ) -> Result<ReconcilePlan> {
-    let brewfile_rel = machine.brewfile.clone().ok_or_else(|| {
-        anyhow!(
-            "machine '{}' has no `brewfile` — reconcile edits the machine's own \
-             Brewfile, so declare `brewfile = \"...\"` first (or use `adopt`)",
-            machine.name
-        )
-    })?;
+    // No `brewfile` → nowhere to write an absorbed package, so the package half
+    // is skipped rather than fatal: a desktop machine whose packages all come
+    // from bundles can still reconcile its dconf snapshots. The CLI says so.
+    let brewfile_rel = machine.brewfile.clone();
+    let Some(brewfile_rel) = brewfile_rel else {
+        return Ok(ReconcilePlan {
+            brewfile_rel: None,
+            adds: Vec::new(),
+            drops: Vec::new(),
+            trust_adds: Vec::new(),
+            trust_drops: Vec::new(),
+            dconf: dconf_plans(home, machine)?,
+        });
+    };
 
     let effective = packages::effective_set(home, machine)?;
     let installed = providers::probe(&effective)?;
@@ -150,10 +179,16 @@ pub fn plan(
     }
     adds.sort_by(|a, b| a.token.cmp(&b.token));
 
-    // DROP candidates: Brewfile lines whose package isn't installed.
+    // DROP candidates: Brewfile lines whose package isn't installed. A declared
+    // Brewfile that doesn't exist yet reads as EMPTY rather than erroring — that
+    // is the seed case (`init`, or declaring `brewfile` then running
+    // `--current-state-wins`), where the file is what we're about to create.
     let bf_path = home.join(&brewfile_rel);
-    let content = std::fs::read_to_string(&bf_path)
-        .with_context(|| format!("reading brewfile {}", bf_path.display()))?;
+    let content = match std::fs::read_to_string(&bf_path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("reading brewfile {}", bf_path.display())),
+    };
     let mut drops = Vec::new();
     for line in content.lines() {
         let l = line.trim();
@@ -190,12 +225,34 @@ pub fn plan(
     trust_drops.sort();
 
     Ok(ReconcilePlan {
-        brewfile_rel,
+        brewfile_rel: Some(brewfile_rel),
         adds,
         drops,
         trust_adds,
         trust_drops,
+        dconf: dconf_plans(home, machine)?,
     })
+}
+
+/// Per-snapshot desktop-key candidates. Empty where dconf is absent (a Mac) or
+/// a snapshot has never been captured — a never-captured snapshot is `drift`'s
+/// story and `snapshot`'s job, not a wall of per-key prompts.
+fn dconf_plans(home: &Path, machine: &Machine) -> Result<Vec<DconfPlan>> {
+    let mut out = Vec::new();
+    for snap in &machine.dconf {
+        if let crate::dconf::SnapshotState::Diffs(diffs) = crate::dconf::snapshot_state(home, snap)?
+        {
+            if diffs.is_empty() {
+                continue;
+            }
+            out.push(DconfPlan {
+                name: snap.name().to_string(),
+                file_rel: snap.file.clone(),
+                sections: crate::dconf::group_by_section(&diffs),
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Brewfile content with `tokens` appended (one per line), separated from any
@@ -354,6 +411,60 @@ pub fn append_ignore(temper_toml: &str, manager: &str, appid: &str) -> Result<St
 /// Append `tap` to `[brew].trust` in a `temper.toml`, preserving comments +
 /// formatting (toml_edit). Idempotent — a no-op if already present. The
 /// spec←machine "absorb a trusted tap" edit, mirroring `append_ignore`.
+/// Whether `temper.toml` already declares a machine by this name.
+pub fn has_machine(temper_toml: &str, name: &str) -> Result<bool> {
+    let doc: toml_edit::DocumentMut = temper_toml
+        .parse()
+        .context("parsing temper.toml to look for the machine")?;
+    Ok(doc
+        .get("machine")
+        .and_then(|m| m.as_array_of_tables())
+        .is_some_and(|arr| {
+            arr.iter()
+                .any(|t| t.get("name").and_then(|v| v.as_str()) == Some(name))
+        }))
+}
+
+/// Append a `[[machine]]` block for a new machine, preserving comments +
+/// formatting (toml_edit). `init` uses this to scaffold a machine into the
+/// folder; it refuses to touch one that already exists (that's `reconcile`'s
+/// job, and silently rewriting a hand-authored block would lose intent).
+pub fn append_machine(
+    temper_toml: &str,
+    name: &str,
+    os: &str,
+    role: Option<&str>,
+    brewfile: &str,
+) -> Result<String> {
+    if has_machine(temper_toml, name)? {
+        return Err(anyhow!(
+            "temper.toml already declares a machine named '{name}' — \
+             use `temper reconcile` to absorb its current state instead"
+        ));
+    }
+    let mut doc: toml_edit::DocumentMut = temper_toml
+        .parse()
+        .context("parsing temper.toml for the machine edit")?;
+    let arr = doc
+        .as_table_mut()
+        .entry("machine")
+        .or_insert(toml_edit::Item::ArrayOfTables(
+            toml_edit::ArrayOfTables::new(),
+        ))
+        .as_array_of_tables_mut()
+        .ok_or_else(|| anyhow!("[[machine]] in temper.toml is not an array of tables"))?;
+    let mut t = toml_edit::Table::new();
+    t["name"] = toml_edit::value(name);
+    t["os"] = toml_edit::value(os);
+    if let Some(r) = role {
+        t["role"] = toml_edit::value(r);
+    }
+    t["brewfile"] = toml_edit::value(brewfile);
+    t["apps"] = toml_edit::Item::Value(toml_edit::Value::Array(toml_edit::Array::new()));
+    arr.push(t);
+    Ok(doc.to_string())
+}
+
 pub fn append_trust(temper_toml: &str, tap: &str) -> Result<String> {
     let mut doc: toml_edit::DocumentMut = temper_toml
         .parse()

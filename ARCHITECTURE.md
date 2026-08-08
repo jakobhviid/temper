@@ -160,12 +160,17 @@ machine-wide state:
   below), so it can only be evaluated against the *complete* declared set for a
   machine. The declared set = union of composed apps' packages **+ a per-machine
   loose list + minus an ignore/baseline list** (see "Machine model").
-- **Whole-desktop dconf** — the entire GNOME shell / Ptyxis state. Backed up
+- **Whole-desktop dconf** — the entire GNOME shell / Ptyxis state. Captured
   through a configurable **strip-keys** filter (bookkeeping + per-monitor panel
-  keys that would corrupt a backup→restore round-trip). The filter is a manifest
-  field, not tool-baked knowledge.
+  keys that would corrupt a capture→restore round-trip). The filter is a manifest
+  field, not tool-baked knowledge, and it is applied to **both** sides of a drift
+  comparison so a stripped key never reads as drift.
 
-Drift at machine scope is a set/snapshot operation.
+Drift at machine scope is a set/snapshot operation. For dconf it is key-level,
+grouped by the sections the dump itself defines — which is why a snapshot rooted
+at a narrow subtree (`/org/gnome/shell/extensions/`) yields one reconcile prompt
+per extension without the engine learning what an extension is. The grain is the
+data's, not the tool's; the manifest chooses it by choosing `path`.
 
 ### App scope — the composable library
 
@@ -206,7 +211,12 @@ Every primitive is **planned and drift-checked**. The **file-writing** ones
 (`copy`, `block`, `setkey` json/toml/ini) are **journaled** for `undo` (the
 `plan.rs`/`apply.rs` shape from `dotsync`, the journal from `amdl`), and so is
 **`setkey(dconf)`** — dconf values round-trip cleanly, so undo snapshots the
-prior value and restores it (or resets a previously-unset key). **`setkey
+prior value and restores it (or resets a previously-unset key). The same holds a
+subtree at a time for **`restore`**: undo stores the unfiltered prior dump, then
+reverts by `dconf reset -f` **then** reload — a bare reload merges, and would
+leave behind every key the restore introduced. Its guard is the strip-filtered
+dump, since a raw-dump guard would go stale within minutes of desktop churn and
+silently disqualify every undo. **`setkey
 (defaults)`**, `sysfile`, and `exec` stay **not journaled**: `defaults read`
 loses the value's type (an undo couldn't rewrite it faithfully), and `sysfile`/
 `exec` mutate root-owned/arbitrary state — so `undo` can't revert them. All the
@@ -328,7 +338,7 @@ primitive, so the modifier is written only for exceptions.
 | `always` | install + update | default for `copy`/`template`/`setkey`; re-applied and drift-tracked |
 | `install` | install only | default for `seed`, `profile`, one-time `exec`; update skips (reloading whole-desktop dconf clobbers live tweaks) |
 | `ensure` | install + update, **install-if-missing only** | the corrected "update installs a little": backfill `grove`/`amdl`/`pwtune` and the zsh tool set if absent, without upgrade-churn |
-| `manual` | never automated | only when explicitly invoked (`gnome-restore`, `speaker-eq`, EQ import) |
+| `manual` | never automated | only when explicitly invoked (`restore`, `speaker-eq`, `eq-import`) |
 
 Enforcement steps that today re-run every `update` (git identity via
 `git config`, default shell via `chsh`) are `exec` with `run = always` + a drift
@@ -389,14 +399,23 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
   not in `[brew].trust` (the machine→spec mirror of `reconcile`'s trust absorb);
   previews and confirms first (`--yes` skips; under `--json` it previews unless
   `--yes`).
-- **`backup [machine]`** — dump live package state into the folder
-  (`brew bundle dump` → the machine's own `brewfile`, the file it reads; else
-  `machines/<name>/Brewfile`), plus each declared
-  `[[machine.dconf]]` snapshot dumped through its strip-keys filter to its file.
+- **`init [name]`** — scaffold **this** machine into the folder: append a
+  `[[machine]]` block (creating `temper.toml` if absent), wire `brewfiles/<name>`,
+  then seed it via `reconcile --current-state-wins --include-trust`. The name is
+  inferred from the hostname when omitted, matching how every other verb decides
+  which machine it is. Refuses a machine that already exists (rewriting a
+  hand-authored block would lose intent). Distinct from `setup`, which records
+  *which folder* to use rather than putting a machine in one.
+- **`snapshot [machine]`** — capture each declared `[[machine.dconf]]` subtree
+  through its strip-keys filter into its file. Unlike a one-shot seed this is
+  **recurring**: it's the spec←machine half of the capture/restore pair and the
+  wholesale sibling of a per-key `reconcile`. Errors where dconf is absent
+  rather than silently writing nothing.
 - **`restore [machine]`** — load the machine's dconf snapshot(s) back into live
-  dconf (confirm-gated, `--yes` to skip). Clobbers live desktop tweaks, so it is
-  a standalone verb, **never** part of `update` (RIS excludes gnome-restore from
-  its update for the same reason).
+  dconf (confirm-gated, `--yes` to skip, `--dry-run` to preview). Clobbers live
+  desktop tweaks, so it is a standalone verb, **never** part of `update` (RIS
+  excludes gnome-restore from its update for the same reason). Journaled per
+  subtree, so `undo` reverts it.
 - **`adopt`** — report installed extras not in the spec (advisory / non-mutating)
   so you can add each to a bundle, the machine loose list, or `[ignore]`. The
   read-only sibling of `reconcile`.
@@ -410,7 +429,16 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
   Missing entries default to *keep*, extras default to *skip*; a unified preview
   + one confirm precede any write. Edits only the machine's **own** `brewfile`
   (and the fleet `temper.toml` for `[brew].trust`/`[ignore]`), never a shared
-  bundle. `--json` previews the plan without prompting. Converging the other way,
+  bundle. It also absorbs **desktop keys** per section (see machine scope above).
+  **`--current-state-wins`** (`--csw`) answers every item with "the machine" and
+  skips the prompts, keeping the preview + one confirm (`--yes` waives it). It
+  is deliberately **machine-scope only**: `[brew].trust` and `[ignore]` are fleet
+  config, so absorbing them from one machine would silently change the others —
+  tap-trust drift is *reported* and left alone. **`--include-trust`** opts in the
+  **adds** (taps this machine trusts that the fleet doesn't declare); it never
+  removes one, because a declared-but-untrusted tap usually means the machine
+  hasn't converged yet rather than that the fleet is wrong. `--json` previews the
+  plan without prompting. Converging the other way,
   machine←spec, *is* `install`/`update`.
 - **`undo [run]`** — revert a run — the one named by its id, else the newest;
   **`undo --list`** enumerates revertible runs (read-only). amdl's
@@ -460,7 +488,6 @@ The recommended shape (app-first recipes, real files under `assets/`):
     starship.toml  ghostty.config  gnome/shell.<machine>.dconf  …
   brewfiles/             optional per-machine Brewfiles (a machine's `brewfile = "brewfiles/<name>"`)
     <machine>
-  machines/              `temper backup` fallback dump dir (when a machine has no `brewfile`)
   secrets/               git-ignored; consumed by exec/setkey steps that declare them
 ```
 

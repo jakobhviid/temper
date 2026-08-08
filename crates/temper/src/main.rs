@@ -21,7 +21,8 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
 use temper_core::{
-    discovery, git, journal, machine, manifest, packages, plan, providers, reconcile, settings, ui,
+    dconf, discovery, git, journal, machine, manifest, packages, plan, providers, reconcile,
+    settings, ui,
 };
 
 const REPO_URL: &str = "https://github.com/jakobhviid/temper";
@@ -117,12 +118,31 @@ enum Cmd {
         #[arg(long)]
         yes: bool,
     },
-    /// Dump live package state (+ dconf snapshots) into the folder.
+    /// Scaffold THIS machine into the folder, then seed it from live state.
     ///
-    /// `brew bundle dump` → the machine's own `brewfile` (the file it reads;
-    /// falls back to machines/<name>/Brewfile if none), plus each declared
-    /// `[[machine.dconf]]` snapshot (filtered). Spec←machine, wholesale, journaled.
-    Backup {
+    /// Adds a `[[machine]]` block (creating `temper.toml` if the folder has
+    /// none), wires up `brewfiles/<name>`, and absorbs the machine's current
+    /// package + desktop state into it — `reconcile --current-state-wins
+    /// --include-trust` under the hood. Previews and confirms once; journaled.
+    ///
+    /// This is "put this machine in the folder". To point temper at *which*
+    /// folder to use, see `setup`.
+    Init {
+        /// Machine name. Omit to infer it from this host's hostname.
+        name: Option<String>,
+        /// "desktop" | "server". Omit to be asked.
+        #[arg(long)]
+        role: Option<String>,
+        /// Skip the confirmations.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Capture the machine's dconf subtree(s) into the folder.
+    ///
+    /// Each declared `[[machine.dconf]]` is dumped through its `strip` filter to
+    /// its file. Spec←machine and wholesale — the mirror of `restore`, and the
+    /// blunt sibling of a per-key `reconcile`. Journaled.
+    Snapshot {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
     },
@@ -140,6 +160,31 @@ enum Cmd {
     Reconcile {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
+        /// Take the machine's current state for every item, without prompting.
+        ///
+        /// Adds every extra (taps included), drops every declared-but-absent
+        /// entry, and absorbs every changed desktop key. Machine-scope only:
+        /// tap-trust lives in temper.toml at FLEET scope, so it is reported but
+        /// not touched unless you pass --include-trust. Still previews and
+        /// confirms once.
+        ///
+        /// Converge before you absorb: on a machine that hasn't run `install`
+        /// yet, "declared but not installed" and "not wanted" look identical, so
+        /// this would strip the spec down to what happens to be present. Check
+        /// `temper drift` for missing packages first.
+        #[arg(long, alias = "csw")]
+        current_state_wins: bool,
+        /// Also record taps this machine trusts into `[brew].trust`.
+        ///
+        /// Fleet-scope — it affects every machine, which is why it is opt-in.
+        /// Adds only: a declared tap that isn't trusted here is never removed
+        /// (that usually means this machine hasn't converged yet, not that the
+        /// fleet is wrong), and is reported instead.
+        #[arg(long, requires = "current_state_wins")]
+        include_trust: bool,
+        /// Skip the final confirmation.
+        #[arg(long)]
+        yes: bool,
     },
     /// Load dconf snapshot(s) back into live dconf (confirm-gated).
     ///
@@ -151,6 +196,9 @@ enum Cmd {
         /// Skip the confirmation prompt.
         #[arg(long)]
         yes: bool,
+        /// Show which snapshots would be loaded without touching dconf.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Revert the last mutating run.
     Undo {
@@ -183,7 +231,7 @@ enum Cmd {
     /// Commit (and push) spec changes to the git-backed home.
     ///
     /// `git add -A && commit && push` in your temper-home, so the folder doesn't
-    /// drift after a `reconcile`/`backup`/`eq-import` or a hand edit. The commit
+    /// drift after an `init`/`reconcile`/`snapshot`/`eq-import` or a hand edit. The commit
     /// message is generated from what changed unless you pass `-m`. Pulls
     /// `--ff-only` before pushing. A no-op if the home isn't a git repo.
     Save {
@@ -340,10 +388,20 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Drift { machine }) => cmd_drift(machine, json)?,
         Some(Cmd::Undo { run, list, dry_run }) => cmd_undo(run, list, dry_run, json)?,
         Some(Cmd::Prune { dry_run, yes }) => cmd_prune(dry_run, yes, json)?,
-        Some(Cmd::Backup { machine }) => cmd_backup(machine, json)?,
+        Some(Cmd::Init { name, role, yes }) => cmd_init(name, role, yes, json)?,
+        Some(Cmd::Snapshot { machine }) => cmd_snapshot(machine, json)?,
         Some(Cmd::Adopt) => cmd_adopt(json)?,
-        Some(Cmd::Reconcile { machine }) => cmd_reconcile(machine, json)?,
-        Some(Cmd::Restore { machine, yes }) => cmd_restore(machine, yes, json)?,
+        Some(Cmd::Reconcile {
+            machine,
+            current_state_wins,
+            include_trust,
+            yes,
+        }) => cmd_reconcile(machine, current_state_wins, include_trust, yes, json)?,
+        Some(Cmd::Restore {
+            machine,
+            yes,
+            dry_run,
+        }) => cmd_restore(machine, yes, dry_run, json)?,
         Some(Cmd::EqImport) => cmd_eq_import(json)?,
         Some(Cmd::Save { message, no_push }) => cmd_save(message, no_push, json)?,
         Some(Cmd::Refresh { rebase }) => cmd_refresh(rebase, json)?,
@@ -1359,36 +1417,199 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
     result
 }
 
-fn cmd_backup(machine: Option<String>, json: bool) -> Result<()> {
-    let home = find_home_pulling()?;
-    let ft = load_fleet(&home)?;
-    let m = machine::resolve(&ft, machine.as_deref())?;
-    let r = plan::run_backup(&home, &m)?;
-    let dconf: Vec<String> = r.dconf.iter().map(|p| p.display().to_string()).collect();
+/// Scaffold this machine into the folder, then seed it from live state.
+///
+/// Two steps, each journaled: the scaffold (temper.toml + the `[[machine]]`
+/// block + an empty Brewfile), then the `--current-state-wins` seed. They are
+/// separate journal runs, so a full rollback is two `temper undo`s.
+fn cmd_init(name: Option<String>, role: Option<String>, yes: bool, json: bool) -> Result<()> {
+    // Resolve the folder, or create one here. `find_home` needs a temper.toml,
+    // so a brand-new folder can't be discovered — that's the case init exists
+    // to bootstrap, and the cwd is the only place it could sensibly mean.
+    let (home, fresh) = match discovery::find_home() {
+        Ok(h) => (h, false),
+        Err(_) => {
+            // An explicit TEMPER_DIR names the folder even when it has no
+            // manifest yet — that's precisely the folder being bootstrapped.
+            // Otherwise the cwd is the only place `init` could sensibly mean.
+            let cwd = match std::env::var("TEMPER_DIR") {
+                Ok(d) => std::path::PathBuf::from(d),
+                Err(_) => std::env::current_dir()?,
+            };
+            if !yes {
+                if json {
+                    anyhow::bail!(
+                        "no temper folder found — run `temper init` from the folder you want \
+                         to create, and pass --yes to confirm creating temper.toml there"
+                    );
+                }
+                println!(
+                    "{} no temper folder found.\n  {}",
+                    ui::yellow("!"),
+                    ui::dim(&format!("would create {}/temper.toml", cwd.display()))
+                );
+                if !prompt_no("create it here?") {
+                    println!("aborted — nothing changed.");
+                    return Ok(());
+                }
+            }
+            (cwd, true)
+        }
+    };
+
+    // Name: explicit, else this host's hostname (the same rule every other verb
+    // uses to decide which machine it is talking about).
+    let name = match name {
+        Some(n) => n,
+        None => machine::hostname().ok_or_else(|| {
+            anyhow::anyhow!("could not infer a machine name from `hostname` — pass one explicitly")
+        })?,
+    };
+    let os = if cfg!(target_os = "macos") {
+        "mac"
+    } else {
+        "linux"
+    };
+    let role = match role {
+        Some(r) => Some(r),
+        None if yes || json => None,
+        None => {
+            print!("role for `{name}`? [desktop/server, blank to omit] ");
+            let r = read_reply();
+            (!r.is_empty()).then_some(r)
+        }
+    };
+    if let Some(r) = &role {
+        if r != "desktop" && r != "server" {
+            anyhow::bail!("role must be \"desktop\" or \"server\" (got \"{r}\")");
+        }
+    }
+
+    let tt_path = home.join("temper.toml");
+    let before = if fresh {
+        String::new()
+    } else {
+        std::fs::read_to_string(&tt_path)
+            .map_err(|e| anyhow::anyhow!("reading {}: {e}", tt_path.display()))?
+    };
+    // Refuses on a machine that already exists — rewriting a hand-authored block
+    // would lose intent, and absorbing its state is `reconcile`'s job.
+    let brewfile_rel = format!("brewfiles/{name}");
+    let after = reconcile::append_machine(&before, &name, os, role.as_deref(), &brewfile_rel)?;
+    let after = manifest::stamp_version(&after)?;
+
+    let bf_path = home.join(&brewfile_rel);
     if json {
         println!(
             "{}",
             serde_json::json!({
-                "machine": m.name, "brewfile": r.brewfile.display().to_string(),
-                "dconf": dconf
+                "home": home.display().to_string(), "machine": name, "os": os,
+                "role": role, "brewfile": brewfile_rel, "created_manifest": fresh
             })
         );
     } else {
         println!(
-            "backup {}: dumped package state to {}",
-            m.name,
-            r.brewfile.display()
+            "\n{} {}",
+            ui::bold("init"),
+            ui::dim(&home.display().to_string())
         );
-        for d in &dconf {
-            println!("  dconf snapshot → {d}");
+        println!("  {} machine {}  ({os}{})", ui::green("+"), name,
+            role.as_ref().map(|r| format!(", {r}")).unwrap_or_default());
+        println!("  {} {}", ui::green("+"), brewfile_rel);
+        if fresh {
+            println!("  {} temper.toml", ui::green("+"));
+        }
+    }
+    if !yes && !json && !prompt_no("\nwrite this?") {
+        println!("aborted — nothing changed.");
+        return Ok(());
+    }
+
+    let mut jrnl = journal::Journal::begin();
+    jrnl.record_write(
+        &tt_path,
+        (!fresh).then_some(before.as_bytes()),
+        after.as_bytes(),
+    )?;
+    std::fs::write(&tt_path, &after)
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", tt_path.display()))?;
+    if !bf_path.exists() {
+        if let Some(p) = bf_path.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        jrnl.record_write(&bf_path, None, b"")?;
+        std::fs::write(&bf_path, "")
+            .map_err(|e| anyhow::anyhow!("writing {}: {e}", bf_path.display()))?;
+    }
+    jrnl.commit()?;
+
+    if !json {
+        println!(
+            "\n{} scaffolded — seeding from this machine's current state…",
+            ui::green("✓")
+        );
+    }
+    // The seed IS a reconcile: same planner, same writes, same journal, same
+    // preview. init just answers every prompt with "the machine" and opts into
+    // the fleet-scope tap-trust absorb, since establishing the spec is the point.
+    let seeded = cmd_reconcile(Some(name.clone()), true, true, yes, json);
+
+    // The scaffold is a folder write in its own right, and `reconcile` returns
+    // early when there is nothing to absorb — so without this, `init` on an
+    // already-converged machine would leave temper.toml + the Brewfile
+    // uncommitted with no auto-commit and no dirty hint. Safe when clean: a
+    // clean tree neither commits nor reminds.
+    if let Ok(ft) = load_fleet(&home) {
+        if let Ok(m) = machine::resolve(&ft, Some(&name)) {
+            let gc = manifest::effective_git(&ft.git, &m.git);
+            after_repo_change(&home, &gc, &format!("init {name}: scaffold machine"));
+        }
+    }
+    seeded
+}
+
+/// Capture the machine's declared dconf subtrees into the folder — the
+/// spec←machine mirror of `restore`, and the wholesale sibling of `reconcile`.
+fn cmd_snapshot(machine: Option<String>, json: bool) -> Result<()> {
+    let home = find_home_pulling()?;
+    let ft = load_fleet(&home)?;
+    let m = machine::resolve(&ft, machine.as_deref())?;
+
+    if m.dconf.is_empty() {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({ "machine": m.name, "captured": [] })
+            );
+        } else {
+            println!(
+                "snapshot {}: no `[[machine.dconf]]` declared for this machine.",
+                m.name
+            );
+        }
+        return Ok(());
+    }
+
+    let written = plan::run_snapshot(&home, &m)?;
+    let paths: Vec<String> = written.iter().map(|p| p.display().to_string()).collect();
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "machine": m.name, "captured": paths })
+        );
+    } else {
+        println!(
+            "{} snapshot {}: captured {} subtree(s).",
+            ui::green("✓"),
+            m.name,
+            paths.len()
+        );
+        for p in &paths {
+            println!("  → {p}");
         }
     }
     let gc = manifest::effective_git(&ft.git, &m.git);
-    let msg = format!(
-        "backup {}: Brewfile + {} dconf snapshot(s)",
-        m.name,
-        r.dconf.len()
-    );
+    let msg = format!("snapshot {}: {} dconf subtree(s)", m.name, paths.len());
     after_repo_change(&home, &gc, &msg);
     Ok(())
 }
@@ -1431,26 +1652,73 @@ fn cmd_adopt(json: bool) -> Result<()> {
     Ok(())
 }
 
-/// Interactive spec←machine reconcile. Under `--json` it previews the plan and
-/// prompts for nothing.
-fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
+/// Interactive spec←machine reconcile, or a non-interactive "the machine's
+/// current state wins" absorb (`--current-state-wins`).
+///
+/// Under `--json` it previews the plan and prompts for nothing — it only applies
+/// when the answers need no prompting *and* the confirm is waived
+/// (`--current-state-wins --yes`), mirroring `prune`.
+fn cmd_reconcile(
+    machine: Option<String>,
+    csw: bool,
+    include_trust: bool,
+    yes: bool,
+    json: bool,
+) -> Result<()> {
     let home = find_home_pulling()?;
     let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
     let plan = reconcile::plan(&home, &m, &ft.ignore, &ft.brew.trust)?;
 
-    if json {
+    // Tap-trust is FLEET-scope (temper.toml, every machine) while everything
+    // else here is machine-scope, so `--current-state-wins` leaves it alone
+    // unless asked — but never silently: whatever is skipped is reported below.
+    //
+    // `--include-trust` absorbs only the ADDS. A trusted-but-undeclared tap is
+    // real knowledge this machine has. A declared-but-untrusted one is almost
+    // always the opposite — a machine that hasn't run `install` yet, most
+    // acutely under `init`, where it has trusted nothing at all. Dropping on
+    // that basis deletes a tap the rest of the fleet needs, so no single
+    // machine's state ever removes one; that stays an interactive decision.
+    let skip_trust_adds = csw && !include_trust;
+    let skipped_trust_count = if csw {
+        plan.trust_drops.len() + if skip_trust_adds { plan.trust_adds.len() } else { 0 }
+    } else {
+        0
+    };
+
+    if json && !(csw && yes) {
         let adds: Vec<_> = plan
             .adds
             .iter()
             .map(|a| serde_json::json!({ "manager": a.manager.as_str(), "name": a.name, "token": a.token }))
+            .collect();
+        let dconf_plans: Vec<_> = plan
+            .dconf
+            .iter()
+            .map(|d| {
+                let keys: Vec<_> = d
+                    .sections
+                    .iter()
+                    .flat_map(|(s, ds)| {
+                        ds.iter().map(move |k| {
+                            serde_json::json!({
+                                "section": s, "key": k.key, "id": k.id(),
+                                "status": k.status(), "change": dconf::describe(k),
+                            })
+                        })
+                    })
+                    .collect();
+                serde_json::json!({ "name": d.name, "file": d.file_rel, "keys": keys })
+            })
             .collect();
         println!(
             "{}",
             serde_json::json!({
                 "machine": m.name, "brewfile": plan.brewfile_rel,
                 "adds": adds, "drops": plan.drops,
-                "trust_adds": plan.trust_adds, "trust_drops": plan.trust_drops
+                "trust_adds": plan.trust_adds, "trust_drops": plan.trust_drops,
+                "dconf": dconf_plans
             })
         );
         return Ok(());
@@ -1460,6 +1728,7 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
         && plan.drops.is_empty()
         && plan.trust_adds.is_empty()
         && plan.trust_drops.is_empty()
+        && plan.dconf.is_empty()
     {
         println!(
             "reconcile {}: already in sync — nothing to absorb or drop.",
@@ -1468,67 +1737,205 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    let bf_path = home.join(&plan.brewfile_rel);
-    let original = std::fs::read_to_string(&bf_path)
-        .map_err(|e| anyhow::anyhow!("reading {}: {e}", bf_path.display()))?;
-
-    // Missing → keep/drop (default KEEP).
-    let mut chosen_drops = Vec::new();
-    if !plan.drops.is_empty() {
-        println!(
-            "\n{}",
-            ui::bold("Declared in the Brewfile but not installed:")
-        );
-        for line in &plan.drops {
-            if !prompt_yes(&format!("  keep `{}` in the Brewfile?", line.trim())) {
-                chosen_drops.push(line.clone());
-            }
+    // The package half needs somewhere to write; without a `brewfile` it is
+    // skipped (say so — silence would read as "no package drift") and only the
+    // tap-trust and desktop halves run.
+    let bf_path = plan.brewfile_rel.as_ref().map(|r| home.join(r));
+    let original = match &bf_path {
+        // A declared Brewfile that doesn't exist yet is the seed case — treat it
+        // as empty, same as the planner does.
+        Some(p) => std::fs::read_to_string(p).unwrap_or_default(),
+        None => {
+            println!(
+                "{}",
+                ui::dim(
+                    "note: this machine declares no `brewfile`, so package reconcile is \
+                     skipped — declare one to absorb packages here."
+                )
+            );
+            String::new()
         }
-    }
+    };
 
-    // Extras → add / (flatpak) ignore / skip (default SKIP).
-    let mut chosen_adds = Vec::new();
+    // What gets absorbed. `--current-state-wins` answers every one of these
+    // with "the machine", skipping the prompts; the final confirm still stands.
+    let mut chosen_drops: Vec<String> = Vec::new();
+    let mut chosen_adds: Vec<String> = Vec::new();
     let mut chosen_ignores: Vec<String> = Vec::new(); // flatpak app ids
-    if !plan.adds.is_empty() {
-        println!("\n{}", ui::bold("Installed but not in the spec:"));
-        for a in &plan.adds {
-            match prompt_add(&a.token, a.is_flatpak) {
-                AddChoice::Add => chosen_adds.push(a.token.clone()),
-                AddChoice::Ignore => chosen_ignores.push(a.name.clone()),
-                AddChoice::Skip => {}
-            }
-        }
-    }
-
-    // Tap-trust drops (declared but not trusted) → keep/drop, default KEEP
-    // (keeping lets `install`/`update` re-trust it — dropping abandons the tap).
-    let mut chosen_trust_drops: Vec<String> = Vec::new();
-    if !plan.trust_drops.is_empty() {
-        println!(
-            "\n{}",
-            ui::bold("Declared in [brew].trust but not currently trusted:")
-        );
-        for tap in &plan.trust_drops {
-            if !prompt_yes(&format!("  keep `{tap}` in [brew].trust?")) {
-                chosen_trust_drops.push(tap.clone());
-            }
-        }
-    }
-
-    // Tap-trust adds (trusted but not declared) → add / ignore / skip, default
-    // SKIP — mirrors the flatpak extra choice (add to spec, or `[ignore].tap`).
     let mut chosen_trust_adds: Vec<String> = Vec::new();
+    let mut chosen_trust_drops: Vec<String> = Vec::new();
     let mut chosen_tap_ignores: Vec<String> = Vec::new();
-    if !plan.trust_adds.is_empty() {
-        println!("\n{}", ui::bold("Trusted but not in [brew].trust:"));
-        for tap in &plan.trust_adds {
-            match prompt_add(tap, true) {
-                AddChoice::Add => chosen_trust_adds.push(tap.clone()),
-                AddChoice::Ignore => chosen_tap_ignores.push(tap.clone()),
-                AddChoice::Skip => {}
+    let mut chosen_dconf: Vec<(usize, Vec<dconf::KeyDiff>)> = Vec::new();
+
+    if csw {
+        // Machine-scope only. `[ignore]` routing is a judgement, not a state, so
+        // an extra is ADDED rather than ignored; tap-trust is fleet-scope and
+        // needs --include-trust (and is reported below either way).
+        chosen_drops = plan.drops.clone();
+        chosen_adds = plan.adds.iter().map(|a| a.token.clone()).collect();
+        if include_trust {
+            // Adds only — see the note above on why a drop is never automatic.
+            chosen_trust_adds = plan.trust_adds.clone();
+        }
+        for (i, dp) in plan.dconf.iter().enumerate() {
+            let all: Vec<dconf::KeyDiff> = dp
+                .sections
+                .iter()
+                .flat_map(|(_, ds)| ds.iter().cloned())
+                .collect();
+            if !all.is_empty() {
+                chosen_dconf.push((i, all));
+            }
+        }
+    } else {
+        // Missing → keep/drop (default KEEP).
+        if !plan.drops.is_empty() {
+            println!(
+                "\n{}",
+                ui::bold("Declared in the Brewfile but not installed:")
+            );
+            for line in &plan.drops {
+                if !prompt_yes(&format!("  keep `{}` in the Brewfile?", line.trim())) {
+                    chosen_drops.push(line.clone());
+                }
+            }
+        }
+
+        // Extras → add / (flatpak) ignore / skip (default SKIP).
+        if !plan.adds.is_empty() {
+            println!("\n{}", ui::bold("Installed but not in the spec:"));
+            for a in &plan.adds {
+                match prompt_add(&a.token, a.is_flatpak) {
+                    AddChoice::Add => chosen_adds.push(a.token.clone()),
+                    AddChoice::Ignore => chosen_ignores.push(a.name.clone()),
+                    AddChoice::Skip => {}
+                }
+            }
+        }
+
+        // Tap-trust drops (declared but not trusted) → keep/drop, default KEEP
+        // (keeping lets `install`/`update` re-trust it — dropping abandons the tap).
+        if !plan.trust_drops.is_empty() {
+            println!(
+                "\n{}",
+                ui::bold("Declared in [brew].trust but not currently trusted:")
+            );
+            for tap in &plan.trust_drops {
+                if !prompt_yes(&format!("  keep `{tap}` in [brew].trust?")) {
+                    chosen_trust_drops.push(tap.clone());
+                }
+            }
+        }
+
+        // Tap-trust adds (trusted but not declared) → add / ignore / skip, default
+        // SKIP — mirrors the flatpak extra choice (add to spec, or `[ignore].tap`).
+        if !plan.trust_adds.is_empty() {
+            println!("\n{}", ui::bold("Trusted but not in [brew].trust:"));
+            for tap in &plan.trust_adds {
+                match prompt_add(tap, true) {
+                    AddChoice::Add => chosen_trust_adds.push(tap.clone()),
+                    AddChoice::Ignore => chosen_tap_ignores.push(tap.clone()),
+                    AddChoice::Skip => {}
+                }
+            }
+        }
+
+        // Desktop keys → per SECTION, because that is the unit dconf itself defines.
+        // For a snapshot rooted at a narrow subtree (`…/shell/extensions/`) each
+        // section is one extension, so this is a per-extension ask without temper
+        // knowing what an extension is. A one-key section (`enabled-extensions`) is
+        // a single prompt, not a section prompt plus a key prompt.
+        for (i, dp) in plan.dconf.iter().enumerate() {
+            println!(
+                "\n{} {}",
+                ui::bold("Desktop keys that differ —"),
+                ui::bold(&dp.name)
+            );
+            let mut picked: Vec<dconf::KeyDiff> = Vec::new();
+            for (section, diffs) in &dp.sections {
+                let label = if section.is_empty() { "/" } else { section };
+                // `absorb` takes the machine's value; a key the machine no longer
+                // sets can only be absorbed by DROPPING it from the snapshot.
+                let verb = |d: &dconf::KeyDiff| {
+                    if d.live.is_some() {
+                        "absorb"
+                    } else {
+                        "drop from the snapshot"
+                    }
+                };
+                if diffs.len() == 1 {
+                    let d = &diffs[0];
+                    println!(
+                        "\n  {}  {}",
+                        ui::bold(&dconf::key_id(section, &d.key)),
+                        ui::dim(&dconf::describe(d))
+                    );
+                    if prompt_no(&format!("  {}?", verb(d))) {
+                        picked.push(d.clone());
+                    }
+                    continue;
+                }
+                println!(
+                    "\n  {} {}",
+                    ui::bold(label),
+                    ui::dim(&format!("({} keys differ)", diffs.len()))
+                );
+                for d in diffs {
+                    println!("    {:<26} {}", d.key, ui::dim(&dconf::describe(d)));
+                }
+                match prompt_section() {
+                    SectionChoice::All => picked.extend(diffs.iter().cloned()),
+                    SectionChoice::PerKey => {
+                        for d in diffs {
+                            if prompt_no(&format!("    {} `{}`?", verb(d), d.key)) {
+                                picked.push(d.clone());
+                            }
+                        }
+                    }
+                    SectionChoice::Skip => {}
+                }
+            }
+            if !picked.is_empty() {
+                chosen_dconf.push((i, picked));
             }
         }
     }
+
+    // Never drop fleet-scope drift on the floor: say what --current-state-wins
+    // deliberately did NOT touch, and name both ways to deal with it. Fires on
+    // the nothing-selected path too — a machine whose ONLY drift is tap-trust
+    // must not report "nothing changed" and leave it at that.
+    let report_skipped_trust = || {
+        if skipped_trust_count == 0 {
+            return;
+        }
+        println!(
+            "\n{} {}",
+            ui::yellow("!"),
+            ui::bold(&format!(
+                "{skipped_trust_count} tap-trust difference(s) NOT absorbed \
+                 (fleet-scope — affects every machine):"
+            ))
+        );
+        if skip_trust_adds {
+            for tap in &plan.trust_adds {
+                println!("    {tap:<28} trusted here, not in [brew].trust");
+            }
+        }
+        for tap in &plan.trust_drops {
+            println!("    {tap:<28} declared, not trusted here — `install` will trust it");
+        }
+        println!(
+            "  {}",
+            ui::dim("→ temper reconcile                          decide each interactively")
+        );
+        if skip_trust_adds {
+            println!(
+                "  {}",
+                ui::dim("→ temper reconcile --csw --include-trust    record the taps this machine trusts")
+            );
+        }
+    };
 
     if chosen_drops.is_empty()
         && chosen_adds.is_empty()
@@ -1536,19 +1943,22 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
         && chosen_trust_adds.is_empty()
         && chosen_trust_drops.is_empty()
         && chosen_tap_ignores.is_empty()
+        && chosen_dconf.is_empty()
     {
         println!("\nNothing selected — nothing changed.");
+        report_skipped_trust();
         return Ok(());
     }
 
     // Preview.
+    let bf_label = plan.brewfile_rel.clone().unwrap_or_default();
     println!("\n{}", ui::bold("Proposed changes"));
     for t in &chosen_adds {
         println!(
             "  {} {}  {}",
             ui::green("+"),
             t,
-            ui::dim(&format!("→ {}", plan.brewfile_rel))
+            ui::dim(&format!("→ {bf_label}"))
         );
     }
     for d in &chosen_drops {
@@ -1556,7 +1966,7 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
             "  {} {}  {}",
             ui::red("-"),
             d.trim(),
-            ui::dim(&format!("→ {}", plan.brewfile_rel))
+            ui::dim(&format!("→ {bf_label}"))
         );
     }
     for name in &chosen_ignores {
@@ -1591,8 +2001,29 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
             ui::dim("→ [ignore].tap in temper.toml")
         );
     }
+    for (i, picked) in &chosen_dconf {
+        let dp = &plan.dconf[*i];
+        for d in picked {
+            let (mark, verb) = match d.live {
+                Some(_) => (ui::green("+"), "set"),
+                None => (ui::red("-"), "remove"),
+            };
+            println!(
+                "  {} {} {}  {}",
+                mark,
+                verb,
+                dconf::key_id(&d.section, &d.key),
+                ui::dim(&format!("→ {}", dp.file_rel))
+            );
+        }
+    }
 
-    if !prompt_no("\napply these changes?") {
+    report_skipped_trust();
+
+    // The per-item prompts WERE the review step, so `--current-state-wins` still
+    // confirms once — otherwise a bulk write lands in the spec unreviewed.
+    // `--yes` waives that one confirm.
+    if !yes && !prompt_no("\napply these changes?") {
         println!("aborted — nothing changed.");
         return Ok(());
     }
@@ -1602,14 +2033,30 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
     let mut jrnl = journal::Journal::begin();
     // Absorb adds/drops, then canonically re-sort so new entries land in their
     // group (taps → brews → casks → mas …) instead of tacked onto the end.
-    let new_bf = reconcile::sort_brewfile(&reconcile::brewfile_with_adds(
-        &reconcile::brewfile_without(&original, &chosen_drops),
-        &chosen_adds,
-    ));
-    if new_bf != original {
-        jrnl.record_write(&bf_path, Some(original.as_bytes()), new_bf.as_bytes())?;
-        std::fs::write(&bf_path, &new_bf)
-            .map_err(|e| anyhow::anyhow!("writing {}: {e}", bf_path.display()))?;
+    if let Some(bf_path) = &bf_path {
+        let new_bf = reconcile::sort_brewfile(&reconcile::brewfile_with_adds(
+            &reconcile::brewfile_without(&original, &chosen_drops),
+            &chosen_adds,
+        ));
+        if new_bf != original {
+            jrnl.record_write(bf_path, Some(original.as_bytes()), new_bf.as_bytes())?;
+            std::fs::write(bf_path, &new_bf)
+                .map_err(|e| anyhow::anyhow!("writing {}: {e}", bf_path.display()))?;
+        }
+    }
+    // Snapshot files: absorb each accepted key (set to the live value, or drop
+    // it). Journaled like every other folder write, so `undo` reverts it.
+    for (i, picked) in &chosen_dconf {
+        let dp = &plan.dconf[*i];
+        let p = home.join(&dp.file_rel);
+        let before = std::fs::read_to_string(&p)
+            .map_err(|e| anyhow::anyhow!("reading {}: {e}", p.display()))?;
+        let after = dconf::absorbed(&before, picked);
+        if after != before {
+            jrnl.record_write(&p, Some(before.as_bytes()), after.as_bytes())?;
+            std::fs::write(&p, &after)
+                .map_err(|e| anyhow::anyhow!("writing {}: {e}", p.display()))?;
+        }
     }
     // temper.toml edits (comment-preserving): [ignore].flatpak absorbs, plus the
     // tap-trust reconcile — [brew].trust add/drop and [ignore].tap absorb.
@@ -1642,26 +2089,56 @@ fn cmd_reconcile(machine: Option<String>, json: bool) -> Result<()> {
         }
     }
     jrnl.commit()?;
+    let keys: usize = chosen_dconf.iter().map(|(_, p)| p.len()).sum();
     let added = chosen_adds.len() + chosen_trust_adds.len();
     let dropped = chosen_drops.len() + chosen_trust_drops.len();
     let ignored = chosen_ignores.len() + chosen_tap_ignores.len();
+    if json {
+        // Only reachable via --current-state-wins --yes (nothing prompted).
+        println!(
+            "{}",
+            serde_json::json!({
+                "machine": m.name, "applied": true,
+                "added": added, "dropped": dropped, "ignored": ignored,
+                "dconf_keys": keys,
+                "trust_skipped": skipped_trust_count,
+            })
+        );
+        let gc = manifest::effective_git(&ft.git, &m.git);
+        let msg = format!(
+            "reconcile {}: +{} -{} ~{} dconf:{}",
+            m.name, added, dropped, ignored, keys
+        );
+        after_repo_change(&home, &gc, &msg);
+        return Ok(());
+    }
+    let keys_note = if keys > 0 {
+        format!(", {keys} desktop key(s) captured")
+    } else {
+        String::new()
+    };
     println!(
-        "{} reconcile {}: {} added, {} dropped, {} ignored.",
+        "{} reconcile {}: {} added, {} dropped, {} ignored{}.",
         ui::green("✓"),
         m.name,
         added,
         dropped,
-        ignored
+        ignored,
+        keys_note
     );
     let gc = manifest::effective_git(&ft.git, &m.git);
-    let msg = format!("reconcile {}: +{} -{} ~{}", m.name, added, dropped, ignored);
+    let msg = format!(
+        "reconcile {}: +{} -{} ~{} dconf:{}",
+        m.name, added, dropped, ignored, keys
+    );
     after_repo_change(&home, &gc, &msg);
     Ok(())
 }
 
 /// Load dconf snapshots back into live dconf. Confirm-gated (clobbers live
-/// desktop state); `--yes` or `--json` skips the prompt.
-fn cmd_restore(machine: Option<String>, yes: bool, json: bool) -> Result<()> {
+/// desktop state); `--yes` or `--json` skips the prompt, `--dry-run` touches
+/// nothing. Journaled, so `temper undo` reverts it.
+fn cmd_restore(machine: Option<String>, yes: bool, dry_run: bool, json: bool) -> Result<()> {
     let home = find_home_pulling()?;
     let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
@@ -1684,7 +2161,7 @@ fn cmd_restore(machine: Option<String>, yes: bool, json: bool) -> Result<()> {
             return Ok(());
         }
 
-        if !yes && !json {
+        if !yes && !json && !dry_run {
             println!(
                 "{}",
                 ui::bold(&format!(
@@ -1699,19 +2176,27 @@ fn cmd_restore(machine: Option<String>, yes: bool, json: bool) -> Result<()> {
                 "{}",
                 ui::yellow("This overwrites live desktop tweaks under those paths.")
             );
+            println!("{}", ui::dim("`temper undo` reverts it."));
             if !prompt_no("apply?") {
                 println!("aborted — nothing changed.");
                 return Ok(());
             }
         }
 
-        let loaded = plan::run_restore(&home, &m)?;
+        let loaded = plan::run_restore(&home, &m, dry_run)?;
         let paths: Vec<String> = loaded.iter().map(|p| p.display().to_string()).collect();
         if json {
             println!(
                 "{}",
-                serde_json::json!({ "machine": m.name, "restored": paths })
+                serde_json::json!({
+                    "machine": m.name, "dry_run": dry_run, "restored": paths
+                })
             );
+        } else if dry_run {
+            println!("restore {} (dry run) — would load:", m.name);
+            for (snap, p) in m.dconf.iter().zip(&paths) {
+                println!("  {} {}  {}", ui::cyan("→"), snap.path, ui::dim(p));
+            }
         } else {
             println!(
                 "{} restore {}: loaded {} snapshot(s).",
@@ -1761,6 +2246,27 @@ fn prompt_yes(msg: &str) -> bool {
 fn prompt_no(msg: &str) -> bool {
     print!("{msg} [y/N] ");
     read_reply().starts_with('y')
+}
+
+enum SectionChoice {
+    All,
+    PerKey,
+    Skip,
+}
+
+/// `[y/N/k]` — default skip, `k` drills into the section's individual keys.
+/// Sections are the unit dconf itself defines, so this is the natural grain:
+/// one prompt per extension / per settings group, with per-key as the escape.
+fn prompt_section() -> SectionChoice {
+    print!("  absorb this whole section? [y/N/k]  (k = choose per key) ");
+    let r = read_reply();
+    if r.starts_with('y') {
+        SectionChoice::All
+    } else if r.starts_with('k') {
+        SectionChoice::PerKey
+    } else {
+        SectionChoice::Skip
+    }
 }
 
 /// `[y/N]` (or `[y/N/i]` for flatpak) — default skip.
