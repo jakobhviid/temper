@@ -270,7 +270,7 @@ impl Columns {
 /// So the line is written **once**.
 ///
 /// It is deliberately **not** shaped like a row of the results list. The leftmost
-/// glyph there is a *status* column — `✓`/`⚠`/`✗` — and the eye scans it for
+/// glyph there is a *status* column — `✓`/`!`/`✗` — and the eye scans it for
 /// exceptions, so a `⋯` sitting in it reads as "this step has a problem", which is
 /// the opposite of what it means. Instead it is indented as a subordinate detail,
 /// dimmed, and says in words what it is:

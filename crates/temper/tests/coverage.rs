@@ -50,3 +50,48 @@ fn every_remediation_command_actually_parses() {
         c.assert().success();
     }
 }
+
+/// No output glyph may be one a colour-emoji font covers.
+///
+/// Those codepoints (`ℹ` U+2139, `⚠` U+26A0, …) have a colour glyph in fonts like
+/// Noto Color Emoji, and terminals prefer that font — so they render
+/// DOUBLE-WIDTH. That swallows the space after them (`ⓘa system update is
+/// staged`) and, worse, silently breaks `ui::Columns`, which measures alignment
+/// in characters. `✓`/`✗`/`→`/`ⓘ` have no colour glyph anywhere, so they always
+/// come from the text font at one cell.
+#[test]
+fn no_output_glyph_renders_double_width() {
+    // Emoji=Yes codepoints that are otherwise tempting as terminal glyphs.
+    // `⚠` is deliberately NOT in this list. It is emoji-covered too, but it is
+    // the established warning glyph and renders acceptably in practice; the
+    // observed breakage was `ℹ`, whose colour glyph is far more widely shipped.
+    // If a warning ever mashes against its text, the fix is U+FE0E (text
+    // presentation selector) rather than a different symbol.
+    const EMOJI_COVERED: &[char] = &['ℹ', '❗', '❓', '✅', '❌', '⏳', '⌛', '⭐', '☑'];
+    // Every source that prints, not just the CLI: `ui`, `sudo` and `plan` all
+    // emit their own lines.
+    let sources = [
+        ("temper/src/main.rs", include_str!("../src/main.rs")),
+        ("temper-core/src/ui.rs", include_str!("../../temper-core/src/ui.rs")),
+        ("temper-core/src/sudo.rs", include_str!("../../temper-core/src/sudo.rs")),
+        ("temper-core/src/plan.rs", include_str!("../../temper-core/src/plan.rs")),
+        ("temper-core/src/git.rs", include_str!("../../temper-core/src/git.rs")),
+    ];
+    for (name, src) in sources {
+    for (n, line) in src.lines().enumerate() {
+        // Only the lines that actually print a glyph.
+        if !line.contains("ui::") {
+            continue;
+        }
+        for c in EMOJI_COVERED {
+            assert!(
+                !line.contains(*c),
+                "{name}:{} uses `{c}`, which a colour-emoji font covers — it renders \
+                 double-width, eats the following space, and breaks column alignment. \
+                 Use a text-only glyph (ⓘ ↻ ⧗ ✓ ✗ →).",
+                n + 1
+            );
+        }
+    }
+    }
+}

@@ -394,6 +394,16 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
   `trusted-extra` / **`unavailable`** (a backend whose tool is absent here, e.g.
   dconf on a Mac — degraded, not a failure); `manual` steps and image-baked items
   are status-only, never counted as drift.
+
+  An `[[assert]]` may declare `severity = "notice"` with a `message`. A failing
+  notice reports a **pending state, not a defect**: it prints as a `ⓘ` line
+  carrying its message, stays out of the out-of-sync count, and is given no
+  remediation. The motivating case is a staged ostree deployment — the machine
+  matches the spec and an update is waiting for a reboot, so a red `✗` that no
+  verb could ever clear was both wrong and unactionable, and a permanent red
+  teaches people to stop reading the report. Which conditions are pending rather
+  than wrong is a **data** decision (the manifest says so), exactly as `strip`
+  declares which dconf keys are noise — the engine learns nothing about ostree.
 - **`prune`** — remove installed-but-not-declared (dependency-aware, honoring the
   ignore/baseline list), uninstall user-scope GNOME extensions no bundle declares
   (the machine→spec answer to an `extension-extra`, which otherwise had none),

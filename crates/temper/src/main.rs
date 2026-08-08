@@ -1092,7 +1092,7 @@ fn cmd_install(
             m.name, r.packages
         );
         if r.reboot {
-            println!("  ⚠ reboot required (rpm-ostree layered a package)");
+            println!("  ! reboot required (rpm-ostree layered a package)");
         }
     } else {
         // "applied 11 of 44" read as "applied 11, left 33 alone" — the opposite of
@@ -1121,7 +1121,7 @@ fn cmd_install(
         };
         println!("install {}: {} package(s), {steps}", m.name, r.packages);
         if r.reboot {
-            println!("  ⚠ reboot required (rpm-ostree layered a package)");
+            println!("  ! reboot required (rpm-ostree layered a package)");
         }
     }
     remind_if_dirty(&home, &manifest::effective_git(&ft.git, &m.git));
@@ -1306,7 +1306,7 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
         for n in &notices {
             println!(
                 "  {} {}",
-                ui::cyan("ℹ"),
+                ui::cyan("ⓘ"),
                 n.status.strip_prefix("notice — ").unwrap_or(&n.status)
             );
         }
@@ -1338,7 +1338,7 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
             .collect();
         println!(
             "  {} {}",
-            ui::cyan("ℹ status-only:"),
+            ui::cyan("ⓘ status-only:"),
             ui::dim(&labels.join(", "))
         );
     }
@@ -1502,7 +1502,7 @@ fn cmd_init(name: Option<String>, role: Option<String>, yes: bool, json: bool) -
                 }
                 println!(
                     "{} no temper folder found.\n  {}",
-                    ui::yellow("!"),
+                    ui::yellow("⚠"),
                     ui::dim(&format!("would create {}/temper.toml", cwd.display()))
                 );
                 if !prompt_no("create it here?") {
@@ -2021,7 +2021,7 @@ fn cmd_reconcile(
         }
         println!(
             "\n{} {}",
-            ui::yellow("!"),
+            ui::yellow("⚠"),
             ui::bold(&format!(
                 "{skipped_trust_count} tap-trust difference(s) NOT absorbed \
                  (fleet-scope — affects every machine):"

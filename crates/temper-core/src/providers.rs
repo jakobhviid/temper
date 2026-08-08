@@ -530,7 +530,7 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize
             if !ok {
                 let warn = || {
                     eprintln!(
-                        "⚠ mas install {} (id {id}) failed — skipped (App Store sign-in, or an \
+                        "! mas install {} (id {id}) failed — skipped (App Store sign-in, or an \
                          Apple/iWork app mas can't install — get it from the App Store directly).",
                         p.name
                     )
