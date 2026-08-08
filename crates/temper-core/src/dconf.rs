@@ -330,7 +330,11 @@ pub fn describe(d: &KeyDiff) -> String {
     }
     match (&d.file, &d.live) {
         (None, Some(l)) => format!("live: {}", clip(l)),
-        (Some(f), None) => format!("captured: {} (machine no longer sets it)", clip(f)),
+        // NOT "the machine no longer sets it": dconf stores only non-default
+        // values, so an absent key means the machine holds the schema DEFAULT —
+        // which is itself a value. Absorbing it drops the key from the snapshot,
+        // right after a deliberate reset and wrong where `restore` never ran.
+        (Some(f), None) => format!("captured: {} — not set here (schema default)", clip(f)),
         _ => String::new(),
     }
 }

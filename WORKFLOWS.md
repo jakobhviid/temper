@@ -363,6 +363,14 @@ Both captures run through the `strip` filter (bookkeeping + per-monitor keys
 that would corrupt a round-trip), and so does *each side* of a drift compare —
 a stripped key never reads as drift.
 
+> **A `missing` desktop key means "at the schema default".** dconf only stores
+> non-default values, so absorbing one *removes* it from the snapshot — right
+> after you reset something deliberately and re-tuned a few keys, wrong on a box
+> where `restore` has never run. temper can't tell those apart, so `--csw` groups
+> removals by section in the preview (`extensions/just-perfection — 31 removed`)
+> rather than burying them one per line, and interactive `reconcile` defaults to
+> keeping them.
+
 `reconcile` prompts **per section**, which is the unit dconf itself defines: for
 a snapshot rooted at `/org/gnome/shell/extensions/` that means one ask per
 extension. A key holding a list (`enabled-extensions`, `favorite-apps`) is one

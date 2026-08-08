@@ -416,6 +416,12 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
   desktop tweaks, so it is a standalone verb, **never** part of `update` (RIS
   excludes gnome-restore from its update for the same reason). Journaled per
   subtree, so `undo` reverts it.
+GNOME extensions report **both** directions: declared-but-not-installed (fixed by
+`install`), and user-installed-but-undeclared. The extras side is user-scope only
+— system extensions ship with the image, and image-baked items are status-only —
+and it is **report-only**, because `extensions` lives in a shared app-bundle that
+`reconcile` must never edit on one machine's behalf. `[ignore].gext` silences one.
+
 - **`adopt`** — report installed extras not in the spec (advisory / non-mutating)
   so you can add each to a bundle, the machine loose list, or `[ignore]`. The
   read-only sibling of `reconcile`.

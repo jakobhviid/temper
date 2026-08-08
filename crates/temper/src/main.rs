@@ -2018,18 +2018,44 @@ fn cmd_reconcile(
                 ui::dim("→ [ignore].tap in temper.toml")
             );
         }
+        // Grouped by section, because a flat list buries the thing you most need
+        // to see: `--csw` removing thirty keys under one extension looked
+        // identical to thirty unrelated lines. Small sections still list every
+        // key; larger ones collapse to counts so a big removal is legible.
         for (i, picked) in &chosen_dconf {
             let dp = &plan.dconf[*i];
-            for d in picked {
-                let (mark, verb) = match d.live {
-                    Some(_) => (ui::green("+"), "set"),
-                    None => (ui::red("-"), "remove"),
-                };
+            for (section, keys) in dconf::group_by_section(picked) {
+                let label = if section.is_empty() { "/" } else { &section };
+                let removed = keys.iter().filter(|d| d.live.is_none()).count();
+                let set = keys.len() - removed;
+                if keys.len() <= 3 {
+                    for d in &keys {
+                        let (mark, verb) = match d.live {
+                            Some(_) => (ui::green("+"), "set"),
+                            None => (ui::red("-"), "remove"),
+                        };
+                        println!(
+                            "  {} {} {}  {}",
+                            mark,
+                            verb,
+                            dconf::key_id(&d.section, &d.key),
+                            ui::dim(&format!("→ {}", dp.file_rel))
+                        );
+                    }
+                    continue;
+                }
+                let mut parts = Vec::new();
+                if removed > 0 {
+                    parts.push(ui::red(&format!("{removed} removed")));
+                }
+                if set > 0 {
+                    parts.push(ui::green(&format!("{set} set")));
+                }
                 println!(
-                    "  {} {} {}  {}",
-                    mark,
-                    verb,
-                    dconf::key_id(&d.section, &d.key),
+                    "  {} {}  {}  {}",
+                    ui::yellow("~"),
+                    ui::bold(label),
+                    parts.join(", "),
                     ui::dim(&format!("→ {}", dp.file_rel))
                 );
             }

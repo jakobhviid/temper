@@ -444,6 +444,10 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
                 "dconf-key",
                 "dconf-extra",
                 "dconf-uncaptured",
+                // No command re-applies this one — it is a hand edit to a shared
+                // bundle, and the finding says so itself. Suggesting `install`
+                // would be a lie.
+                "extension-extra",
             ]
             .contains(&f.kind)
     });
@@ -667,13 +671,26 @@ pub fn run_drift(
     }
 
     // GNOME extensions + rpm-ostree (Linux; inert where their CLIs are absent).
-    for uuid in providers::gext_missing(&providers::effective_extensions(home, machine)?) {
+    let effective_ext = providers::effective_extensions(home, machine)?;
+    for uuid in providers::gext_missing(&effective_ext) {
         findings.push(Finding {
             app: "extensions".into(),
             kind: "extension",
             target: uuid,
             ok: false,
             status: "missing".into(),
+        });
+    }
+    // The extras direction, which every other manager already reported. Carries
+    // its remedy in the status: there is no single command for it, because
+    // `extensions` lives in a shared bundle that only a human should edit.
+    for uuid in providers::gext_extras(&effective_ext, ignore) {
+        findings.push(Finding {
+            app: "extensions".into(),
+            kind: "extension-extra",
+            target: uuid,
+            ok: false,
+            status: "extra — declare in a bundle or [ignore].gext".into(),
         });
     }
     for pkg in providers::rpm_missing(&providers::effective_rpm(home, machine)?) {

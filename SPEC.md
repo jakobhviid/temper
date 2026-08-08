@@ -26,6 +26,7 @@ flatpak = []
 mas     = []
 vscode  = []
 tap     = []
+gext    = []                # user-installed GNOME extension UUIDs not to flag
 
 [brew]                      # optional
 trust = ["ublue-os/tap"]   # third-party taps to `brew trust` before converge/upgrade.
@@ -92,9 +93,18 @@ subtree you actually want to reason about, and `label` each one.
 Drift on a snapshot is key-level and reported in the same vocabulary as
 packages: `missing` (in the file, not on the machine), `extra` (on the machine,
 not captured), `changed` (both, differing), plus `never captured` when the file
-doesn't exist yet. `reconcile` absorbs per section/key (spec←machine — a
-`missing` key is absorbed by *dropping* it from the file); `restore` pushes the
-file back out (spec→machine). Both directions are named in drift's Next steps.
+doesn't exist yet. `reconcile` absorbs per section/key (spec←machine); `restore` pushes the file
+back out (spec→machine). Both directions are named in drift's Next steps.
+
+> **`missing` means "at the schema default", not "unset".** dconf stores only
+> non-default values, so a key absent from a dump is one the machine holds at its
+> default — itself a value. Absorbing such a key therefore *removes* it from the
+> snapshot, which is exactly right after you deliberately reset something and
+> re-tuned a few keys, and exactly wrong on a machine where `restore` has never
+> run (there, the key is not "reset" — it was simply never applied). temper
+> cannot tell those apart; you can. Interactive `reconcile` defaults to keeping
+> it, and `--current-state-wins` groups removals by section in the preview so a
+> large drop is visible before you confirm.
 
 > **TOML ordering:** `[machine.vars]` and each `[[machine.dconf]]` bind to the
 > **preceding** `[[machine]]` — they must sit between that header and the next
@@ -120,10 +130,20 @@ it as `[brew].trust` (see `[brew].trust` above).
 > is load-bearing, not an accident: with no `vscode "…"` entry anywhere, temper
 > never runs `code --list-extensions`, so a VS Code Settings Sync setup stays the
 > sole registrar of your extensions and nothing is ever reported as an extra.
-> The same holds for `flatpak`, `mas`, and `gext`. Declaring *one* opts that
-> manager in — thereafter its installed-but-undeclared entries are reported, with
+> The same holds for `flatpak` and `mas`. Declaring *one* opts that manager in —
+> thereafter its installed-but-undeclared entries are reported, with
 > `[ignore].<manager>` as the escape hatch. (brew-family is the exception: any
 > declaration at all enables the dependency-aware brew extras computation.)
+>
+> **`gext` follows the same rule**, and reports both directions once opted in.
+> Only **user-scope** extensions count as extras: system ones ship with the image,
+> and drift reports image-baked items status-only, so a Bazzite box doesn't list
+> seventeen you never chose. Silence one with `[ignore].gext`.
+>
+> A gext extra is **reported, never absorbed**: `extensions` lives in a shared
+> app-bundle, and `reconcile` edits only the machine's own files — adopting one
+> automatically would silently change every machine composing that bundle. Where
+> it belongs is a hand edit, so `--current-state-wins` leaves it alone too.
 
 ## `apps/<name>.toml` (a bundle)
 

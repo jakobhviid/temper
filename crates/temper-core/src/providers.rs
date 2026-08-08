@@ -813,6 +813,49 @@ fn gext_installed() -> Vec<String> {
     }
 }
 
+/// Extensions installed in the **user** scope (`~/.local/share/...`). System
+/// ones are excluded on purpose: those ship with the image, and drift reports
+/// image-baked items status-only rather than as something you failed to declare.
+fn gext_installed_user() -> Vec<String> {
+    if have("gnome-extensions") {
+        run_lines("gnome-extensions", &["list", "--user"]).unwrap_or_default()
+    } else {
+        Vec::new()
+    }
+}
+
+/// User-installed extensions that no bundle declares — the extras direction,
+/// which every other manager already reports. Honors `[ignore].gext`.
+///
+/// Report-only by design: `extensions` lives in a **shared bundle**, and
+/// reconcile edits only the machine's own files, so absorbing one automatically
+/// would silently change every machine that composes that bundle. Deciding where
+/// it belongs is a hand edit.
+///
+/// Gated on the machine declaring at least one extension, exactly like every
+/// other manager (SPEC's probe invariant). Without that gate a spec that doesn't
+/// manage extensions at all — including a bare test fixture — would report every
+/// hand-installed extension on the host, making drift depend on the machine
+/// rather than the spec. Declaring one opts in.
+pub fn gext_extras(effective: &[String], ignore: &manifest::Ignore) -> Vec<String> {
+    if effective.is_empty() || !have("gnome-extensions") {
+        return Vec::new();
+    }
+    gext_extras_from(&gext_installed_user(), effective, &ignore.gext)
+}
+
+/// The set logic behind `gext_extras`, split from the shell-out so it is
+/// unit-testable: user-installed, minus declared, minus ignored, sorted.
+fn gext_extras_from(installed_user: &[String], effective: &[String], ignore: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = installed_user
+        .iter()
+        .filter(|u| !effective.contains(u) && !ignore.contains(u))
+        .cloned()
+        .collect();
+    out.sort();
+    out
+}
+
 /// Declared extensions not installed. Empty (no-op) where GNOME isn't present.
 pub fn gext_missing(effective: &[String]) -> Vec<String> {
     if effective.is_empty() || (!have("gext") && !have("gnome-extensions")) {
@@ -914,6 +957,34 @@ pub fn rpm_missing(effective: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod progress_tests {
     use super::*;
+
+    /// gext was the one manager reporting a single direction: declared-but-
+    /// missing, never installed-but-undeclared. The extras side is user-scope
+    /// only — system extensions ship with the image, and drift reports
+    /// image-baked items status-only rather than as something you failed to
+    /// declare (this is what keeps a Bazzite box from listing seventeen).
+    #[test]
+    fn gext_extras_are_user_scope_minus_declared_minus_ignored() {
+        let installed_user = vec![
+            "declared@x".to_string(),
+            "ignored@x".to_string(),
+            "stray@x".to_string(),
+        ];
+        let declared = vec!["declared@x".to_string()];
+        let ignored = vec!["ignored@x".to_string()];
+        assert_eq!(
+            gext_extras_from(&installed_user, &declared, &ignored),
+            vec!["stray@x".to_string()]
+        );
+        // Nothing installed in the user scope → nothing to report, even with a
+        // machine that declares extensions it hasn't installed yet.
+        assert!(gext_extras_from(&[], &declared, &[]).is_empty());
+        // A machine that declares no extensions opts out entirely (the probe
+        // invariant): without this, any spec that ignores extensions would
+        // report every hand-installed one on the host, and drift would depend on
+        // the machine instead of the spec.
+        assert!(gext_extras(&[], &crate::manifest::Ignore::default()).is_empty());
+    }
 
     /// SPEC.md states, as a documented invariant, that a manager is only probed
     /// if at least one of its packages is declared — that is why a VS Code

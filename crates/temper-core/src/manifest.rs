@@ -171,6 +171,11 @@ pub struct Ignore {
     pub vscode: Vec<String>,
     #[serde(default)]
     pub tap: Vec<String>,
+    /// GNOME extension UUIDs installed in the user scope that should not be
+    /// reported as extras — a deliberate hand-install you don't want tracked.
+    /// (System/image-baked extensions are never extras, so they need no entry.)
+    #[serde(default)]
+    pub gext: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
