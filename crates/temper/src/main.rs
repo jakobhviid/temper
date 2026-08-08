@@ -1746,13 +1746,15 @@ fn cmd_reconcile(
         // as empty, same as the planner does.
         Some(p) => std::fs::read_to_string(p).unwrap_or_default(),
         None => {
-            println!(
-                "{}",
-                ui::dim(
-                    "note: this machine declares no `brewfile`, so package reconcile is \
-                     skipped — declare one to absorb packages here."
-                )
-            );
+            if !json {
+                println!(
+                    "{}",
+                    ui::dim(
+                        "note: this machine declares no `brewfile`, so package reconcile is \
+                         skipped — declare one to absorb packages here."
+                    )
+                );
+            }
             String::new()
         }
     };
@@ -1906,7 +1908,9 @@ fn cmd_reconcile(
     // the nothing-selected path too — a machine whose ONLY drift is tap-trust
     // must not report "nothing changed" and leave it at that.
     let report_skipped_trust = || {
-        if skipped_trust_count == 0 {
+        // Human-only: under --json stdout carries one document, and the same
+        // fact is reported there as `trust_skipped`.
+        if skipped_trust_count == 0 || json {
             return;
         }
         println!(
@@ -1945,77 +1949,92 @@ fn cmd_reconcile(
         && chosen_tap_ignores.is_empty()
         && chosen_dconf.is_empty()
     {
-        println!("\nNothing selected — nothing changed.");
-        report_skipped_trust();
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "machine": m.name, "applied": false,
+                    "added": 0, "dropped": 0, "ignored": 0, "dconf_keys": 0,
+                    "trust_skipped": skipped_trust_count,
+                })
+            );
+        } else {
+            println!("\nNothing selected — nothing changed.");
+            report_skipped_trust();
+        }
         return Ok(());
     }
 
-    // Preview.
-    let bf_label = plan.brewfile_rel.clone().unwrap_or_default();
-    println!("\n{}", ui::bold("Proposed changes"));
-    for t in &chosen_adds {
-        println!(
-            "  {} {}  {}",
-            ui::green("+"),
-            t,
-            ui::dim(&format!("→ {bf_label}"))
-        );
-    }
-    for d in &chosen_drops {
-        println!(
-            "  {} {}  {}",
-            ui::red("-"),
-            d.trim(),
-            ui::dim(&format!("→ {bf_label}"))
-        );
-    }
-    for name in &chosen_ignores {
-        println!(
-            "  {} flatpak {}  {}",
-            ui::yellow("~"),
-            name,
-            ui::dim("→ [ignore].flatpak in temper.toml")
-        );
-    }
-    for tap in &chosen_trust_adds {
-        println!(
-            "  {} trust {}  {}",
-            ui::green("+"),
-            tap,
-            ui::dim("→ [brew].trust in temper.toml")
-        );
-    }
-    for tap in &chosen_trust_drops {
-        println!(
-            "  {} trust {}  {}",
-            ui::red("-"),
-            tap,
-            ui::dim("→ [brew].trust in temper.toml")
-        );
-    }
-    for tap in &chosen_tap_ignores {
-        println!(
-            "  {} trust {}  {}",
-            ui::yellow("~"),
-            tap,
-            ui::dim("→ [ignore].tap in temper.toml")
-        );
-    }
-    for (i, picked) in &chosen_dconf {
-        let dp = &plan.dconf[*i];
-        for d in picked {
-            let (mark, verb) = match d.live {
-                Some(_) => (ui::green("+"), "set"),
-                None => (ui::red("-"), "remove"),
-            };
+    // Preview — human-only; --json reports the same facts as one document.
+    if !json {
+        // Preview.
+        let bf_label = plan.brewfile_rel.clone().unwrap_or_default();
+        println!("\n{}", ui::bold("Proposed changes"));
+        for t in &chosen_adds {
             println!(
-                "  {} {} {}  {}",
-                mark,
-                verb,
-                dconf::key_id(&d.section, &d.key),
-                ui::dim(&format!("→ {}", dp.file_rel))
+                "  {} {}  {}",
+                ui::green("+"),
+                t,
+                ui::dim(&format!("→ {bf_label}"))
             );
         }
+        for d in &chosen_drops {
+            println!(
+                "  {} {}  {}",
+                ui::red("-"),
+                d.trim(),
+                ui::dim(&format!("→ {bf_label}"))
+            );
+        }
+        for name in &chosen_ignores {
+            println!(
+                "  {} flatpak {}  {}",
+                ui::yellow("~"),
+                name,
+                ui::dim("→ [ignore].flatpak in temper.toml")
+            );
+        }
+        for tap in &chosen_trust_adds {
+            println!(
+                "  {} trust {}  {}",
+                ui::green("+"),
+                tap,
+                ui::dim("→ [brew].trust in temper.toml")
+            );
+        }
+        for tap in &chosen_trust_drops {
+            println!(
+                "  {} trust {}  {}",
+                ui::red("-"),
+                tap,
+                ui::dim("→ [brew].trust in temper.toml")
+            );
+        }
+        for tap in &chosen_tap_ignores {
+            println!(
+                "  {} trust {}  {}",
+                ui::yellow("~"),
+                tap,
+                ui::dim("→ [ignore].tap in temper.toml")
+            );
+        }
+        for (i, picked) in &chosen_dconf {
+            let dp = &plan.dconf[*i];
+            for d in picked {
+                let (mark, verb) = match d.live {
+                    Some(_) => (ui::green("+"), "set"),
+                    None => (ui::red("-"), "remove"),
+                };
+                println!(
+                    "  {} {} {}  {}",
+                    mark,
+                    verb,
+                    dconf::key_id(&d.section, &d.key),
+                    ui::dim(&format!("→ {}", dp.file_rel))
+                );
+            }
+        }
+
     }
 
     report_skipped_trust();
