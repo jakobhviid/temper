@@ -83,12 +83,18 @@ label = "shell"                             # optional; name used in drift/recon
                                             #   output instead of the raw path
 ```
 
-**Declare narrow subtrees, not one blob.** `[[machine.dconf]]` is repeatable, and
-drift/reconcile group by the sections the dump itself defines. A snapshot rooted
-at `/org/gnome/shell/extensions/` therefore yields one section — and one
-reconcile prompt — *per extension*, with no GNOME knowledge in the tool. One
-rooted at `/org/gnome/shell/` lumps far more into each prompt. Split by the
-subtree you actually want to reason about, and `label` each one.
+**Per-extension prompts come free; splitting is optional.** drift/reconcile group
+by the sections the dump itself defines, and dconf names sections by path
+*relative to the dumped root* — so a snapshot rooted at `/org/gnome/shell/`
+already yields `extensions/caffeine`, `extensions/dash-to-dock`, … and one
+reconcile prompt each, with no GNOME knowledge in the tool. You do **not** need
+to re-root a snapshot to get that.
+
+`[[machine.dconf]]` is still repeatable, and splitting is worth it when you want
+separate *files* (to diff or restore one area alone) or a distinct `label` per
+area. It does not change the prompt granularity. The one genuinely coarse ask is
+the root section (`enabled-extensions`, `favorite-apps`, …), and splitting
+doesn't help that either — those keys live at the root wherever you root it.
 
 Drift on a snapshot is key-level and reported in the same vocabulary as
 packages: `missing` (in the file, not on the machine), `extra` (on the machine,
@@ -221,6 +227,11 @@ setkey = { backend = "dconf",    key = "/org/gnome/desktop/interface/color-schem
 setkey = { backend = "json", file = "~/.config/x.json", key = "bin", value = "{{ which \"ghostty\" }}", template = true }
 #
 #   backend: "json" | "toml" | "ini" (a.k.a. ".desktop") | "defaults" (macOS) | "dconf" (Linux)
+#   dconf doubles are compared NUMERICALLY, not as text: dconf prints them with
+#     GVariant's %.17g (0.46999999999999997) while the manifest says 0.47 — the
+#     same f64 spelled two ways. A whole-numbered double is written with its
+#     `.0` so the key keeps its double type. So `value = 1.0` and `value = 0.47`
+#     converge and stay converged; there is no value you must avoid declaring.
 #   file:    REQUIRED for json/toml/ini (target file) and defaults (a domain like
 #            "com.apple.dock", or a plist path). OMIT for dconf — the key is the path.
 #   key:     json/toml → dotted path ("ui.theme"); ini → "Section.Key"; defaults →

@@ -396,6 +396,11 @@ temper undo <run-id>         # revert a specific one
 temper undo --dry-run        # show what would revert, touch nothing
 ```
 
+A drifted `setkey` names **both values** — `want 0.99, have 0.47` — under the
+finding, and carries them in `--json` as `detail`. A bare "drifted" can't tell a
+real difference from a formatting artefact, which is what once made a dconf
+double-comparison bug take a hand-audit to find.
+
 Reverts file writes (`copy`/`block`/`setkey` json/toml/ini), `setkey(dconf)`
 values, and a whole-subtree `restore` (undo resets the subtree and reloads your
 prior dump — a bare reload would leave behind every key the restore introduced).

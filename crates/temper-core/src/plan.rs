@@ -83,6 +83,10 @@ pub struct Finding {
     pub target: String,
     pub ok: bool,
     pub status: String,
+    /// What actually disagreed, when the check can say. A drifted `setkey`
+    /// carries `want X, have Y` here — a bare "drifted" is what made a dconf
+    /// formatting bug take a hand-audit to find.
+    pub detail: Option<String>,
 }
 
 impl Finding {
@@ -93,6 +97,7 @@ impl Finding {
             target,
             ok: state.is_ok(),
             status: state.label().to_string(),
+            detail: None,
         }
     }
 
@@ -154,9 +159,11 @@ fn step_finding(
         return Ok(Some(Finding::state(app, "block", in_file.clone(), state)));
     }
     if let Some(sk) = &step.setkey {
-        let state = primitives::setkey_state(sk, vars)?;
+        let ks = primitives::setkey_state(sk, vars)?;
         let target = format!("{}:{}", sk.file.as_deref().unwrap_or(&sk.backend), sk.key);
-        return Ok(Some(Finding::state(app, "setkey", target, state)));
+        let mut f = Finding::state(app, "setkey", target, ks.state);
+        f.detail = ks.values.map(|(want, have)| format!("want {want}, have {have}"));
+        return Ok(Some(f));
     }
     if let Some(exec) = &step.exec {
         let opts = exec_opts(home, machine, step);
@@ -168,6 +175,7 @@ fn step_finding(
             target: exec.clone(),
             ok,
             status,
+            detail: None,
         }));
     }
     if let Some(profile) = &step.profile {
@@ -178,6 +186,7 @@ fn step_finding(
             target: profile.clone(),
             ok: true,
             status: "manual".into(),
+            detail: None,
         }));
     }
     if let (Some(sysfile), Some(to)) = (&step.sysfile, &step.to) {
@@ -545,6 +554,7 @@ pub fn run_drift(
                     target: desc.clone(),
                     ok: true,
                     status: format!("skipped: {desc} absent"),
+                    detail: None,
                 });
                 continue;
             }
@@ -555,6 +565,7 @@ pub fn run_drift(
                     target: desc.clone(),
                     ok: false,
                     status: format!("required {desc} is absent"),
+                    detail: None,
                 });
                 continue;
             }
@@ -578,6 +589,7 @@ pub fn run_drift(
             target: drift::target(assert),
             ok,
             status,
+            detail: None,
         });
     }
 
@@ -592,6 +604,7 @@ pub fn run_drift(
                 target: format!("{} {}", p.manager.as_str(), p.name),
                 ok: false,
                 status: "missing".into(),
+                detail: None,
             });
         }
         let extras = packages::extras(&effective, &installed, ignore);
@@ -625,6 +638,7 @@ pub fn run_drift(
                 target,
                 ok: false,
                 status: "extra".into(),
+                detail: None,
             });
         }
         for (m, name) in providers::brew_extras(&effective, ignore)? {
@@ -634,6 +648,7 @@ pub fn run_drift(
                 target: format!("{} {}", m.as_str(), name),
                 ok: false,
                 status: "extra".into(),
+                detail: None,
             });
         }
     }
@@ -652,6 +667,7 @@ pub fn run_drift(
                     target: format!("tap {tap}"),
                     ok: false,
                     status: "untrusted".into(),
+                    detail: None,
                 });
             }
         }
@@ -665,6 +681,7 @@ pub fn run_drift(
                     target: format!("tap {tap}"),
                     ok: false,
                     status: "trusted-extra".into(),
+                    detail: None,
                 });
             }
         }
@@ -679,6 +696,7 @@ pub fn run_drift(
             target: uuid,
             ok: false,
             status: "missing".into(),
+            detail: None,
         });
     }
     // The extras direction, which every other manager already reported. Carries
@@ -691,6 +709,7 @@ pub fn run_drift(
             target: uuid,
             ok: false,
             status: "extra — declare in a bundle or [ignore].gext".into(),
+            detail: None,
         });
     }
     for pkg in providers::rpm_missing(&providers::effective_rpm(home, machine)?) {
@@ -700,6 +719,7 @@ pub fn run_drift(
             target: pkg,
             ok: false,
             status: "missing".into(),
+            detail: None,
         });
     }
 
@@ -717,6 +737,7 @@ pub fn run_drift(
                 target: snap.file.clone(),
                 ok: false,
                 status: "never captured".into(),
+                detail: None,
             }),
             crate::dconf::SnapshotState::Diffs(diffs) => {
                 for d in diffs {
@@ -730,6 +751,7 @@ pub fn run_drift(
                         target: d.id(),
                         ok: false,
                         status: d.status().into(),
+                        detail: None,
                     });
                 }
             }
@@ -1255,6 +1277,7 @@ mod remediation_tests {
             target: "t".into(),
             ok,
             status: "s".into(),
+            detail: None,
         }
     }
 

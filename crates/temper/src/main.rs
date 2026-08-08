@@ -1168,7 +1168,7 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
             .map(|f| {
                 serde_json::json!({
                     "app": f.app, "kind": f.kind, "target": f.target,
-                    "ok": f.ok, "status": f.status,
+                    "ok": f.ok, "status": f.status, "detail": f.detail,
                 })
             })
             .collect();
@@ -1259,6 +1259,11 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
                 line.push_str(&" ".repeat(*pad));
             }
             println!("{line}");
+            // What actually disagreed, when the check can say — a bare
+            // "drifted" is what made a dconf formatting bug take a hand-audit.
+            if let Some(d) = &f.detail {
+                println!("      {}", ui::dim(d));
+            }
         }
         let in_sync = g.len() - drifted.len();
         if in_sync > 0 {

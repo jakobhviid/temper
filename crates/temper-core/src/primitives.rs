@@ -42,6 +42,41 @@ impl FileState {
     }
 }
 
+/// A `setkey` evaluation: the sync state, plus the two values that disagree when
+/// it drifted. Without them a drifted key reports only "drifted", which is what
+/// made a formatting bug in the dconf backend take a hand-audit to find — the
+/// declared and live values sitting side by side make that class self-evident.
+pub struct KeyState {
+    pub state: FileState,
+    /// `(declared, live)`, for reporting. `None` unless the key actually drifted.
+    pub values: Option<(String, String)>,
+}
+
+impl KeyState {
+    fn plain(state: FileState) -> KeyState {
+        KeyState {
+            state,
+            values: None,
+        }
+    }
+
+    fn drifted(want: String, have: String) -> KeyState {
+        KeyState {
+            state: FileState::Drifted,
+            values: Some((clip_value(&want), clip_value(&have))),
+        }
+    }
+}
+
+/// Keep one runaway value from swamping a drift line.
+fn clip_value(s: &str) -> String {
+    const MAX: usize = 40;
+    if s.chars().count() <= MAX {
+        return s.to_string();
+    }
+    format!("{}…", s.chars().take(MAX - 1).collect::<String>())
+}
+
 /// Options for a `copy` step.
 pub struct CopyOpts<'a> {
     /// Render `{{ … }}` before deploying.
@@ -444,7 +479,7 @@ fn resolve_setkey<'a>(
     Ok(std::borrow::Cow::Owned(r))
 }
 
-pub fn setkey_state(sk: &SetKey, vars: &BTreeMap<String, String>) -> Result<FileState> {
+pub fn setkey_state(sk: &SetKey, vars: &BTreeMap<String, String>) -> Result<KeyState> {
     ensure_append_supported(sk)?;
     let resolved = resolve_setkey(sk, vars)?;
     let sk = resolved.as_ref();
@@ -458,19 +493,19 @@ pub fn setkey_state(sk: &SetKey, vars: &BTreeMap<String, String>) -> Result<File
     }
 }
 
-fn json_state(sk: &SetKey) -> Result<FileState> {
+fn json_state(sk: &SetKey) -> Result<KeyState> {
     let file = sk_file(sk)?;
     if !file.exists() {
-        return Ok(FileState::Missing);
+        return Ok(KeyState::plain(FileState::Missing));
     }
     let root = read_json_root(&file)?;
     let parts: Vec<&str> = sk.key.split('.').collect();
     let value = toml_to_json(&sk.value);
-    Ok(if json_satisfied(&root, &parts, &value, sk.append) {
-        FileState::InSync
-    } else {
-        FileState::Drifted
-    })
+    if json_satisfied(&root, &parts, &value, sk.append) {
+        return Ok(KeyState::plain(FileState::InSync));
+    }
+    let have = json_get(&root, &parts).map_or_else(|| "(unset)".to_string(), |v| v.to_string());
+    Ok(KeyState::drifted(value.to_string(), have))
 }
 
 /// Read a file's prior bytes, journal the write, and write the new bytes.
@@ -785,18 +820,18 @@ mod toml_edit_tests {
     }
 }
 
-fn toml_state(sk: &SetKey) -> Result<FileState> {
+fn toml_state(sk: &SetKey) -> Result<KeyState> {
     let file = sk_file(sk)?;
     if !file.exists() {
-        return Ok(FileState::Missing);
+        return Ok(KeyState::plain(FileState::Missing));
     }
     let root = read_toml_root(&file)?;
     let parts: Vec<&str> = sk.key.split('.').collect();
-    Ok(if toml_satisfied(&root, &parts, &sk.value, sk.append) {
-        FileState::InSync
-    } else {
-        FileState::Drifted
-    })
+    if toml_satisfied(&root, &parts, &sk.value, sk.append) {
+        return Ok(KeyState::plain(FileState::InSync));
+    }
+    let have = toml_get(&root, &parts).map_or_else(|| "(unset)".to_string(), scalar_str);
+    Ok(KeyState::drifted(scalar_str(&sk.value), have))
 }
 
 fn toml_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
@@ -905,20 +940,22 @@ fn ini_desired(content: &str, section: Option<&str>, key: &str, value: &str) -> 
     s
 }
 
-fn ini_state(sk: &SetKey) -> Result<FileState> {
+fn ini_state(sk: &SetKey) -> Result<KeyState> {
     let file = sk_file(sk)?;
     if !file.exists() {
-        return Ok(FileState::Missing);
+        return Ok(KeyState::plain(FileState::Missing));
     }
     let content = fs::read_to_string(&file)?;
     let (section, key) = ini_split(&sk.key);
-    Ok(
-        if ini_current(&content, section, key) == Some(scalar_str(&sk.value).as_str()) {
-            FileState::InSync
-        } else {
-            FileState::Drifted
-        },
-    )
+    let want = scalar_str(&sk.value);
+    let have = ini_current(&content, section, key);
+    if have == Some(want.as_str()) {
+        return Ok(KeyState::plain(FileState::InSync));
+    }
+    Ok(KeyState::drifted(
+        want,
+        have.unwrap_or("(unset)").to_string(),
+    ))
 }
 
 fn ini_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
@@ -971,21 +1008,22 @@ fn defaults_matches(have: &str, want: &toml::Value) -> bool {
     }
 }
 
-fn defaults_state(sk: &SetKey) -> Result<FileState> {
+fn defaults_state(sk: &SetKey) -> Result<KeyState> {
     if which("defaults").is_none() {
-        return Ok(FileState::Unavailable); // degrade, don't abort (e.g. on Linux)
+        // degrade, don't abort (e.g. on Linux)
+        return Ok(KeyState::plain(FileState::Unavailable));
     }
     let target = defaults_target(sk)?;
     Ok(match defaults_read(&target, &sk.key) {
-        None => FileState::Missing,
-        Some(have) if defaults_matches(&have, &sk.value) => FileState::InSync,
-        Some(_) => FileState::Drifted,
+        None => KeyState::plain(FileState::Missing),
+        Some(have) if defaults_matches(&have, &sk.value) => KeyState::plain(FileState::InSync),
+        Some(have) => KeyState::drifted(scalar_str(&sk.value), have),
     })
 }
 
 fn defaults_apply(sk: &SetKey) -> Result<bool> {
     if matches!(
-        defaults_state(sk)?,
+        defaults_state(sk)?.state,
         FileState::InSync | FileState::Unavailable
     ) {
         return Ok(false);
@@ -1030,6 +1068,11 @@ fn gvariant(v: &toml::Value) -> String {
         toml::Value::String(s) => format!("'{}'", gvariant_escape(s)),
         toml::Value::Boolean(b) => b.to_string(),
         toml::Value::Integer(i) => i.to_string(),
+        // A whole-numbered double must keep its `.0`: Rust prints `1.0` as `1`,
+        // which GVariant reads as an *integer*, so a double-typed key would be
+        // written with the wrong type (and never compare equal to what dconf
+        // reads back, which is `1.0`).
+        toml::Value::Float(f) if f.fract() == 0.0 && f.is_finite() => format!("{f:.1}"),
         toml::Value::Float(f) => f.to_string(),
         toml::Value::Array(a) => {
             let items: Vec<String> = a.iter().map(gvariant).collect();
@@ -1111,42 +1154,79 @@ fn union_gvariant_as(current: Option<&str>, members: &[String]) -> Result<String
     Ok(gvariant(&arr))
 }
 
-fn dconf_state(sk: &SetKey) -> Result<FileState> {
+fn dconf_state(sk: &SetKey) -> Result<KeyState> {
     if which("dconf").is_none() {
-        return Ok(FileState::Unavailable); // degrade, don't abort (e.g. on Mac)
+        // degrade, don't abort (e.g. on Mac)
+        return Ok(KeyState::plain(FileState::Unavailable));
     }
     if sk.append {
         // Union drift: in sync iff the array already contains every declared
         // member (subset), like json/toml append.
         let want = dconf_append_members(&sk.value)?;
         return Ok(match dconf_read(&sk.key) {
-            None => {
-                if want.is_empty() {
-                    FileState::InSync
-                } else {
-                    FileState::Missing
-                }
-            }
+            None => KeyState::plain(if want.is_empty() {
+                FileState::InSync
+            } else {
+                FileState::Missing
+            }),
             Some(have) => {
                 let cur = parse_gvariant_as(&have)?;
                 if want.iter().all(|m| cur.contains(m)) {
-                    FileState::InSync
+                    KeyState::plain(FileState::InSync)
                 } else {
-                    FileState::Drifted
+                    KeyState::drifted(format!("{want:?} ⊆"), have)
                 }
             }
         });
     }
     let want = gvariant(&sk.value);
     Ok(match dconf_read(&sk.key) {
-        None => FileState::Missing,
-        Some(have) if have == want => FileState::InSync,
-        Some(_) => FileState::Drifted,
+        None => KeyState::plain(FileState::Missing),
+        Some(have) if dconf_matches(&sk.value, &want, &have) => KeyState::plain(FileState::InSync),
+        Some(have) => KeyState::drifted(want, have),
     })
 }
 
+/// Whether dconf's live text denotes the declared value.
+///
+/// Doubles must be compared **numerically**, never as text: dconf prints them
+/// with GVariant's `%.17g` (`0.46999999999999997`) while Rust prints the shortest
+/// round-trip (`0.47`) — the same `f64` spelled two ways. Comparing the strings
+/// makes any such key permanently drifted: `install` writes the right value and
+/// the next `drift` still calls it wrong, forever. Values whose two spellings
+/// happen to agree (`0.5`, `0.62`) worked, which made the bug look intermittent.
+fn dconf_matches(declared: &toml::Value, want: &str, have: &str) -> bool {
+    if want == have {
+        return true;
+    }
+    match declared {
+        toml::Value::Float(f) => have.trim().parse::<f64>().is_ok_and(|h| h == *f),
+        // Same reasoning element-wise for an array of numbers (`ad`).
+        toml::Value::Array(a) if a.iter().all(|e| e.as_float().is_some()) => {
+            let live = parse_gvariant_numbers(have);
+            live.as_ref().is_some_and(|live| {
+                live.len() == a.len()
+                    && a.iter()
+                        .zip(live)
+                        .all(|(d, h)| d.as_float().is_some_and(|d| d == *h))
+            })
+        }
+        _ => false,
+    }
+}
+
+/// Parse a GVariant numeric array (`[1.0, 2.5]`) into its members. `None` if the
+/// text isn't a bracketed list of numbers.
+fn parse_gvariant_numbers(s: &str) -> Option<Vec<f64>> {
+    let inner = s.trim().strip_prefix('[')?.strip_suffix(']')?.trim();
+    if inner.is_empty() {
+        return Some(Vec::new());
+    }
+    inner.split(',').map(|t| t.trim().parse::<f64>().ok()).collect()
+}
+
 fn dconf_apply(sk: &SetKey, journal: &mut Journal) -> Result<bool> {
-    if matches!(dconf_state(sk)?, FileState::InSync | FileState::Unavailable) {
+    if matches!(dconf_state(sk)?.state, FileState::InSync | FileState::Unavailable) {
         return Ok(false);
     }
     // Snapshot the prior value BEFORE writing, so `undo` can restore it (or
@@ -1459,6 +1539,48 @@ mod setkey_tests {
         assert!(ensure_append_supported(&sk("defaults", true)).is_err());
         // append = false is fine everywhere.
         assert!(ensure_append_supported(&sk("dconf", false)).is_ok());
+    }
+
+    /// dconf prints doubles with GVariant's `%.17g`, Rust with the shortest
+    /// round-trip. Comparing those as text made whole-numbered and
+    /// long-expansion doubles permanently drifted — `install` wrote the right
+    /// value and the next `drift` called it wrong anyway, forever. The bug
+    /// looked intermittent because values whose spellings happen to agree
+    /// (`0.5`, `0.62`) were fine.
+    #[test]
+    fn dconf_doubles_compare_numerically_not_textually() {
+        let f = |x: f64| toml::Value::Float(x);
+        // Whole numbers: dconf says `1.0`, Rust says `1`.
+        assert!(dconf_matches(&f(1.0), &gvariant(&f(1.0)), "1.0"));
+        assert!(dconf_matches(&f(60.0), &gvariant(&f(60.0)), "60.0"));
+        // Long expansions: the same f64, spelled two ways.
+        assert!(dconf_matches(&f(0.47), &gvariant(&f(0.47)), "0.46999999999999997"));
+        assert!(dconf_matches(&f(0.6), &gvariant(&f(0.6)), "0.59999999999999998"));
+        // The ones that always worked must keep working.
+        assert!(dconf_matches(&f(0.5), &gvariant(&f(0.5)), "0.5"));
+        // A genuinely different value is still drift.
+        assert!(!dconf_matches(&f(0.47), &gvariant(&f(0.47)), "0.48"));
+        assert!(!dconf_matches(&f(1.0), &gvariant(&f(1.0)), "2.0"));
+    }
+
+    /// A whole double must render with its `.0`, or dconf receives an integer
+    /// GVariant for a double-typed key.
+    #[test]
+    fn whole_doubles_render_as_doubles() {
+        assert_eq!(gvariant(&toml::Value::Float(1.0)), "1.0");
+        assert_eq!(gvariant(&toml::Value::Float(-3.0)), "-3.0");
+        assert_eq!(gvariant(&toml::Value::Float(0.47)), "0.47");
+        // Integers are still integers — this must not swallow the `i` type.
+        assert_eq!(gvariant(&toml::Value::Integer(1)), "1");
+    }
+
+    #[test]
+    fn dconf_double_arrays_compare_numerically_too() {
+        let arr = toml::Value::Array(vec![toml::Value::Float(1.0), toml::Value::Float(0.47)]);
+        let want = gvariant(&arr);
+        assert!(dconf_matches(&arr, &want, "[1.0, 0.46999999999999997]"));
+        assert!(!dconf_matches(&arr, &want, "[1.0, 0.9]"));
+        assert!(!dconf_matches(&arr, &want, "[1.0]"));
     }
 
     #[test]
