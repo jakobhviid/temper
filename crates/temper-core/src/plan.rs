@@ -510,7 +510,7 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
         push(
             &mut out,
             "reload the desktop snapshot, clobbering live tweaks (asks first)",
-            "temper restore",
+            "temper restore-gnome",
         );
     }
     // Spec ← machine (absorb the machine's state into the spec).
@@ -528,7 +528,7 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
         push(
             &mut out,
             "capture the whole desktop subtree into the spec instead",
-            "temper snapshot",
+            "temper snapshot-gnome",
         );
     }
     // A failed assertion has no command: it reports a condition you resolve
@@ -1373,9 +1373,9 @@ mod remediation_tests {
             .iter()
             .map(|r| r.command.clone())
             .collect();
-        assert!(cmds.contains(&"temper restore".to_string())); // spec → machine
+        assert!(cmds.contains(&"temper restore-gnome".to_string())); // spec → machine
         assert!(cmds.contains(&"temper reconcile".to_string())); // spec ← machine, per key
-        assert!(cmds.contains(&"temper snapshot".to_string())); // spec ← machine, wholesale
+        assert!(cmds.contains(&"temper snapshot-gnome".to_string())); // spec ← machine, wholesale
                                                                 // dconf drift is not config drift — `install` never reloads a snapshot.
         assert!(!cmds.contains(&"temper install".to_string()));
     }
@@ -1389,7 +1389,7 @@ mod remediation_tests {
             .iter()
             .map(|r| r.command.clone())
             .collect();
-        assert!(!cmds.contains(&"temper restore".to_string()));
+        assert!(!cmds.contains(&"temper restore-gnome".to_string()));
         assert!(cmds.contains(&"temper reconcile".to_string()));
     }
 
