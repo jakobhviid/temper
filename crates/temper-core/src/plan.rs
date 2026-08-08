@@ -334,7 +334,7 @@ fn warn_parent_scoped(beyond_temper: &[String]) {
         "{} this machine's sudo keeps credentials per parent process, so temper's \
          password cannot be reused by {} — {} will ask again when reached. \
          `Defaults timestamp_type=tty` in sudoers is what makes one prompt possible.",
-        crate::ui::yellow("⚠"),
+        crate::ui::yellow(crate::ui::g_warn()),
         if beyond_temper.len() == 1 { "it" } else { "them" },
         beyond_temper.join(", ")
     );

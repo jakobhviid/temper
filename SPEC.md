@@ -28,6 +28,14 @@ vscode  = []
 tap     = []
 gext    = []                # user-installed GNOME extension UUIDs not to flag
 
+[ui]                        # optional; how temper draws its status markers
+icons = "unicode"           # "unicode" (default) | "nerd"
+                            #   nerd uses Material-Design Nerd Font glyphs, which are
+                            #   Private Use Area: crisp with a patched font, an EMPTY BOX
+                            #   without one — hence the safe default. `TEMPER_ICONS=nerd`
+                            #   (or =unicode) overrides per terminal, because font coverage
+                            #   belongs to the terminal, not to the spec or the machine.
+
 [brew]                      # optional
 trust = ["ublue-os/tap"]   # third-party taps to `brew trust` before converge/upgrade.
                             #   drift/reconcile/prune check this both ways vs `brew trust --json`:

@@ -24,6 +24,94 @@ pub fn json_mode() -> bool {
     *JSON.get().unwrap_or(&false)
 }
 
+/// Which glyph set the human renderers draw from.
+///
+/// **Default `Unicode`, deliberately.** The Nerd set lives in the Private Use
+/// Area, so on a machine without a patched font every marker is an empty box —
+/// a worse failure than a plain `✓`. Opt in with `[ui].icons = "nerd"` in
+/// `temper.toml`, or `TEMPER_ICONS=nerd` for one terminal whose font differs
+/// from the rest of the fleet's (font coverage is a property of the terminal,
+/// not of the machine, and not of the spec).
+///
+/// The Unicode set avoids emoji-covered codepoints: those get a colour glyph
+/// from a font like Noto Color Emoji, render double-width, swallow the space
+/// after them, and shift every aligned column that follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Icons {
+    Unicode,
+    Nerd,
+}
+
+static ICONS: OnceLock<Icons> = OnceLock::new();
+
+/// Set the glyph set. `TEMPER_ICONS` wins over the manifest, so a single odd
+/// terminal needs no spec edit.
+pub fn set_icons(from_manifest: Option<&str>) {
+    let choice = match std::env::var("TEMPER_ICONS").ok().as_deref() {
+        Some("nerd") => Icons::Nerd,
+        Some(_) => Icons::Unicode,
+        None => match from_manifest {
+            Some("nerd") => Icons::Nerd,
+            _ => Icons::Unicode,
+        },
+    };
+    let _ = ICONS.set(choice);
+}
+
+fn icons() -> Icons {
+    *ICONS.get().unwrap_or(&Icons::Unicode)
+}
+
+/// Success / in sync.
+pub fn g_ok() -> &'static str {
+    match icons() {
+        Icons::Unicode => "✓",
+        Icons::Nerd => "\u{F012C}", // nf-md-check
+    }
+}
+
+/// Drift / failure.
+pub fn g_bad() -> &'static str {
+    match icons() {
+        Icons::Unicode => "✗",
+        Icons::Nerd => "\u{F0156}", // nf-md-close
+    }
+}
+
+/// Warning / skipped.
+pub fn g_warn() -> &'static str {
+    match icons() {
+        Icons::Unicode => "⚠",
+        Icons::Nerd => "\u{F0026}", // nf-md-alert
+    }
+}
+
+/// Information / notice. The Unicode option is a plain ASCII `i`: `ℹ` is
+/// emoji-covered (double-width) and the circled form is illegible at terminal
+/// sizes — both were tried, both were wrong.
+pub fn g_info() -> &'static str {
+    match icons() {
+        Icons::Unicode => "i",
+        Icons::Nerd => "\u{F02FC}", // nf-md-information
+    }
+}
+
+/// "What to run next" pointer.
+pub fn g_arrow() -> &'static str {
+    match icons() {
+        Icons::Unicode => "→",
+        Icons::Nerd => "\u{F0142}", // nf-md-chevron_right
+    }
+}
+
+/// Still working on this item.
+pub fn g_working() -> &'static str {
+    match icons() {
+        Icons::Unicode => "⋯",
+        Icons::Nerd => "\u{F01D9}", // nf-md-dots_horizontal
+    }
+}
+
 fn color_enabled() -> bool {
     static E: OnceLock<bool> = OnceLock::new();
     *E.get_or_init(|| std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal())
@@ -406,7 +494,7 @@ impl Checklist {
 
     /// The unit changed something — it earns a permanent line.
     pub fn done(&self, label: &str) {
-        self.emit(format!("  {} {label}", green("✓")));
+        self.emit(format!("  {} {label}", green(g_ok())));
         self.advance();
     }
 
@@ -420,7 +508,7 @@ impl Checklist {
         }
         self.emit(format!(
             "  {} {label}  {}",
-            green("✓"),
+            green(g_ok()),
             dim(&human_secs(elapsed))
         ));
         self.advance();
@@ -436,7 +524,7 @@ impl Checklist {
     /// (Principle #6). Callers phrase `why` fully ("binary `topgrade` absent",
     /// "changed since temper wrote it"), because only they know what it means.
     pub fn skipped(&self, label: &str, why: &str) {
-        self.emit(format!("  {} {label} — skipped: {why}", yellow("⚠")));
+        self.emit(format!("  {} {label} — skipped: {why}", yellow(g_warn())));
         self.advance();
     }
 
@@ -468,8 +556,8 @@ impl Checklist {
     /// A warning from inside the phase, kept off the region's line.
     pub fn warn(&self, msg: &str) {
         match &self.pb {
-            Some(pb) => pb.suspend(|| eprintln!("  {} {msg}", yellow("⚠"))),
-            None => eprintln!("  {} {msg}", yellow("⚠")),
+            Some(pb) => pb.suspend(|| eprintln!("  {} {msg}", yellow(g_warn()))),
+            None => eprintln!("  {} {msg}", yellow(g_warn())),
         }
     }
 

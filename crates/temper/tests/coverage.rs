@@ -62,6 +62,12 @@ fn every_remediation_command_actually_parses() {
 #[test]
 fn no_output_glyph_renders_double_width() {
     // Emoji=Yes codepoints that are otherwise tempting as terminal glyphs.
+    // Status markers now come from `ui::g_*`, which switches on `[ui].icons` —
+    // so a literal glyph at a call site is itself the bug: it can't follow the
+    // setting. This list guards the Unicode set's *choices*; legibility (which
+    // is why `ⓘ` was rejected) is judgement no test can make, and is written
+    // down in ui.rs instead.
+    //
     // `⚠` is deliberately NOT in this list. It is emoji-covered too, but it is
     // the established warning glyph and renders acceptably in practice; the
     // observed breakage was `ℹ`, whose colour glyph is far more widely shipped.

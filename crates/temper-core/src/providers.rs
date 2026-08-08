@@ -322,14 +322,14 @@ fn run_child(mut cmd: Command, verbose: bool, what: &str, initial: &str) -> bool
     match run_with_spinner(cmd, what, initial) {
         Ok((true, _)) => true,
         Ok((false, log)) => {
-            eprintln!("{} {what} failed:", crate::ui::yellow("⚠"));
+            eprintln!("{} {what} failed:", crate::ui::yellow(crate::ui::g_warn()));
             if !log.is_empty() {
                 eprint!("{log}"); // replay what the capture swallowed
             }
             false
         }
         Err(e) => {
-            eprintln!("{} could not run {what}: {e:#}", crate::ui::yellow("⚠"));
+            eprintln!("{} could not run {what}: {e:#}", crate::ui::yellow(crate::ui::g_warn()));
             false
         }
     }
@@ -600,7 +600,7 @@ pub fn untrust_taps(taps: &[String]) -> Result<()> {
     if !cmd.status().map(|s| s.success()).unwrap_or(false) {
         eprintln!(
             "{} brew untrust failed — {} tap(s) may still be trusted",
-            crate::ui::yellow("⚠"),
+            crate::ui::yellow(crate::ui::g_warn()),
             taps.len()
         );
     }
@@ -774,7 +774,7 @@ pub fn prune_apply(effective: &[Pkg], extras: &[(Manager, String)]) -> Result<()
         if !cmd.status().map(|s| s.success()).unwrap_or(false) {
             eprintln!(
                 "{} flatpak uninstall failed — {} extra(s) may remain",
-                crate::ui::yellow("⚠"),
+                crate::ui::yellow(crate::ui::g_warn()),
                 flatpaks.len()
             );
         }
@@ -933,7 +933,7 @@ pub fn gext_converge(effective: &[String], dry_run: bool, verbose: bool) -> Resu
             pb.inc(1);
         }
         if !ok {
-            let warn = || eprintln!("{} gext install {uuid} failed — skipped", crate::ui::yellow("⚠"));
+            let warn = || eprintln!("{} gext install {uuid} failed — skipped", crate::ui::yellow(crate::ui::g_warn()));
             match &pb {
                 Some(pb) => pb.suspend(warn),
                 None => warn(),

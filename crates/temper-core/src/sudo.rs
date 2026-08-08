@@ -78,7 +78,7 @@ pub fn keep_alive() -> KeepAlive {
                 eprintln!(
                     "{} lost the cached password (sudo timestamp gone) — a later step \
                      may ask again",
-                    crate::ui::yellow("⚠")
+                    crate::ui::yellow(crate::ui::g_warn())
                 );
             }
             held |= ok;
@@ -158,7 +158,7 @@ pub fn acquire(work: &str) -> bool {
         eprintln!(
             "{} this run needs root but `sudo` is not installed, so it will fail when \
              it gets there: {work}",
-            crate::ui::yellow("⚠")
+            crate::ui::yellow(crate::ui::g_warn())
         );
         return false;
     }
@@ -173,14 +173,14 @@ pub fn acquire(work: &str) -> bool {
         eprintln!(
             "{} this run needs root and there is no terminal to ask on, so it will \
              fail when it gets there: {work}",
-            crate::ui::yellow("⚠")
+            crate::ui::yellow(crate::ui::g_warn())
         );
         return false;
     }
     // stderr, so `--json` stays pipe-clean.
     eprintln!(
         "{} this run needs your password for {work} — asking once, up front",
-        crate::ui::cyan("→")
+        crate::ui::cyan(crate::ui::g_arrow())
     );
     let answered = Command::new("sudo")
         .arg("-v")
@@ -191,7 +191,7 @@ pub fn acquire(work: &str) -> bool {
         eprintln!(
             "{} not authenticated — a step that needs root will ask again when it \
              gets there",
-            crate::ui::yellow("⚠")
+            crate::ui::yellow(crate::ui::g_warn())
         );
         return false;
     }
@@ -204,7 +204,7 @@ pub fn acquire(work: &str) -> bool {
         eprintln!(
             "{} the password was accepted but no credential was kept, so a step may \
              still prompt (see `timestamp_timeout` in sudoers)",
-            crate::ui::yellow("⚠")
+            crate::ui::yellow(crate::ui::g_warn())
         );
         return false;
     }

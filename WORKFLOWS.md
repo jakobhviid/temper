@@ -592,6 +592,27 @@ your shell's business, not temper's. Worth doing once — the verb list is long
 enough that completion is how you'll discover `snapshot-gnome` rather than
 guessing at `snapshot`.
 
+## Status markers
+
+temper draws `✓` / `✗` / `⚠` / `i` / `→` from a set that renders on any terminal.
+If your terminals run a patched font, opt into Nerd glyphs:
+
+```toml
+[ui]
+icons = "nerd"     # default "unicode"
+```
+
+`TEMPER_ICONS=nerd` (or `=unicode`) overrides it for one terminal — font coverage
+is a property of the terminal, not of the spec, so the manifest sets the fleet's
+norm and the environment handles the exception. The default stays `unicode`
+because Nerd glyphs are Private Use Area: an empty box on an unpatched font,
+which is a worse failure than a plain `✓`.
+
+Two glyphs are deliberately absent from the Unicode set. `ℹ` is in Unicode's
+emoji set, so a colour font renders it double-width — it swallows the following
+space and shifts every aligned column after it. The circled `ⓘ` avoids that but
+is illegible at terminal sizes. Hence the plain ASCII `i`.
+
 ## `--json` everywhere
 
 Every verb takes `--json` (machine output on stdout, progress/errors on stderr),

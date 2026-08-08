@@ -25,6 +25,9 @@ pub struct TemperToml {
     /// brew-specific settings.
     #[serde(default)]
     pub brew: BrewConfig,
+    /// Output glyph set. See `[ui]`.
+    #[serde(default)]
+    pub ui: UiConfig,
     /// Optional `eq-import` config: where to pull calibrated speaker profiles
     /// from and land them in the folder (RIS's `eq-import`).
     #[serde(default)]
@@ -143,6 +146,20 @@ pub enum UpdateMode {
     Prompt,
     /// Run the Homebrew upgrade without asking (unattended machines).
     Auto,
+}
+
+/// `[ui]` settings — how temper draws its status markers.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiConfig {
+    /// `"unicode"` (default) or `"nerd"`.
+    ///
+    /// Nerd glyphs are Private Use Area: crisp where a patched font is
+    /// installed, an empty box where it isn't. So the default stays the set that
+    /// renders anywhere, and `TEMPER_ICONS` overrides this per terminal — font
+    /// coverage belongs to the terminal, not to the spec.
+    #[serde(default)]
+    pub icons: Option<String>,
 }
 
 /// `[brew]` settings.

@@ -455,12 +455,12 @@ fn find_home_pulling() -> Result<std::path::PathBuf> {
             git::Pull::UpToDate | git::Pull::NotRepo => {}
             git::Pull::Updated(n) if !quiet => {
                 let s = if n == 1 { "commit" } else { "commits" };
-                println!("  {} spec updated ({n} {s})", ui::green("✓"));
+                println!("  {} spec updated ({n} {s})", ui::green(ui::g_ok()));
             }
             git::Pull::Updated(_) => {}
             git::Pull::Warn(w) => eprintln!(
                 "{} couldn't pull — working on a possibly-stale spec: {w}",
-                ui::yellow("⚠")
+                ui::yellow(ui::g_warn())
             ),
         }
     }
@@ -474,6 +474,9 @@ fn find_home_pulling() -> Result<std::path::PathBuf> {
 /// outdated — but the command carries on afterwards (it parsed, so it works).
 fn load_fleet(home: &std::path::Path) -> Result<manifest::TemperToml> {
     let ft = manifest::load_fleet(home)?;
+    // The glyph set is a manifest choice with a per-terminal override; set it as
+    // soon as the manifest is known, before any renderer draws a marker.
+    ui::set_icons(ft.ui.icons.as_deref());
     if let Ok(src) = std::fs::read_to_string(home.join("temper.toml")) {
         if let Some(stamp) = manifest::peek_version_stamp(&src) {
             let mode = manifest::peek_update_mode(&src);
@@ -500,7 +503,7 @@ fn handle_skew(
     let running = manifest::VERSION;
     eprintln!(
         "{} this temper-home was written by temper {} — you're running {running}.",
-        ui::yellow("⚠"),
+        ui::yellow(ui::g_warn()),
         ui::bold(required)
     );
     if let Some(pe) = parse_error {
@@ -531,7 +534,7 @@ fn handle_skew(
     if do_update {
         match self_update() {
             Ok(()) => reexec_after_update(), // replaces this process on success
-            Err(e) => eprintln!("{} self-update failed: {e:#}", ui::yellow("⚠")),
+            Err(e) => eprintln!("{} self-update failed: {e:#}", ui::yellow(ui::g_warn())),
         }
     }
 
@@ -539,7 +542,7 @@ fn handle_skew(
     if already_tried {
         eprintln!(
             "\n{} already updated once this run — temper {} may not be on Homebrew yet.",
-            ui::cyan("ⓘ"),
+            ui::cyan(ui::g_info()),
             required
         );
     } else if brew {
@@ -580,11 +583,11 @@ fn brew_on_path() -> bool {
 /// Homebrew's progress. `-y` skips Homebrew's newer confirmation prompt.
 fn self_update() -> Result<()> {
     use std::process::Command;
-    eprintln!("{} brew update …", ui::cyan("→"));
+    eprintln!("{} brew update …", ui::cyan(ui::g_arrow()));
     if !Command::new("brew").arg("update").status()?.success() {
         anyhow::bail!("`brew update` failed");
     }
-    eprintln!("{} brew upgrade temper …", ui::cyan("→"));
+    eprintln!("{} brew upgrade temper …", ui::cyan(ui::g_arrow()));
     if !Command::new("brew")
         .args(["upgrade", "temper", "-y"])
         .status()?
@@ -609,7 +612,7 @@ fn self_update() -> Result<()> {
 /// *is* the operation at that moment, not chatter about someone else's run, and
 /// capturing a bottle download would only turn it into dead air.
 fn reexec_after_update() {
-    eprintln!("{} updated — re-running…\n", ui::green("✓"));
+    eprintln!("{} updated — re-running…\n", ui::green(ui::g_ok()));
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -620,7 +623,7 @@ fn reexec_after_update() {
             .exec();
         eprintln!(
             "{} couldn't re-run automatically ({err}) — re-run your command.",
-            ui::yellow("⚠")
+            ui::yellow(ui::g_warn())
         );
     }
     #[cfg(not(unix))]
@@ -637,16 +640,16 @@ fn after_repo_change(home: &std::path::Path, gc: &manifest::GitConfig, auto_msg:
         match git::save(home, auto_msg, gc.auto_push, gc.auto_rebase) {
             Ok(r) => {
                 if r.committed {
-                    eprintln!("{} committed: {}", ui::green("✓"), r.message);
+                    eprintln!("{} committed: {}", ui::green(ui::g_ok()), r.message);
                 }
                 if r.pushed {
-                    eprintln!("{} pushed", ui::green("✓"));
+                    eprintln!("{} pushed", ui::green(ui::g_ok()));
                 }
                 if let Some(w) = r.warning {
-                    eprintln!("{} {w}", ui::yellow("⚠"));
+                    eprintln!("{} {w}", ui::yellow(ui::g_warn()));
                 }
             }
-            Err(e) => eprintln!("{} auto-commit failed: {e:#}", ui::yellow("⚠")),
+            Err(e) => eprintln!("{} auto-commit failed: {e:#}", ui::yellow(ui::g_warn())),
         }
     } else {
         remind_if_dirty(home, gc);
@@ -669,7 +672,7 @@ fn remind_if_dirty(home: &std::path::Path, gc: &manifest::GitConfig) {
         .unwrap_or_else(|| home.display().to_string());
     eprintln!(
         "{} {name} has uncommitted spec changes — {} to commit + push (or edit + commit yourself).",
-        ui::cyan("ⓘ"),
+        ui::cyan(ui::g_info()),
         ui::bold("temper save")
     );
 }
@@ -699,15 +702,15 @@ fn cmd_save(message: Option<String>, no_push: bool, json: bool) -> Result<()> {
         );
     } else {
         if r.committed {
-            println!("{} committed: {}", ui::green("✓"), r.message);
+            println!("{} committed: {}", ui::green(ui::g_ok()), r.message);
         } else {
             println!("nothing to commit — the folder is clean.");
         }
         if r.pushed {
-            println!("{} pushed", ui::green("✓"));
+            println!("{} pushed", ui::green(ui::g_ok()));
         }
         if let Some(w) = r.warning {
-            eprintln!("{} {w}", ui::yellow("⚠"));
+            eprintln!("{} {w}", ui::yellow(ui::g_warn()));
         }
     }
     Ok(())
@@ -760,14 +763,14 @@ fn cmd_refresh(rebase: bool, json: bool) -> Result<()> {
         match pulled {
             Some(0) | None => println!(
                 "{} {} is already current — nothing new in the spec.",
-                ui::green("✓"),
+                ui::green(ui::g_ok()),
                 home.display()
             ),
             Some(n) => {
                 let s = if n == 1 { "commit" } else { "commits" };
                 println!(
                     "{} refreshed {} ({n} {s})",
-                    ui::green("✓"),
+                    ui::green(ui::g_ok()),
                     home.display()
                 );
             }
@@ -775,7 +778,7 @@ fn cmd_refresh(rebase: bool, json: bool) -> Result<()> {
     } else if let Some(w) = warning {
         eprintln!(
             "{} couldn't refresh {}: {w}",
-            ui::yellow("⚠"),
+            ui::yellow(ui::g_warn()),
             home.display()
         );
     }
@@ -863,7 +866,7 @@ fn cmd_configure(action: ConfigureAction, json: bool) -> Result<()> {
             if json {
                 println!("{}", serde_json::json!({ "key": key, "value": display }));
             } else {
-                println!("{} {} = {}", ui::green("✓"), key, ui::bold(&display));
+                println!("{} {} = {}", ui::green(ui::g_ok()), key, ui::bold(&display));
             }
         }
         ConfigureAction::Get { key } => {
@@ -879,7 +882,7 @@ fn cmd_configure(action: ConfigureAction, json: bool) -> Result<()> {
             if json {
                 println!("{}", serde_json::json!({ "unset": key }));
             } else {
-                println!("{} unset {} (back to default)", ui::green("✓"), key);
+                println!("{} unset {} (back to default)", ui::green(ui::g_ok()), key);
             }
         }
         ConfigureAction::List => {
@@ -979,7 +982,7 @@ fn save_and_report(target: &std::path::Path, json: bool) -> Result<()> {
             serde_json::json!({ "home": target.display().to_string(), "pointer": pointer.display().to_string() })
         );
     } else {
-        println!("{} temper home set to {}", ui::green("✓"), target.display());
+        println!("{} temper home set to {}", ui::green(ui::g_ok()), target.display());
     }
     Ok(())
 }
@@ -1002,7 +1005,7 @@ fn cmd_eq_import(json: bool) -> Result<()> {
         );
     } else {
         for p in &paths {
-            println!("{} imported {}", ui::green("✓"), p);
+            println!("{} imported {}", ui::green(ui::g_ok()), p);
         }
         println!(
             "eq-import: {} profile(s) from {} → review, then run the `speaker-eq` step.",
@@ -1048,11 +1051,11 @@ fn cmd_install(
                 m.name, host_label, m.name, m.name
             );
             if yes {
-                eprintln!("{} {warn} (--yes)", ui::yellow("⚠"));
+                eprintln!("{} {warn} (--yes)", ui::yellow(ui::g_warn()));
             } else if json {
                 anyhow::bail!("{warn}; pass --yes to confirm");
             } else {
-                eprintln!("{} {warn}", ui::yellow("⚠"));
+                eprintln!("{} {warn}", ui::yellow(ui::g_warn()));
                 if !prompt_no("proceed anyway?") {
                     println!("aborted — nothing changed.");
                     return Ok(());
@@ -1267,7 +1270,7 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
             // which every `~/.config/…:key` target overran. `parts` keeps the
             // padding measured on plain text while each cell is still coloured.
             let cells = cols.parts(&[&f.target, &f.status, &format!("[{}]", f.kind)]);
-            let mut line = format!("    {} ", ui::red("✗"));
+            let mut line = format!("    {} ", ui::red(ui::g_bad()));
             for (i, (cell, pad)) in cells.iter().enumerate() {
                 line.push_str(&match i {
                     1 => ui::yellow(cell),
@@ -1306,7 +1309,7 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
         for n in &notices {
             println!(
                 "  {} {}",
-                ui::cyan("ⓘ"),
+                ui::cyan(ui::g_info()),
                 n.status.strip_prefix("notice — ").unwrap_or(&n.status)
             );
         }
@@ -1318,7 +1321,7 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
         }
         println!(
             "  {} {}",
-            ui::green(&format!("✓ {} app(s) in sync:", clean_apps.len())),
+            ui::green(&format!("{} {} app(s) in sync:", ui::g_ok(), clean_apps.len())),
             ui::dim(&clean_apps.join(", ")),
         );
     }
@@ -1338,7 +1341,7 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
             .collect();
         println!(
             "  {} {}",
-            ui::cyan("ⓘ status-only:"),
+            ui::cyan(&format!("{} status-only:", ui::g_info())),
             ui::dim(&labels.join(", "))
         );
     }
@@ -1359,7 +1362,7 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
     if out == 0 {
         println!(
             "  {} {}",
-            ui::green("✓ all in sync"),
+            ui::green(&format!("{} all in sync", ui::g_ok())),
             ui::dim(&format!(
                 "· {ok} checks · 0 out of sync · {so} status-only{notice_tail}"
             )),
@@ -1379,7 +1382,7 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
     if !rem.is_empty() {
         println!("\n{}", ui::bold("Next steps"));
         for r in &rem {
-            println!("  {} {}", ui::cyan("→"), r.label);
+            println!("  {} {}", ui::cyan(ui::g_arrow()), r.label);
             println!("    {}", ui::dim(&r.command));
         }
     }
@@ -1502,7 +1505,7 @@ fn cmd_init(name: Option<String>, role: Option<String>, yes: bool, json: bool) -
                 }
                 println!(
                     "{} no temper folder found.\n  {}",
-                    ui::yellow("⚠"),
+                    ui::yellow(ui::g_warn()),
                     ui::dim(&format!("would create {}/temper.toml", cwd.display()))
                 );
                 if !prompt_no("create it here?") {
@@ -1603,7 +1606,7 @@ fn cmd_init(name: Option<String>, role: Option<String>, yes: bool, json: bool) -
     if !json {
         println!(
             "\n{} scaffolded — seeding from this machine's current state…",
-            ui::green("✓")
+            ui::green(ui::g_ok())
         );
     }
     // The seed IS a reconcile: same planner, same writes, same journal, same
@@ -1657,7 +1660,7 @@ fn cmd_snapshot(machine: Option<String>, json: bool) -> Result<()> {
     } else {
         println!(
             "{} snapshot-gnome {}: captured {} subtree(s).",
-            ui::green("✓"),
+            ui::green(ui::g_ok()),
             m.name,
             paths.len()
         );
@@ -2021,7 +2024,7 @@ fn cmd_reconcile(
         }
         println!(
             "\n{} {}",
-            ui::yellow("⚠"),
+            ui::yellow(ui::g_warn()),
             ui::bold(&format!(
                 "{skipped_trust_count} tap-trust difference(s) NOT absorbed \
                  (fleet-scope — affects every machine):"
@@ -2037,12 +2040,12 @@ fn cmd_reconcile(
         }
         println!(
             "  {}",
-            ui::dim("→ temper reconcile                          decide each interactively")
+            ui::dim(&format!("{} temper reconcile                          decide each interactively", ui::g_arrow()))
         );
         if skip_trust_adds {
             println!(
                 "  {}",
-                ui::dim("→ temper reconcile --csw --include-trust    record the taps this machine trusts")
+                ui::dim(&format!("{} temper reconcile --csw --include-trust    record the taps this machine trusts", ui::g_arrow()))
             );
         }
     };
@@ -2082,7 +2085,7 @@ fn cmd_reconcile(
                 "  {} {}  {}",
                 ui::green("+"),
                 t,
-                ui::dim(&format!("→ {bf_label}"))
+                ui::dim(&format!("{} {bf_label}", ui::g_arrow()))
             );
         }
         for d in &chosen_drops {
@@ -2090,7 +2093,7 @@ fn cmd_reconcile(
                 "  {} {}  {}",
                 ui::red("-"),
                 d.trim(),
-                ui::dim(&format!("→ {bf_label}"))
+                ui::dim(&format!("{} {bf_label}", ui::g_arrow()))
             );
         }
         for name in &chosen_ignores {
@@ -2098,7 +2101,7 @@ fn cmd_reconcile(
                 "  {} flatpak {}  {}",
                 ui::yellow("~"),
                 name,
-                ui::dim("→ [ignore].flatpak in temper.toml")
+                ui::dim(&format!("{} [ignore].flatpak in temper.toml", ui::g_arrow()))
             );
         }
         for tap in &chosen_trust_adds {
@@ -2106,7 +2109,7 @@ fn cmd_reconcile(
                 "  {} trust {}  {}",
                 ui::green("+"),
                 tap,
-                ui::dim("→ [brew].trust in temper.toml")
+                ui::dim(&format!("{} [brew].trust in temper.toml", ui::g_arrow()))
             );
         }
         for tap in &chosen_trust_drops {
@@ -2114,7 +2117,7 @@ fn cmd_reconcile(
                 "  {} trust {}  {}",
                 ui::red("-"),
                 tap,
-                ui::dim("→ [brew].trust in temper.toml")
+                ui::dim(&format!("{} [brew].trust in temper.toml", ui::g_arrow()))
             );
         }
         for tap in &chosen_tap_ignores {
@@ -2122,7 +2125,7 @@ fn cmd_reconcile(
                 "  {} trust {}  {}",
                 ui::yellow("~"),
                 tap,
-                ui::dim("→ [ignore].tap in temper.toml")
+                ui::dim(&format!("{} [ignore].tap in temper.toml", ui::g_arrow()))
             );
         }
         for uuid in &chosen_gext {
@@ -2130,7 +2133,7 @@ fn cmd_reconcile(
                 "  {} extension {}  {}",
                 ui::green("+"),
                 uuid,
-                ui::dim("→ [[machine]].extensions in temper.toml")
+                ui::dim(&format!("{} [[machine]].extensions in temper.toml", ui::g_arrow()))
             );
         }
         // Grouped by section, because a flat list buries the thing you most need
@@ -2154,7 +2157,7 @@ fn cmd_reconcile(
                             mark,
                             verb,
                             dconf::key_id(&d.section, &d.key),
-                            ui::dim(&format!("→ {}", dp.file_rel))
+                            ui::dim(&format!("{} {}", ui::g_arrow(), dp.file_rel))
                         );
                     }
                     continue;
@@ -2171,7 +2174,7 @@ fn cmd_reconcile(
                     ui::yellow("~"),
                     ui::bold(label),
                     parts.join(", "),
-                    ui::dim(&format!("→ {}", dp.file_rel))
+                    ui::dim(&format!("{} {}", ui::g_arrow(), dp.file_rel))
                 );
             }
         }
@@ -2283,7 +2286,7 @@ fn cmd_reconcile(
     };
     println!(
         "{} reconcile {}: {} added, {} dropped, {} ignored{}.",
-        ui::green("✓"),
+        ui::green(ui::g_ok()),
         m.name,
         added,
         dropped,
@@ -2334,7 +2337,7 @@ fn cmd_restore(machine: Option<String>, yes: bool, dry_run: bool, json: bool) ->
                 ))
             );
             for snap in &m.dconf {
-                println!("  {} {}  {}", ui::cyan("→"), snap.path, ui::dim(&snap.file));
+                println!("  {} {}  {}", ui::cyan(ui::g_arrow()), snap.path, ui::dim(&snap.file));
             }
             println!(
                 "{}",
@@ -2359,12 +2362,12 @@ fn cmd_restore(machine: Option<String>, yes: bool, dry_run: bool, json: bool) ->
         } else if dry_run {
             println!("restore {} (dry run) — would load:", m.name);
             for (snap, p) in m.dconf.iter().zip(&paths) {
-                println!("  {} {}  {}", ui::cyan("→"), snap.path, ui::dim(p));
+                println!("  {} {}  {}", ui::cyan(ui::g_arrow()), snap.path, ui::dim(p));
             }
         } else {
             println!(
                 "{} restore {}: loaded {} snapshot(s).",
-                ui::green("✓"),
+                ui::green(ui::g_ok()),
                 m.name,
                 paths.len()
             );
