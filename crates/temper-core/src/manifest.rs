@@ -455,6 +455,21 @@ pub struct Assert {
     /// A deployed json file must be semantically equal to a reference.
     #[serde(default)]
     pub json_semantic: Option<JsonSemantic>,
+    /// `"drift"` (default) or `"notice"`.
+    ///
+    /// Some conditions an assertion watches are a *state*, not a defect: a
+    /// staged ostree deployment means an update is waiting for a reboot —
+    /// nothing is wrong, and calling it drift makes a converged machine look
+    /// broken and can never be cleared by any verb. A `notice` is reported for
+    /// visibility, kept out of the out-of-sync count, and never given a
+    /// remediation.
+    #[serde(default)]
+    pub severity: Option<String>,
+    /// Human text shown instead of the generic check result — say what to do
+    /// ("a system update is staged; reboot to apply") rather than restating the
+    /// predicate ("should not exist").
+    #[serde(default)]
+    pub message: Option<String>,
     #[serde(default)]
     pub os: Option<String>,
     /// Skip this assertion unless the machine's role matches.

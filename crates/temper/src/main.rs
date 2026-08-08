@@ -1289,7 +1289,28 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
         }
     }
 
-    let status_only: Vec<&plan::Finding> = items.iter().filter(|f| f.status_only()).collect();
+    // A `notice` is information the user should actually read ("reboot to apply
+    // the staged update"), so it gets its own visible line rather than being
+    // compressed into the terse status-only list with everything else.
+    let notices: Vec<&plan::Finding> = items
+        .iter()
+        .filter(|f| f.status.starts_with("notice"))
+        .collect();
+    let status_only: Vec<&plan::Finding> = items
+        .iter()
+        .filter(|f| f.status_only() && !f.status.starts_with("notice"))
+        .collect();
+
+    if !notices.is_empty() {
+        println!();
+        for n in &notices {
+            println!(
+                "  {} {}",
+                ui::cyan("ℹ"),
+                n.status.strip_prefix("notice — ").unwrap_or(&n.status)
+            );
+        }
+    }
 
     if !clean_apps.is_empty() {
         if drifted_groups > 0 {
@@ -1325,20 +1346,30 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
     // Footer — always carries the literal "<n> out of sync".
     let out = items.iter().filter(|f| !f.ok).count();
     let so = status_only.len();
-    let ok = items.len() - out - so;
+    let nt = notices.len();
+    let ok = items.len() - out - so - nt;
+    // Notices are counted, not just printed: a number that doesn't add up is its
+    // own small lie (Principle #6 — no silent caps).
+    let notice_tail = if nt > 0 {
+        format!(" · {nt} notice")
+    } else {
+        String::new()
+    };
     println!();
     if out == 0 {
         println!(
             "  {} {}",
             ui::green("✓ all in sync"),
-            ui::dim(&format!("· {ok} checks · 0 out of sync · {so} status-only")),
+            ui::dim(&format!(
+                "· {ok} checks · 0 out of sync · {so} status-only{notice_tail}"
+            )),
         );
     } else {
         println!(
             "  {} · {} · {}",
             ui::green(&format!("{ok} ok")),
             ui::red(&format!("{out} out of sync")),
-            ui::dim(&format!("{so} status-only")),
+            ui::dim(&format!("{so} status-only{notice_tail}")),
         );
     }
 

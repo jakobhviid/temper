@@ -112,6 +112,7 @@ impl Finding {
             || self.status.starts_with("unavailable") // incl. "unavailable — secret …"
             || self.status == "no drift-check"
             || self.status.starts_with("manual")
+            || self.status.starts_with("notice")
     }
 }
 
@@ -687,6 +688,21 @@ pub fn run_drift(
     }
     for (app, assert) in &resolved.asserts {
         let (ok, status) = drift::eval(home, assert)?;
+        // A `notice` assertion reports a STATE, not a defect. A failing one is
+        // still surfaced, but as information: it stays out of the out-of-sync
+        // count and gets no remediation, because there is nothing to fix — a
+        // staged system update is waiting for a reboot, not broken.
+        let notice = assert.severity.as_deref() == Some("notice");
+        let (ok, status) = match (notice, ok) {
+            (true, false) => (
+                true,
+                format!(
+                    "notice — {}",
+                    assert.message.as_deref().unwrap_or(status.as_str())
+                ),
+            ),
+            _ => (ok, status),
+        };
         findings.push(Finding {
             app: app.clone(),
             kind: drift::kind(assert),

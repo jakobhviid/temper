@@ -260,8 +260,14 @@ Reconcile writes to the machine's own list, never a bundle's — a bundle's
 install it fleet-wide off one machine's state.
 
 **A failed `[[assert]]`** has no verb at all: it reports a condition you resolve
-yourself — a staged ostree deployment clears on reboot, a group membership by
-logging out. `drift` says so instead of naming a command that cannot work.
+yourself — a group membership clears by logging out. `drift` says so instead of
+naming a command that cannot work.
+
+If the condition is *pending* rather than *wrong*, mark the assertion
+`severity = "notice"` and give it a `message`. It then reports as a cyan ℹ line
+and stays out of the out-of-sync count — because a staged system update means the
+machine is fine and waiting for a reboot, and a red ✗ that no `install` can ever
+clear is both wrong and unactionable.
 
 **Tap-trust drifted** (`[brew].trust`): a declared tap that isn't trusted
   (brew silently skips its formulae) → `temper install`/`update` re-trusts it;

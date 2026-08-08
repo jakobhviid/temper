@@ -336,6 +336,23 @@ group   = "root"                              # drift compares content+mode+owne
 [[assert]] contains_line = { file = "~/.zshrc", line = "source ~/.zshrc.image" }
 [[assert]] mode = { path = "/etc/x", mode = "0644" }       # octal file mode
 [[assert]] executable_resolves = "git"                     # on PATH
+
+# Any assertion may add:
+#   severity = "notice"   # default "drift". A NOTICE reports a STATE, not a
+#                         #   defect: it shows as a cyan ℹ line, stays OUT of the
+#                         #   out-of-sync count, and gets no remediation.
+#   message  = "…"        # human text shown instead of the generic result — say
+#                         #   what to do, not what the predicate was.
+#
+# Use it when a failing check means "something is pending", not "something is
+# wrong". A staged ostree deployment is the archetype: the machine matches the
+# spec, an update is simply waiting for a reboot, and no verb can clear it — so a
+# red ✗ that survives every `install` is both wrong and unactionable:
+#
+#   [[assert]]
+#   absent   = "/run/ostree/staged-deployment"
+#   severity = "notice"
+#   message  = "a system update is staged — reboot to apply it"
 [[assert]] not_member = { group = "onepassword" }          # user NOT in group
 [[assert]] shell = "/bin/zsh"                              # login shell name (matches by basename: /usr/bin/zsh ok)
 [[assert]] json_semantic = { file = "~/deployed.json", against = "reference.json" }  # against: relative to the temper-home
