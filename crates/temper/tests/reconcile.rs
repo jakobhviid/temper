@@ -42,7 +42,7 @@ fn reconcile_without_brewfile_skips_packages_instead_of_failing() {
         .arg("reconcile")
         .assert()
         .success()
-        .stdout(predicates::str::contains("already in sync"));
+        .stdout(predicates::str::contains("nothing for reconcile to absorb"));
 
     temper(home.path(), fake_home.path(), state.path())
         .args(["--json", "reconcile"])
@@ -74,7 +74,7 @@ fn reconcile_empty_set_is_in_sync() {
         .arg("reconcile")
         .assert()
         .success()
-        .stdout(predicates::str::contains("already in sync"));
+        .stdout(predicates::str::contains("nothing for reconcile to absorb"));
 
     // --json previews the (empty) plan without prompting.
     temper(home.path(), fake_home.path(), state.path())

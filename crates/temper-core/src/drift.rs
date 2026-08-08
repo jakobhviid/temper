@@ -34,6 +34,24 @@ pub fn kind(a: &Assert) -> &'static str {
     }
 }
 
+/// Whether a finding `kind` came from an `[[assert]]`.
+///
+/// Assertions are **drift-only**: they report a condition, and no verb converges
+/// them. Remediation has to know that, or it offers `install` for a staged
+/// ostree deployment that only a reboot clears.
+pub fn is_assert_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "absent"
+            | "contains-line"
+            | "mode"
+            | "executable-resolves"
+            | "not-member"
+            | "shell"
+            | "json-semantic"
+    )
+}
+
 /// The target the assertion is about (for reporting).
 pub fn target(a: &Assert) -> String {
     if let Some(p) = &a.absent {

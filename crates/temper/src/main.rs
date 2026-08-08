@@ -140,8 +140,12 @@ enum Cmd {
     /// Capture the machine's dconf subtree(s) into the folder.
     ///
     /// Each declared `[[machine.dconf]]` is dumped through its `strip` filter to
-    /// its file. Spec←machine and wholesale — the mirror of `restore`, and the
-    /// blunt sibling of a per-key `reconcile`. Journaled.
+    /// its file. Spec←machine and wholesale — the mirror of `restore-gnome`, and
+    /// the blunt sibling of a per-key `reconcile`. Journaled.
+    ///
+    /// **dconf only.** Packages and app config are not part of it: those are
+    /// `reconcile` and hand-authored recipes respectively.
+    #[command(name = "snapshot-gnome", alias = "snapshot")]
     Snapshot {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
@@ -188,8 +192,13 @@ enum Cmd {
     },
     /// Load dconf snapshot(s) back into live dconf (confirm-gated).
     ///
-    /// spec→machine. Clobbers live desktop tweaks, so it is never part of
-    /// `update`. Use after a reinstall, or to reset the desktop to the snapshot.
+    /// spec→machine, the mirror of `snapshot-gnome`. Clobbers live desktop
+    /// tweaks, so it is never part of `update`. Use after a reinstall, or to
+    /// reset the desktop to the captured state.
+    ///
+    /// **dconf only.** It restores nothing else — packages come back with
+    /// `install`.
+    #[command(name = "restore-gnome", alias = "restore")]
     Restore {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
@@ -1096,8 +1105,17 @@ fn cmd_install(
                 r.steps_total, r.steps_changed
             )
         } else {
+            // "ran" is reported apart from "changed": a checkless `exec` ran and
+            // temper cannot observe whether it did anything, so folding it into
+            // `changed` would claim an effect nobody measured — and would stop a
+            // converged machine ever reporting zero.
+            let ran = if r.steps_ran > 0 {
+                format!(", {} ran (no drift-check)", r.steps_ran)
+            } else {
+                String::new()
+            };
             format!(
-                "applied {} config step(s), {} changed",
+                "applied {} config step(s), {} changed{ran}",
                 r.steps_total, r.steps_changed
             )
         };
@@ -1363,7 +1381,7 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
                 "{}",
                 serde_json::json!({
                     "machine": m.name, "extras": arr, "untrust": prune_plan.untrust,
-                    "removed": removed
+                    "extensions": prune_plan.extensions, "removed": removed
                 })
             );
             return Ok(());
@@ -1391,6 +1409,9 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
         }
         for tap in &prune_plan.untrust {
             println!("  - untrust {tap}");
+        }
+        for uuid in &prune_plan.extensions {
+            println!("  - uninstall extension {uuid}");
         }
         if prune_plan.is_empty() {
             println!("prune {}: nothing to remove.", m.name);
@@ -1588,7 +1609,7 @@ fn cmd_snapshot(machine: Option<String>, json: bool) -> Result<()> {
             );
         } else {
             println!(
-                "snapshot {}: no `[[machine.dconf]]` declared for this machine.",
+                "snapshot-gnome {}: no `[[machine.dconf]]` declared for this machine.",
                 m.name
             );
         }
@@ -1604,17 +1625,23 @@ fn cmd_snapshot(machine: Option<String>, json: bool) -> Result<()> {
         );
     } else {
         println!(
-            "{} snapshot {}: captured {} subtree(s).",
+            "{} snapshot-gnome {}: captured {} subtree(s).",
             ui::green("✓"),
             m.name,
             paths.len()
+        );
+        // Scope, said out loud: "captured 2 subtrees" invited "…so I'm done",
+        // and a leftover drift report then read as this verb having failed.
+        println!(
+            "{}",
+            ui::dim("  dconf only — packages and app config are not part of a snapshot.")
         );
         for p in &paths {
             println!("  → {p}");
         }
     }
     let gc = manifest::effective_git(&ft.git, &m.git);
-    let msg = format!("snapshot {}: {} dconf subtree(s)", m.name, paths.len());
+    let msg = format!("snapshot-gnome {}: {} dconf subtree(s)", m.name, paths.len());
     after_repo_change(&home, &gc, &msg);
     Ok(())
 }
@@ -1736,9 +1763,28 @@ fn cmd_reconcile(
         && plan.dconf.is_empty()
     {
         println!(
-            "reconcile {}: already in sync — nothing to absorb or drop.",
+            "reconcile {}: nothing for reconcile to absorb or drop.",
             m.name
         );
+        // `reconcile` covers packages, tap-trust and desktop keys. Undeclared
+        // GNOME extensions are real drift it deliberately cannot touch (they
+        // live in a shared bundle), so saying "in sync" here read as flatly
+        // contradicting `drift`.
+        let extras = providers::gext_extras(
+            &providers::effective_extensions(&home, &m).unwrap_or_default(),
+            &ft.ignore,
+        );
+        if !extras.is_empty() {
+            println!(
+                "{}",
+                ui::dim(&format!(
+                    "  note: {} GNOME extension(s) are installed but undeclared — reconcile \
+                     can't absorb those (they belong to a shared bundle).\n  \
+                     Declare them, add them to [ignore].gext, or `temper prune` to remove them.",
+                    extras.len()
+                ))
+            );
+        }
         return Ok(());
     }
 

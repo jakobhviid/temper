@@ -12,7 +12,7 @@ use anyhow::{bail, Result};
 
 use crate::journal::Journal;
 use crate::manifest::{self, expand_tilde, Assert, Ignore, Machine, Step};
-use crate::primitives::{self, CopyOpts, ExecOpts, FileState};
+use crate::primitives::{self, Applied, CopyOpts, ExecOpts, FileState};
 use crate::{drift, packages, probe, providers};
 
 /// Everything a machine composes, OS-gated to this host.
@@ -355,7 +355,7 @@ fn apply_one(
     journal: &mut Journal,
     verbose: bool,
     cl: &crate::ui::Checklist,
-) -> Result<bool> {
+) -> Result<Applied> {
     if step.exec.is_some() {
         return cl.suspend(|| {
             // The script, not the whole aligned row: this is a subordinate detail
@@ -459,6 +459,12 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
                 "extension-extra",
             ]
             .contains(&f.kind)
+            // Assertions are drift-ONLY checks, never a converge action (see
+            // `drift.rs`): `install` structurally cannot satisfy one. A staged
+            // ostree deployment clears on reboot, a group membership by logging
+            // out — offering `install` sent people to re-run a converge that was
+            // never going to help.
+            && !drift::is_assert_kind(f.kind)
     });
 
     let mut out = Vec::new();
@@ -474,6 +480,13 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
             &mut out,
             "install declared packages that are missing",
             "temper install --packages-only",
+        );
+    }
+    if drifted(&["extension-extra"]) {
+        push(
+            &mut out,
+            "uninstall the GNOME extensions not in the spec (asks first)",
+            "temper prune",
         );
     }
     if extra_pkg || trust_extra {
@@ -518,11 +531,22 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
             "temper snapshot",
         );
     }
+    // A failed assertion has no command: it reports a condition you resolve
+    // yourself (reboot, log out, edit a file temper doesn't own). Saying so is
+    // better than silence AND better than naming a verb that can't work.
+    if items.iter().any(|f| !f.ok && drift::is_assert_kind(f.kind)) {
+        push(
+            &mut out,
+            "an assertion failed — resolve it yourself (no verb applies); \
+             re-run drift to confirm",
+            "temper drift",
+        );
+    }
     // Config drift: re-apply, or revert the last run.
     if config_drift {
         push(
             &mut out,
-            "re-apply configuration to fix the drift above",
+            "re-apply the drifted config steps above (copy/block/setkey/sysfile/exec)",
             "temper install",
         );
         push(
@@ -769,21 +793,26 @@ fn apply_step(
     vars: &BTreeMap<String, String>,
     journal: &mut Journal,
     verbose: bool,
-) -> Result<bool> {
+) -> Result<Applied> {
     if let (Some(copy), Some(to)) = (&step.copy, &step.to) {
-        return primitives::copy_apply(
+        let changed = primitives::copy_apply(
             &home.join(copy),
             &expand_tilde(to),
             &copy_opts(step, vars),
             journal,
-        );
+        )?;
+        return Ok(Applied::from_changed(changed));
     }
     if let (Some(block), Some(in_file)) = (&step.block, &step.in_file) {
         let marker = step.marker.as_deref().unwrap_or("block");
-        return primitives::block_apply(&home.join(block), &expand_tilde(in_file), marker, journal);
+        let changed =
+            primitives::block_apply(&home.join(block), &expand_tilde(in_file), marker, journal)?;
+        return Ok(Applied::from_changed(changed));
     }
     if let Some(sk) = &step.setkey {
-        return primitives::setkey_apply(sk, vars, journal);
+        return Ok(Applied::from_changed(primitives::setkey_apply(
+            sk, vars, journal,
+        )?));
     }
     if let Some(exec) = &step.exec {
         let opts = exec_opts(home, machine, step);
@@ -791,14 +820,17 @@ fn apply_step(
         return primitives::exec_apply(&home.join(exec), check.as_deref(), &opts, verbose);
     }
     if let Some(profile) = &step.profile {
-        return primitives::profile_apply(&home.join(profile));
+        return Ok(Applied::from_changed(primitives::profile_apply(
+            &home.join(profile),
+        )?));
     }
     if let (Some(sysfile), Some(to)) = (&step.sysfile, &step.to) {
-        return primitives::sysfile_apply(
+        let changed = primitives::sysfile_apply(
             &home.join(sysfile),
             &expand_tilde(to),
             &sysfile_opts(step),
-        );
+        )?;
+        return Ok(Applied::from_changed(changed));
     }
     bail!("step names no known primitive (copy / block / setkey / exec / profile / sysfile)")
 }
@@ -850,6 +882,9 @@ pub struct InstallReport {
     /// `None` on flows that don't upgrade (`install`, `install-missing`).
     pub upgraded: Option<usize>,
     pub steps_changed: usize,
+    /// Steps that RAN but whose effect temper can't observe (a checkless
+    /// `exec`). Reported apart from `steps_changed`, which is a measured claim.
+    pub steps_ran: usize,
     pub steps_total: usize,
     /// A layered rpm was added and the machine needs a reboot.
     pub reboot: bool,
@@ -924,6 +959,7 @@ pub fn run_install(
             packages,
             upgraded: None, // `install-missing` adds, never upgrades
             steps_changed: 0,
+            steps_ran: 0,
             steps_total: 0,
             reboot,
             skipped: Vec::new(),
@@ -932,7 +968,7 @@ pub fn run_install(
 
     // Phase 2 — config steps (`resolved` was needed above, for the root ask).
     let mut journal = Journal::begin();
-    let (mut changed, mut total) = (0usize, 0usize);
+    let (mut changed, mut total, mut ran) = (0usize, 0usize, 0usize);
     let mut skipped = Vec::new();
     // Candidates are known before any of them runs, so the phase has an honest
     // denominator. A dry-run reports rather than applies — no live region for it.
@@ -987,13 +1023,21 @@ pub fn run_install(
                 verbose,
                 &cl,
             )?;
-            if did {
-                changed += 1;
-                // The elapsed time accounts for a pause the reader just sat through
-                // (and is dropped for the quick ones).
-                cl.done_after(&label, started.elapsed());
-            } else {
-                cl.unchanged();
+            match did {
+                Applied::Changed => {
+                    changed += 1;
+                    // The elapsed time accounts for a pause the reader just sat
+                    // through (and is dropped for the quick ones).
+                    cl.done_after(&label, started.elapsed());
+                }
+                // A checkless `exec` ran, and temper cannot tell whether it did
+                // anything — say "ran", never "changed", and keep it out of the
+                // changed count so a converged machine can report zero.
+                Applied::Ran => {
+                    ran += 1;
+                    cl.done_after(&format!("{label}  (ran; no drift-check)"), started.elapsed());
+                }
+                Applied::Unchanged => cl.unchanged(),
             }
         }
     }
@@ -1005,6 +1049,7 @@ pub fn run_install(
         packages,
         upgraded: None, // `install` converges the declared set; `update` upgrades
         steps_changed: changed,
+        steps_ran: ran,
         steps_total: total,
         reboot,
         skipped,
@@ -1019,11 +1064,15 @@ pub struct PrunePlan {
     pub packages: Vec<(packages::Manager, String)>,
     /// Taps to `brew untrust` — the prune counterpart of a `trust-extra`.
     pub untrust: Vec<String>,
+    /// User-scope GNOME extensions to uninstall — the prune counterpart of an
+    /// `extension-extra`. Without this, gext extras were the one drift no verb
+    /// could clear: reported forever, with only a hand edit to answer them.
+    pub extensions: Vec<String>,
 }
 
 impl PrunePlan {
     pub fn is_empty(&self) -> bool {
-        self.packages.is_empty() && self.untrust.is_empty()
+        self.packages.is_empty() && self.untrust.is_empty() && self.extensions.is_empty()
     }
     pub fn len(&self) -> usize {
         self.packages.len() + self.untrust.len()
@@ -1074,7 +1123,14 @@ pub fn run_prune(
         }
     }
     untrust.sort();
-    Ok(PrunePlan { packages, untrust })
+    // User-scope extensions no bundle declares — the same set drift reports as
+    // `extension-extra`, so what drift names is exactly what prune offers.
+    let extensions = providers::gext_extras(&providers::effective_extensions(home, machine)?, ignore);
+    Ok(PrunePlan {
+        packages,
+        untrust,
+        extensions,
+    })
 }
 
 /// Apply a prune: uninstall the packages and `brew untrust` the taps.
@@ -1093,6 +1149,9 @@ pub fn commit_prune(home: &Path, machine: &Machine, plan: &PrunePlan) -> Result<
     }
     if !plan.untrust.is_empty() {
         providers::untrust_taps(&plan.untrust)?;
+    }
+    if !plan.extensions.is_empty() {
+        providers::gext_uninstall(&plan.extensions)?;
     }
     Ok(())
 }
@@ -1196,7 +1255,7 @@ pub fn run_update(
     }
 
     let mut journal = Journal::begin();
-    let (mut changed, mut total) = (0usize, 0usize);
+    let (mut changed, mut total, mut ran) = (0usize, 0usize, 0usize);
     let mut skipped = Vec::new();
     // `always` + `ensure` are what an update re-applies; `ensure` is filtered
     // again inside the loop (it needs a probe), so this is an upper bound — the
@@ -1247,11 +1306,16 @@ pub fn run_update(
             verbose,
             &cl,
         )?;
-        if did {
-            changed += 1;
-            cl.done_after(&label, started.elapsed());
-        } else {
-            cl.unchanged();
+        match did {
+            Applied::Changed => {
+                changed += 1;
+                cl.done_after(&label, started.elapsed());
+            }
+            Applied::Ran => {
+                ran += 1;
+                cl.done_after(&format!("{label}  (ran; no drift-check)"), started.elapsed());
+            }
+            Applied::Unchanged => cl.unchanged(),
         }
     }
     cl.finish();
@@ -1260,6 +1324,7 @@ pub fn run_update(
         packages: effective.len(),
         upgraded,
         steps_changed: changed,
+        steps_ran: ran,
         steps_total: total,
         reboot: false,
         skipped,

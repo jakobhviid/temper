@@ -584,15 +584,39 @@ pub fn exec_check(check: &Path, opts: &ExecOpts) -> Result<bool> {
 /// near-silent, so an idempotent script's chatter never masquerades as temper's
 /// own verdict. `verbose` streams the script live; otherwise its output is
 /// captured and surfaced only on failure, so an error is still debuggable.
+/// What running a step actually did, as far as temper can **observe**.
+///
+/// The third case exists because a checkless `exec` has no drift story: temper
+/// ran it, and genuinely cannot say whether anything changed. Counting that as
+/// "changed" claims an effect temper never measured (Principle #6b) and means a
+/// converged machine never reports zero — every `install` looked like it did
+/// work it may not have done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Applied {
+    Unchanged,
+    Changed,
+    Ran,
+}
+
+impl Applied {
+    pub fn from_changed(changed: bool) -> Applied {
+        if changed {
+            Applied::Changed
+        } else {
+            Applied::Unchanged
+        }
+    }
+}
+
 pub fn exec_apply(
     script: &Path,
     check: Option<&Path>,
     opts: &ExecOpts,
     verbose: bool,
-) -> Result<bool> {
+) -> Result<Applied> {
     if let Some(check) = check {
         if exec_check(check, opts)? {
-            return Ok(false);
+            return Ok(Applied::Unchanged);
         }
     }
     let mut cmd = exec_command(script, opts)?;
@@ -619,7 +643,13 @@ pub fn exec_apply(
             bail!("exec {} failed ({})", script.display(), out.status);
         }
     }
-    Ok(true)
+    // A hook told us the step was not yet done, so completing it IS a change.
+    // Without one, all temper knows is that the script ran.
+    Ok(if check.is_some() {
+        Applied::Changed
+    } else {
+        Applied::Ran
+    })
 }
 
 /// Drift state for an `exec` step: uses the `check` hook if present, else

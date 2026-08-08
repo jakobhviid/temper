@@ -39,6 +39,40 @@ fn home_with_snapshot(home: &Path) {
     .unwrap();
 }
 
+/// The dconf verbs are named for the DESKTOP (`snapshot-gnome`), not the
+/// mechanism, because a future KDE/macOS equivalent won't be dconf at all. The
+/// old bare names stay working as hidden aliases — they are everyday muscle
+/// memory, and renaming a verb should never be the thing that breaks someone's
+/// afternoon.
+#[test]
+fn the_old_bare_verb_names_still_work() {
+    let home = TempDir::new().unwrap();
+    let fake_home = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    home_with_snapshot(home.path());
+
+    for (old, new) in [("snapshot", "snapshot-gnome"), ("restore", "restore-gnome")] {
+        temper(home.path(), fake_home.path(), state.path())
+            .args([old, "--help"])
+            .assert()
+            .success();
+        temper(home.path(), fake_home.path(), state.path())
+            .args([new, "--help"])
+            .assert()
+            .success();
+    }
+    // …and the new names are the ones advertised.
+    let assert = temper(home.path(), fake_home.path(), state.path())
+        .arg("--help")
+        .assert()
+        .success();
+    let help = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(help.contains("snapshot-gnome"), "{help}");
+    assert!(help.contains("restore-gnome"), "{help}");
+    // `reconcile` is untouched — it is not a dconf verb.
+    assert!(help.contains("reconcile"), "{help}");
+}
+
 #[test]
 fn dump_is_gone_and_init_replaces_it() {
     let home = TempDir::new().unwrap();

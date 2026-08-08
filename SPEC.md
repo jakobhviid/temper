@@ -73,7 +73,12 @@ brewfile = "brewfiles/chronos"   # optional; a Brewfile whose lines join the set
 [machine.vars]              # optional; per-machine vars, merged OVER [vars]
 BREW_PREFIX = "/home/linuxbrew/.linuxbrew"   # e.g. override a Mac-valued global
 
-[[machine.dconf]]           # optional; whole-desktop dconf snapshots (Linux)
+[[machine.dconf]]           # optional; whole-desktop dconf snapshots (Linux).
+                            #   Captured by `snapshot-gnome`, applied by `restore-gnome`:
+                            #   the verbs are named for the DESKTOP because a future KDE or
+                            #   macOS equivalent won't be dconf at all (KDE uses INI files,
+                            #   macOS `defaults`), while this field is named for the
+                            #   MECHANISM it actually reads.
 path  = "/org/gnome/shell/"                 # subtree to dump/load (trailing /)
 file  = "assets/gnome/shell.chronos.dconf"  # snapshot writes here; restore reads
 strip = ["monitors/", "last-selected"]      # drop these key substrings — applied to
@@ -99,14 +104,14 @@ doesn't help that either — those keys live at the root wherever you root it.
 Drift on a snapshot is key-level and reported in the same vocabulary as
 packages: `missing` (in the file, not on the machine), `extra` (on the machine,
 not captured), `changed` (both, differing), plus `never captured` when the file
-doesn't exist yet. `reconcile` absorbs per section/key (spec←machine); `restore` pushes the file
+doesn't exist yet. `reconcile` absorbs per section/key (spec←machine); `restore-gnome` pushes the file
 back out (spec→machine). Both directions are named in drift's Next steps.
 
 > **`missing` means "at the schema default", not "unset".** dconf stores only
 > non-default values, so a key absent from a dump is one the machine holds at its
 > default — itself a value. Absorbing such a key therefore *removes* it from the
 > snapshot, which is exactly right after you deliberately reset something and
-> re-tuned a few keys, and exactly wrong on a machine where `restore` has never
+> re-tuned a few keys, and exactly wrong on a machine where `restore-gnome` has never
 > run (there, the key is not "reset" — it was simply never applied). temper
 > cannot tell those apart; you can. Interactive `reconcile` defaults to keeping
 > it, and `--current-state-wins` groups removals by section in the preview so a

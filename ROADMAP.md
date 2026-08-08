@@ -22,14 +22,14 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 bundle os/role gating, presence-gating `when`/`needs`, forgiving `mas`, the
 `sysfile` primitive, comment-preserving `setkey(toml)`, journaled+undoable
 `setkey(dconf)`, discovery auto-scan + `temper setup`, key-level dconf drift +
-per-section reconcile, a journaled `restore`, `reconcile --current-state-wins`,
+per-section reconcile, a journaled `restore-gnome`, `reconcile --current-state-wins`,
 and `temper init`.)*
 
 **Deliberately not journaled** (a decision, not a gap): `setkey(defaults)` —
 `defaults read` loses the value's type, so an undo couldn't rewrite it faithfully
 — and `sysfile`/`exec`, which mutate root-owned/arbitrary state. dconf *is*
 journaled (values round-trip cleanly) — per key for `setkey(dconf)`, and per
-subtree for `restore`.
+subtree for `restore-gnome`.
 
 ---
 
@@ -45,7 +45,7 @@ coloured output with a **"Next steps"** summary that names both directions out o
 the drift with exact commands (`plan::remediations`; the RIS four-branch package
 fork + a config `install`/`undo` line, also in `--json`); `reconcile` is the
 interactive spec←machine verb; `install --packages-only` is install-missing; the
-filtered dconf `snapshot` + confirm-gated `restore` pair is built (with dconf
+filtered `snapshot-gnome` + confirm-gated `restore-gnome` pair is built (with dconf
 drift and per-section reconcile on top, and a journaled restore); and
 `eq-import` pulls calibrated speaker profiles into the folder (folder-authoring,
 the labelled Principle-#9 exception).

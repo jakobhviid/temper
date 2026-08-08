@@ -869,6 +869,33 @@ pub fn gext_missing(effective: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Uninstall user-scope extensions via `gext` — the prune side of gext, so an
+/// `extension-extra` has a command instead of only a hand edit. Best-effort per
+/// UUID (one failure must not strand the rest), and loud about any that failed.
+pub fn gext_uninstall(uuids: &[String]) -> Result<()> {
+    if uuids.is_empty() {
+        return Ok(());
+    }
+    if !have("gext") {
+        bail!("gext not found — cannot uninstall GNOME extensions on this host");
+    }
+    let mut failed = Vec::new();
+    for uuid in uuids {
+        let ok = Command::new("gext")
+            .args(["uninstall", uuid])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            failed.push(uuid.clone());
+        }
+    }
+    if !failed.is_empty() {
+        bail!("could not uninstall: {}", failed.join(", "));
+    }
+    Ok(())
+}
+
 /// Install missing extensions via `gext`. VM-verified.
 ///
 /// One spinner for the whole phase with a counter (the `mas` shape): extensions
