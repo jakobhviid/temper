@@ -571,6 +571,17 @@ by logging out. `drift` says so rather than naming a command that cannot work.
 | A machine that isn't in the folder yet | spec←machine | `init` (once) |
 | Undo the last change | — | `undo` |
 
+## Shell completions
+
+```sh
+temper completions zsh  > "${fpath[1]}/_temper"   # or bash / fish / elvish / powershell
+```
+
+Prints a completion script for the named shell to stdout; where it belongs is
+your shell's business, not temper's. Worth doing once — the verb list is long
+enough that completion is how you'll discover `snapshot-gnome` rather than
+guessing at `snapshot`.
+
 ## `--json` everywhere
 
 Every verb takes `--json` (machine output on stdout, progress/errors on stderr),
