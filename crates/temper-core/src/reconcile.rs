@@ -65,6 +65,9 @@ pub struct ReconcilePlan {
     /// Taps in `[brew].trust` that aren't currently trusted — candidates to drop
     /// from `[brew].trust`. (Keeping one instead is the `install`/`update` fix.)
     pub trust_drops: Vec<String>,
+    /// User-installed GNOME extensions no bundle or machine declares —
+    /// candidates to absorb into THIS machine's own `extensions` list.
+    pub gext_adds: Vec<String>,
     /// Per-snapshot desktop-key candidates (empty off a dconf host). Absorbing
     /// is spec←machine only — pushing a key back OUT is `restore`'s direction,
     /// which drift names separately.
@@ -108,6 +111,10 @@ pub fn plan(
             drops: Vec::new(),
             trust_adds: Vec::new(),
             trust_drops: Vec::new(),
+            gext_adds: providers::gext_extras(
+                &providers::effective_extensions(home, machine)?,
+                ignore,
+            ),
             dconf: dconf_plans(home, machine)?,
         });
     };
@@ -230,6 +237,10 @@ pub fn plan(
         drops,
         trust_adds,
         trust_drops,
+        gext_adds: providers::gext_extras(
+            &providers::effective_extensions(home, machine)?,
+            ignore,
+        ),
         dconf: dconf_plans(home, machine)?,
     })
 }
@@ -462,6 +473,42 @@ pub fn append_machine(
     t["brewfile"] = toml_edit::value(brewfile);
     t["apps"] = toml_edit::Item::Value(toml_edit::Value::Array(toml_edit::Array::new()));
     arr.push(t);
+    Ok(doc.to_string())
+}
+
+/// Append a GNOME extension UUID to a machine's own `extensions` list,
+/// preserving comments + formatting. Idempotent.
+///
+/// Machine-scoped on purpose: a bundle's `extensions` is *shared*, so absorbing
+/// there would install the extension on every machine composing that bundle.
+/// This is the same containment rule that keeps package absorbs in the machine's
+/// own Brewfile.
+pub fn append_machine_extension(temper_toml: &str, machine: &str, uuid: &str) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = temper_toml
+        .parse()
+        .context("parsing temper.toml for the extension edit")?;
+    let arr = doc
+        .as_table_mut()
+        .entry("machine")
+        .or_insert(toml_edit::Item::ArrayOfTables(
+            toml_edit::ArrayOfTables::new(),
+        ))
+        .as_array_of_tables_mut()
+        .ok_or_else(|| anyhow!("[[machine]] in temper.toml is not an array of tables"))?;
+    let t = arr
+        .iter_mut()
+        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some(machine))
+        .ok_or_else(|| anyhow!("temper.toml declares no machine named '{machine}'"))?;
+    let list = t
+        .entry("extensions")
+        .or_insert(toml_edit::Item::Value(toml_edit::Value::Array(
+            toml_edit::Array::new(),
+        )))
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("[[machine]].extensions is not an array"))?;
+    if !list.iter().any(|v| v.as_str() == Some(uuid)) {
+        list.push(uuid);
+    }
     Ok(doc.to_string())
 }
 

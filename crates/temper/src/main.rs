@@ -1819,6 +1819,7 @@ fn cmd_reconcile(
     let mut chosen_trust_drops: Vec<String> = Vec::new();
     let mut chosen_tap_ignores: Vec<String> = Vec::new();
     let mut chosen_dconf: Vec<(usize, Vec<dconf::KeyDiff>)> = Vec::new();
+    let mut chosen_gext: Vec<String> = Vec::new();
 
     if csw {
         // Machine-scope only. `[ignore]` routing is a judgement, not a state, so
@@ -1826,6 +1827,9 @@ fn cmd_reconcile(
         // needs --include-trust (and is reported below either way).
         chosen_drops = plan.drops.clone();
         chosen_adds = plan.adds.iter().map(|a| a.token.clone()).collect();
+        // Machine-scoped, so `--csw` may take these: they land in this machine's
+        // own `extensions`, never in a shared bundle.
+        chosen_gext = plan.gext_adds.clone();
         if include_trust {
             // Adds only — see the note above on why a drop is never automatic.
             chosen_trust_adds = plan.trust_adds.clone();
@@ -1893,7 +1897,27 @@ fn cmd_reconcile(
             }
         }
 
-        // Desktop keys → per SECTION, because that is the unit dconf itself defines.
+            // Installed GNOME extensions no bundle or machine declares → add to THIS
+        // machine's `extensions` (default SKIP, like every other extra).
+        if !plan.gext_adds.is_empty() {
+            println!(
+                "\n{}",
+                ui::bold("Installed GNOME extensions not in the spec:")
+            );
+            println!(
+                "{}",
+                ui::dim(
+                    "  adding one declares it for THIS machine only — a bundle's list is shared."
+                )
+            );
+            for uuid in &plan.gext_adds {
+                if prompt_no(&format!("  add `{uuid}`?")) {
+                    chosen_gext.push(uuid.clone());
+                }
+            }
+        }
+
+    // Desktop keys → per SECTION, because that is the unit dconf itself defines.
         // For a snapshot rooted at a narrow subtree (`…/shell/extensions/`) each
         // section is one extension, so this is a per-extension ask without temper
         // knowing what an extension is. A one-key section (`enabled-extensions`) is
@@ -1999,6 +2023,7 @@ fn cmd_reconcile(
         && chosen_trust_drops.is_empty()
         && chosen_tap_ignores.is_empty()
         && chosen_dconf.is_empty()
+        && chosen_gext.is_empty()
     {
         if json {
             println!(
@@ -2067,6 +2092,14 @@ fn cmd_reconcile(
                 ui::yellow("~"),
                 tap,
                 ui::dim("→ [ignore].tap in temper.toml")
+            );
+        }
+        for uuid in &chosen_gext {
+            println!(
+                "  {} extension {}  {}",
+                ui::green("+"),
+                uuid,
+                ui::dim("→ [[machine]].extensions in temper.toml")
             );
         }
         // Grouped by section, because a flat list buries the thing you most need
@@ -2159,7 +2192,8 @@ fn cmd_reconcile(
     let tt_edits = !chosen_ignores.is_empty()
         || !chosen_trust_adds.is_empty()
         || !chosen_trust_drops.is_empty()
-        || !chosen_tap_ignores.is_empty();
+        || !chosen_tap_ignores.is_empty()
+        || !chosen_gext.is_empty();
     if tt_edits {
         let tt_path = home.join("temper.toml");
         let before_tt = std::fs::read_to_string(&tt_path)?;
@@ -2176,6 +2210,9 @@ fn cmd_reconcile(
         for tap in &chosen_tap_ignores {
             tt = reconcile::append_ignore(&tt, "tap", tap)?;
         }
+        for uuid in &chosen_gext {
+            tt = reconcile::append_machine_extension(&tt, &m.name, uuid)?;
+        }
         // Stamp the temper that wrote this file, so a skew is later distinguishable
         // from a genuine parse error (monotonic — never lowers a newer stamp).
         tt = manifest::stamp_version(&tt)?;
@@ -2186,7 +2223,7 @@ fn cmd_reconcile(
     }
     jrnl.commit()?;
     let keys: usize = chosen_dconf.iter().map(|(_, p)| p.len()).sum();
-    let added = chosen_adds.len() + chosen_trust_adds.len();
+    let added = chosen_adds.len() + chosen_trust_adds.len() + chosen_gext.len();
     let dropped = chosen_drops.len() + chosen_trust_drops.len();
     let ignored = chosen_ignores.len() + chosen_tap_ignores.len();
     if json {

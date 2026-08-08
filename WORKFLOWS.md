@@ -249,11 +249,15 @@ of the drift. You pick a direction and run what it prints:
   - absorb spec←machine: `temper reconcile` (interactively add/drop).
     or `temper reconcile --csw` to take the machine's state for every item
     at once (see §5).
-- **GNOME extensions installed but not declared:** `temper prune` uninstalls them
-(asks first), or declare them in a bundle's `extensions`, or silence them with
-`[ignore].gext`. `reconcile` deliberately won't absorb one — `extensions` lives
-in a *shared* bundle, and adopting it on one machine's behalf would change every
-machine that composes it.
+- **GNOME extensions installed but not declared:** three answers, like packages —
+`temper reconcile` declares it for **this machine** (its own `extensions` list),
+`temper prune` uninstalls it (asks first), or `[ignore].gext` silences it. Note
+that not-enabled is not not-wanted: an extension disabled in GNOME is still
+installed, and declaring it just means a rebuild puts it back.
+
+Reconcile writes to the machine's own list, never a bundle's — a bundle's
+`extensions` is shared by every machine composing it, so absorbing there would
+install it fleet-wide off one machine's state.
 
 **A failed `[[assert]]`** has no verb at all: it reports a condition you resolve
 yourself — a staged ostree deployment clears on reboot, a group membership by
@@ -549,7 +553,7 @@ which is why it has verbs of its own.
 |---|---|---|
 | app config (`copy`/`block`/`setkey`/`sysfile`) | `install` / `update` | you author it by hand |
 | packages (brew, cask, tap, flatpak, mas, vscode, rpm) | `install` (remove: `prune`) | `reconcile`, or `reconcile --csw` |
-| GNOME extensions (`gext`) | `install` (remove: `prune`) | hand edit, or `[ignore].gext` |
+| GNOME extensions (`gext`) | `install` (remove: `prune`) | `reconcile` (per machine), or `[ignore].gext` |
 | desktop dconf subtrees | `restore-gnome` | `snapshot-gnome`, or `reconcile` per key |
 | assertions (`[[assert]]`) | nothing — drift-only, you resolve the condition | n/a |
 

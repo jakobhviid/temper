@@ -801,6 +801,12 @@ pub fn effective_extensions(home: &Path, machine: &Machine) -> Result<Vec<String
             }
         }
     }
+    // The machine's own list, unioned last — same rule `packages` uses.
+    for uuid in &machine.extensions {
+        if seen.insert(uuid.clone()) {
+            out.push(uuid.clone());
+        }
+    }
     Ok(out)
 }
 
@@ -1218,6 +1224,7 @@ mod gating_tests {
             role: Some(role.into()),
             apps: apps.iter().map(|s| s.to_string()).collect(),
             packages: vec![],
+            extensions: Vec::new(),
             brewfile: None,
             vars: Default::default(),
             dconf: vec![],

@@ -191,6 +191,15 @@ pub struct Machine {
     /// Per-machine loose packages that belong to no app-bundle.
     #[serde(default)]
     pub packages: Vec<String>,
+    /// Per-machine GNOME extensions, unioned with the composed bundles'.
+    ///
+    /// The machine-scoped counterpart of a bundle's `extensions`, mirroring how
+    /// `packages` gives a machine somewhere of its own. Without it an extension
+    /// could only be declared in a *shared* bundle, so `reconcile` had nowhere
+    /// to write one and an undeclared extension's only answers were "ignore it"
+    /// or "uninstall it" — never "yes, on this machine".
+    #[serde(default)]
+    pub extensions: Vec<String>,
     /// A Brewfile (relative to the temper-home) whose lines are added to this
     /// machine's package set — the clean way to migrate an existing Brewfile.
     #[serde(default)]
@@ -762,6 +771,7 @@ mod tests {
             role: None,
             apps: vec![],
             packages: vec![],
+            extensions: Vec::new(),
             brewfile: None,
             vars: vars
                 .iter()
@@ -865,6 +875,7 @@ mod tests {
             role: role.map(String::from),
             apps: vec![],
             packages: vec![],
+            extensions: Vec::new(),
             brewfile: None,
             vars: Default::default(),
             dconf: vec![],

@@ -68,6 +68,11 @@ os       = "mac"            # required; "mac" | "linux"
 role     = "desktop"        # optional; "desktop" | "server"
 apps     = ["shell", "ssh"] # bundle names in apps/
 packages = ["cask \"raycast\""]  # optional loose Brewfile-grammar tokens
+extensions = ["tilingshell@ferrarodomenico.com"]  # optional; GNOME extensions for THIS
+                            #   machine, unioned with the composed bundles' lists. The
+                            #   machine-scoped counterpart of a bundle's `extensions` —
+                            #   `reconcile` absorbs an undeclared extension here, because
+                            #   a bundle's list is shared by every machine composing it.
 brewfile = "brewfiles/chronos"   # optional; a Brewfile whose lines join the set
 
 [machine.vars]              # optional; per-machine vars, merged OVER [vars]

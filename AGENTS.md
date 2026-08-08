@@ -96,3 +96,45 @@ isolated git config before pushing, or a local setting can hide a CI failure —
 `GIT_CONFIG_GLOBAL=/dev/null cargo test --workspace`. A machine whose
 `init.defaultBranch` is `main` will pass tests that assume the branch name and fail
 on a stock git, which cost a published release once.
+
+## Adding a feature: walk the matrix before you call it done
+
+temper's model is a matrix — *kind of state* × *direction* × *verb* — and its
+recurring defect has been shipping one cell of it: a **report with no way to
+act** (gext extras were reported a release before `prune` could remove them), or
+a **direction with nowhere to write** (an extension could only be declared in a
+shared bundle, so `reconcile` had nothing to absorb into). Both shipped green;
+both were found by a user, not by a test.
+
+So when you touch any kind of state, answer all of these in writing before
+pushing:
+
+1. **Can it drift both ways?** installed-but-undeclared *and*
+   declared-but-absent. If only one is reported, say why in a comment.
+2. **Does each direction name a verb that exists?** Machine→spec and spec←machine.
+   "It's a hand edit" is a legitimate answer only after checking that no verb
+   *could* do it.
+3. **What SCOPE does absorbing it write to?** Anything absorbed from one
+   machine's live state must land somewhere that belongs to **that machine** — its
+   own Brewfile, its own `[[machine]]` block, its own snapshot file. A shared
+   bundle and fleet config (`[brew].trust`, `[ignore]`) are both off-limits by
+   default: writing either from one box silently changes every other. If it must
+   be fleet-scope, make it an explicit opt-in flag and *report* what you skipped.
+   (`--include-trust` deleted a tap the rest of the fleet needed, because this
+   question got answered "it's symmetric" instead of "whose file is it?".)
+4. **Does the spec-writing path fire `after_repo_change`?** A verb that writes the
+   folder and skips it leaves a git-backed home silently dirty — `init` did,
+   because it delegated to a `reconcile` that returned early.
+5. **Does its output survive `--json`, and agree with `drift`?** Any new
+   human-facing line needs a `!json` guard (one stray `println!` makes stdout
+   unparseable — Principle #6b), and any "nothing to do" message must not
+   contradict what `drift` reports in the same breath. `reconcile` claimed
+   "already in sync" while drift listed six findings.
+6. **Is the new `Finding.kind` in `KIND_ANSWERS`?** The coverage test fails
+   otherwise — which is the point. Reaching for `NoVerb` is the moment to ask
+   whether the verb simply hasn't been built.
+
+`plan::KIND_ANSWERS` makes 5 mechanical, and a CLI test asserts every command a
+remediation names is a real verb (drift once told users to run `temper snapshot`
+for a whole release after that verb was renamed). The rest are judgement, which
+is why they are written down here.

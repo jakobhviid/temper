@@ -411,6 +411,79 @@ fn step_columns(rows: &[(String, &'static str)]) -> crate::ui::Columns {
     crate::ui::Columns::measure(&cells, 4, &[18, 0, 0], 2)
 }
 
+/// What resolves a finding of a given `kind`.
+///
+/// This registry exists because the recurring defect in this tool has been
+/// shipping a *report* with no way to act on it: gext extras were reported for a
+/// release before `prune` could remove them, and drift kept naming `temper
+/// snapshot` for a release after that verb was renamed. Both are the same
+/// mistake — a cell in the (state × direction × verb) matrix that nobody
+/// visited. Declaring the answer here makes the omission a failing test instead
+/// of something a user discovers.
+///
+/// A kind with no entry fails `every_emitted_kind_is_registered`. Writing
+/// `NoVerb` is deliberately awkward: if you find yourself reaching for it, ask
+/// first whether the verb simply hasn't been built yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer {
+    /// A command that resolves it. Checked against the real CLI verb list.
+    Verb(&'static str),
+    /// Nothing temper runs resolves it, with the reason shown to the user.
+    NoVerb(&'static str),
+}
+
+/// Every `Finding.kind` temper emits, and what answers it.
+pub const KIND_ANSWERS: &[(&str, &[Answer])] = &[
+    // App-scope config: re-applied by a converge.
+    ("copy", &[Answer::Verb("temper install")]),
+    ("block", &[Answer::Verb("temper install")]),
+    ("setkey", &[Answer::Verb("temper install")]),
+    ("sysfile", &[Answer::Verb("temper install")]),
+    ("exec", &[Answer::Verb("temper install")]),
+    ("profile", &[Answer::NoVerb("a macOS profile is a manual System-Settings install")]),
+    // Presence gates: reported for visibility.
+    ("when", &[Answer::NoVerb("the step's app is absent — status only")]),
+    ("needs", &[Answer::NoVerb("install the hard dependency the step names")]),
+    // Packages: the four-branch fork.
+    ("package", &[Answer::Verb("temper install --packages-only")]),
+    ("package-extra", &[Answer::Verb("temper prune"), Answer::Verb("temper reconcile")]),
+    ("rpm", &[Answer::Verb("temper install --packages-only")]),
+    ("trust", &[Answer::Verb("temper install --packages-only")]),
+    ("trust-extra", &[Answer::Verb("temper prune"), Answer::Verb("temper reconcile")]),
+    // GNOME extensions: both directions, since 3.2.
+    ("extension", &[Answer::Verb("temper install --packages-only")]),
+    ("extension-extra", &[Answer::Verb("temper prune"), Answer::Verb("temper reconcile")]),
+    // Desktop dconf.
+    ("dconf-key", &[Answer::Verb("temper restore-gnome"), Answer::Verb("temper reconcile")]),
+    ("dconf-extra", &[Answer::Verb("temper reconcile"), Answer::Verb("temper snapshot-gnome")]),
+    ("dconf-uncaptured", &[Answer::Verb("temper snapshot-gnome")]),
+    // Assertions are drift-only by definition: they report a condition.
+    ("absent", &[Answer::NoVerb("resolve the condition yourself")]),
+    ("contains-line", &[Answer::NoVerb("resolve the condition yourself")]),
+    ("mode", &[Answer::NoVerb("resolve the condition yourself")]),
+    ("executable-resolves", &[Answer::NoVerb("resolve the condition yourself")]),
+    ("not-member", &[Answer::NoVerb("resolve the condition yourself")]),
+    ("shell", &[Answer::NoVerb("resolve the condition yourself")]),
+    ("json-semantic", &[Answer::NoVerb("resolve the condition yourself")]),
+    ("unknown", &[Answer::NoVerb("an unrecognised assertion — fix the bundle")]),
+];
+
+/// Every distinct command any answer names — the set a CLI-side test checks
+/// really exists, so a verb rename can never leave drift teaching a dead name.
+pub fn answer_commands() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = KIND_ANSWERS
+        .iter()
+        .flat_map(|(_, a)| a.iter())
+        .filter_map(|a| match a {
+            Answer::Verb(c) => Some(*c),
+            Answer::NoVerb(_) => None,
+        })
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
 /// A suggested next command to resolve drift — the "what to run next" hand-off
 /// RIS emits at the moment of detection. Each is a human label + the exact,
 /// copy-pasteable invocation.
@@ -487,6 +560,13 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
             &mut out,
             "uninstall the GNOME extensions not in the spec (asks first)",
             "temper prune",
+        );
+        // The third branch, which only exists since a machine gained its own
+        // `extensions` list: "yes, I want it — on this machine".
+        push(
+            &mut out,
+            "declare them for this machine instead (per extension)",
+            "temper reconcile",
         );
     }
     if extra_pkg || trust_extra {
@@ -1364,6 +1444,108 @@ mod remediation_tests {
         // Seeding a machine is `init`'s job, never a drift remedy — offering it
         // here would tell you to re-seed a spec you already have.
         assert!(!cmds.iter().any(|c| c.contains("dump") || c.contains("init")));
+    }
+
+    /// The registry must cover every kind the source actually emits. This is the
+    /// check that would have caught gext extras shipping with no way to act on
+    /// them: adding a `kind` without an answer now fails here.
+    #[test]
+    fn every_emitted_kind_is_registered() {
+        let plan_src = include_str!("plan.rs");
+        let drift_src = include_str!("drift.rs");
+        let mut emitted: Vec<String> = Vec::new();
+        // `kind: "…"` literals and the `Finding::state(app, "…")` helper.
+        for src in [plan_src, drift_src] {
+            for pat in ["kind: \"", "Finding::state(app, \""] {
+                // `match_indices` yields char-boundary byte offsets, and the
+                // patterns are ASCII — slicing by hand tripped over a `…` in a
+                // nearby string literal.
+                for (i, _) in src.match_indices(pat) {
+                    let tail = &src[i + pat.len()..];
+                    if let Some(end) = tail.find('"') {
+                        let k = &tail[..end];
+                        // A real kind is lowercase-and-hyphens; this skips the
+                        // prose in comments that describes the pattern itself.
+                        if !k.is_empty()
+                            && k.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+                        {
+                            emitted.push(k.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        // Kinds the scrape structurally cannot see, listed explicitly rather than
+        // by making the pattern-matching cleverer (which would rot):
+        //   - assertion kinds come from `drift::kind`, which returns bare literals;
+        //   - the dconf pair is chosen by a conditional, not a `kind: "…"` literal.
+        for k in [
+            "dconf-key",
+            "dconf-extra",
+            "absent",
+            "contains-line",
+            "mode",
+            "executable-resolves",
+            "not-member",
+            "shell",
+            "json-semantic",
+            "unknown",
+        ] {
+            emitted.push(k.to_string());
+        }
+        emitted.sort();
+        emitted.dedup();
+        for k in &emitted {
+            assert!(
+                KIND_ANSWERS.iter().any(|(kind, _)| kind == k),
+                "finding kind `{k}` has no entry in KIND_ANSWERS — say what resolves \
+                 it (or that nothing does) before shipping the report"
+            );
+        }
+        // …and the reverse: an entry for a kind nothing emits is dead config that
+        // will quietly stop matching reality.
+        for (kind, _) in KIND_ANSWERS {
+            assert!(
+                emitted.iter().any(|k| k == kind),
+                "KIND_ANSWERS lists `{kind}`, which nothing emits any more — delete it"
+            );
+        }
+        assert!(emitted.len() >= 15, "kind scrape found too few: {emitted:?}");
+        // Honest limit: this reads the source for literal `kind: "…"`, so a kind
+        // built from a variable or const is invisible to it. That has not
+        // happened yet; if it does, the fix is to make `kind` a closed enum and
+        // let the compiler enforce this instead of a scrape.
+    }
+
+    /// Every kind the registry answers with a verb must actually produce that
+    /// command from `remediations`. Catches an answer that was declared but
+    /// never wired, and one whose wiring drifted from its declaration.
+    #[test]
+    fn registered_verbs_are_actually_emitted() {
+        for (kind, answers) in KIND_ANSWERS {
+            let wanted: Vec<&str> = answers
+                .iter()
+                .filter_map(|a| match a {
+                    Answer::Verb(c) => Some(*c),
+                    Answer::NoVerb(_) => None,
+                })
+                .collect();
+            if wanted.is_empty() {
+                continue;
+            }
+            let items = vec![f(kind, false)];
+            let got: Vec<String> = remediations(&items)
+                .iter()
+                .map(|r| r.command.clone())
+                .collect();
+            for w in wanted {
+                assert!(
+                    got.contains(&w.to_string()),
+                    "kind `{kind}` claims `{w}` resolves it, but drift never offers \
+                     that command (got {got:?})"
+                );
+            }
+        }
     }
 
     #[test]

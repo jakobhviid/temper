@@ -92,6 +92,7 @@ mod tests {
             role: role.map(String::from),
             apps: vec![],
             packages: vec![],
+            extensions: Vec::new(),
             brewfile: None,
             vars: Default::default(),
             dconf: vec![],
