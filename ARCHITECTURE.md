@@ -265,13 +265,17 @@ is known *before* the converge — temper computes what is missing in order to
 install it — and every provider's uninstall is its own install backwards. `gext`
 and `rpm-ostree` now journal what they installed, and `undo` removes exactly that.
 
-What is genuinely not revertible is an **upgrade**: reverting one means pinning a
-prior version whose bottle or commit may be gone, and a revert that silently
-installs "some earlier version" is worse than one that says it cannot. So only
-new installs are recorded, and `undo` reports the difference. brew, flatpak, mas
-and vscode still show ❌ because they are not wired yet, not because they can't
-be — and per AGENTS.md question 7 that limit belongs in the plan preview, before
-the user confirms.
+The one genuinely unrevertible operation is an **upgrade** — reverting one means
+pinning a prior version whose bottle or commit may be gone — and that belongs to
+exactly two providers, because `update` only ever upgrades **brew** and
+**flatpak**. temper never runs `rpm-ostree upgrade`: on an atomic host the OS
+owns that, layered packages come along with the deployment, and temper only ever
+layers or un-layers. `gext` likewise only installs. So for those two the revert
+story is unconditional.
+
+brew, flatpak, mas and vscode still show ❌ for column 10 because they are not
+wired yet, not because they can't be. Per AGENTS.md question 7, whatever remains
+unrevertible belongs in the plan preview, before the user confirms.
 - **col 4, `dconf`** — `restore` is excluded from `install`/`update`, which is a
   symptom of the recording model, not a property of the store (see below).
 - **col 4, `profile`** — its apply is a GUI dialog a human must approve, so it

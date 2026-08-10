@@ -28,8 +28,10 @@ a *verified* gap, not a suspicion.
    what they added, so `undo` removes it. brew, flatpak, mas and vscode do not —
    the same pattern applies (the missing set is known before the converge, and
    each provider's uninstall is its own install backwards), it is simply unwired.
-   An **upgrade** stays out of scope by design: reverting one means pinning a
-   prior version whose bottle or commit may be gone.
+   An **upgrade** stays out of scope by design, and it only exists for brew and
+   flatpak — `update` upgrades those two and nothing else. temper never runs
+   `rpm-ostree upgrade`; on an atomic host the OS owns that and layered packages
+   ride the deployment.
    Still open either way: AGENTS.md question 7 asks that non-revertibility be
    visible in the plan preview, before the user confirms. No code answers that.
 2. **`flatpak` remotes are unmanaged.** There is no `flatpak remote-add` and no

@@ -82,10 +82,12 @@ enum Entry {
     /// in order to install it. So it was never that packages *could not* be
     /// journaled — nobody had written down why they weren't.
     ///
-    /// An **upgrade** is deliberately not recorded. Reverting one means pinning
-    /// a prior version, and the old bottle or commit may simply be gone; a
-    /// revert that silently installs "some earlier version" is worse than one
-    /// that says it cannot. `undo` reports the difference rather than guessing.
+    /// An **upgrade** is deliberately not recorded — reverting one means pinning
+    /// a prior version whose bottle or commit may be gone. That applies to brew
+    /// and flatpak only, the two things `update` upgrades. temper never runs
+    /// `rpm-ostree upgrade` (the OS owns image updates, and layered packages ride
+    /// the deployment) and never upgrades extensions, so for those the revert is
+    /// unconditional.
     PackagesInstalled {
         /// The provider name from `interface::PROVIDERS`.
         provider: String,
