@@ -278,7 +278,7 @@ pattern.
 cannot be journaled" was repeated until someone asked why: the set temper installs
 is known *before* the converge — temper computes what is missing in order to
 install it — and every provider's uninstall is its own install backwards. `gext`
-and `rpm-ostree` now journal what they installed, and `undo` removes exactly that.
+and `rpm-ostree` journal what they installed, and `undo` removes exactly that.
 
 The one genuinely unrevertible operation is an **upgrade** — reverting one means
 pinning a prior version whose bottle or commit may be gone — and that belongs to
@@ -540,8 +540,8 @@ app-bundles it wants. Drift at app scope is per-file / per-key / per-assertion.
    `gnome-extensions`, `rpm-ostree`, and the settings stores. Adding one is
    neither a big deal nor free — it is **routine**, because it answers the
    eleven-column interface above rather than inventing its own verb set. This
-   tier used to be filed under (1), which is why each provider decided its own
-   verbs and each got it wrong differently (Principle #1).
+   Filing this tier under (1) is what let each provider decide its own verbs,
+   and get it wrong in its own way (Principle #1).
 3. **App-bundles — open set, user config (no code).** A named, ordered list of
    primitive steps, each OS/role-gated. Where ghostty and 1Password live. "The
    next ghostty clone" is a new *config file you write*, never a tool release.

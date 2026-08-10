@@ -42,8 +42,9 @@ Neither direction is obviously the right one to change:
   a fleet-behaviour decision, not a cleanup.
 
 Until it is decided, the honest state is recorded rather than papered over:
-`interface.rs` scores flatpak `prune` and `revertible` as **No** with the reason,
-and `prune` already reports the system-scope apps it declined to touch. The
+`interface.rs` scores flatpak `revertible` as **No** with the reason. `prune`
+stays **Yes** — it removes the user-scope apps and *reports* the system-scope
+ones it declined, which is a real path with an honest answer. The
 remote provider is settled by contrast — remotes are **observed in both**
 installations (so a declared remote the image provides is not permanently
 missing, and no duplicate user copy is added) and **written to the user** one,
@@ -55,7 +56,7 @@ the case that matters.)*
 
 **The provider trait is half built.** `interface.rs` records each provider's
 eleven answers as data and cross-checks them against the finding registry, so a
-claimed capability with nothing behind it now fails a test. What remains is
+claimed capability with nothing behind it fails a test. What remains is
 dispatch: the providers still have bespoke function signatures, so `install`,
 `prune` and the reconcile pair are wired per provider rather than driven from the
 table. Harmonising them is what makes adding `apt` or `npm` routine.
@@ -155,7 +156,7 @@ in the feature matrix.
 Fixed blind, and portably, rather than left for the hardware: `sudo install -D`
 (GNU-only, so every `sysfile` step failed on macOS — and the error propagated
 before `journal.commit()`, discarding the run's undo record), `getent` in
-`gid_of` (absent on macOS; now falls back to `dscl`), and the `defaults` numeric
+`gid_of` (absent on macOS — it falls back to `dscl`), and the `defaults` numeric
 comparison (`48` vs `48.0` drifted forever).
 
 ## Verification gap (a state, not a feature)

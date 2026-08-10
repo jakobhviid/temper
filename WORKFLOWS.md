@@ -258,10 +258,22 @@ of the drift. You pick a direction and run what it prints:
     or `temper reconcile --csw` to take the machine's state for every item
     at once (see §5).
 - **GNOME extensions installed but not declared:** three answers, like packages —
-`temper reconcile` declares it for **this machine** (its own `gnome_extensions` list),
-`temper prune` uninstalls it (asks first), or `[ignore].gext` silences it. Note
-that not-enabled is not not-wanted: an extension disabled in GNOME is still
-installed, and declaring it just means a rebuild puts it back.
+`temper reconcile` declares it for **this machine** (its own `gnome_extensions`
+list), `temper prune` uninstalls it (asks first), or
+`[ignore].gnome_extensions` silences it.
+- **A GNOME extension is installed but switched off:** that is a state the
+declaration carries, so it drifts. A bare uuid means *installed and enabled*, so
+a switched-off one reports `gnome-extension-enable` and `install` turns it on.
+If you switched it off on purpose, say so and the drift goes away without your
+desktop changing:
+
+```toml
+gnome_extensions = [{ uuid = "CoverflowAltTab@palatis.blogspot.com", enabled = false }]
+```
+
+temper asserts only the uuids it declares, by `enable`/`disable`, and never
+rewrites `enabled-extensions` wholesale — so extensions the image ships and the
+spec says nothing about are left alone.
 - **A machine-scope package declared but not installed:** `temper install
 --packages-only` puts it back, or `temper reconcile` drops it — from the
 machine's Brewfile *or* its loose `packages` list, whichever declared it. A
@@ -472,11 +484,85 @@ not treated as a corrupt journal.
 Each item is named as it goes — `✓ <path>` for a revert, and a skip says **why**
 (`changed since temper wrote it`, `gone since temper wrote it`), because that is
 the thing you need before deciding what to do next. `--dry-run` lists the same
-items as `· would revert <path>` and touches nothing. Likewise `install
---dry-run` now names the steps behind its count (`· would apply zsh  copy
-~/.zshrc`) instead of only totalling them.
+items as `· would revert <path>` and touches nothing. `install --dry-run` names
+the steps behind its count the same way (`· would apply zsh  copy ~/.zshrc`),
+and lists any change `undo` would not be able to revert.
 
-## 8. Pull calibrated speaker profiles
+## 8. Retire something across the fleet
+
+**When:** a config file, or a package, must be *gone* — not merely undeclared.
+
+Not declaring something and declaring you don't want it are different. An
+undeclared package is an **extra**: silent until `prune`, and re-absorbable by
+`reconcile --csw`. A retired one is **drift**, every run, until it is gone.
+
+```toml
+[[machine]]                       # …or a bundle, for a group
+retire = ["~/.config/old-app"]    # paths that must not exist
+retire_packages = ['brew "old"']  # packages that must not be installed
+```
+
+`drift` reports each as `retired-present` / `retired-package`, and `temper prune`
+enacts them with the confirm every destructive thing gets — a directory as
+readily as a file, escalating only if the unprivileged removal is refused.
+`[ignore]` does **not** silence a retirement: ignoring is "don't tell me",
+retiring is "get rid of it".
+
+```sh
+temper retired      # every tombstone, and whether it is still doing work
+```
+
+Nothing expires on a date. A date would mean two machines on the same commit
+behaving differently, and a box offline past it skipping the retirement
+silently — so tombstones are **reviewed** instead, oldest first, with `temper
+retired`. Delete the entry once the fleet is clean.
+
+Files temper itself deployed usually need no tombstone at all: it records what
+it wrote, so dropping a `copy`/`sysfile`/`block` step makes the file *residue*,
+which `drift` reports and `prune` removes — provided it is still byte-identical
+to what temper left. Edit it and temper reports it instead, and never deletes
+your work. `retire` covers what that structurally cannot: files deployed before
+the ledger existed, and things temper never put there.
+
+## 9. Declare where flatpaks come from
+
+**When:** an app comes from a remote the machine may not have.
+
+```toml
+[[machine]]
+flatpak_remotes = ["vendor https://example.com/vendor.flatpakrepo"]
+```
+
+The **name** is the identity and the url is what drifts, so a remote configured
+under a different url is reported and re-pointed rather than reported forever.
+Remotes are added *before* the packages that come from them, for the same reason
+tap-trust runs before brew. Remotes are read from **both** installations — one
+the image provides already satisfies a declaration — and written to, and removed
+from, your **user** one, which is the only one temper may touch.
+
+## 10. Per-machine versions of the fleet lists
+
+**When:** you want something on one box only.
+
+Every category exists at both scopes, because "on this machine only" is an
+ordinary thing to want. Declared in a bundle, a thing belongs to the group and
+`reconcile` will never edit it from one machine; declared on the machine, that
+machine's `reconcile` owns both directions.
+
+```toml
+[[machine]]
+brew_trust  = ["me/personal-tap"]   # unioned with the fleet [brew].trust
+rpm_ostree  = ["proton-vpn"]        # unioned with its bundles' lists
+[machine.ignore]
+flatpak = ["org.example.JustHere"]  # unioned with the fleet [ignore]
+```
+
+The fleet forms stay what they are: a group decision, changed by editing the
+shared spec and committing — after which every machine's `prune` enacts it. That
+is why `reconcile --csw` refuses to absorb them from one box, and reports what it
+skipped instead of quietly widening its remit.
+
+## 11. Pull calibrated speaker profiles
 
 **When:** the upstream speaker-EQ repo has new profiles (needs `[eq_import]`).
 
@@ -591,6 +677,11 @@ which is why it has verbs of its own.
 | packages (brew, cask, tap, flatpak, mas, vscode, rpm) | `install` (remove: `prune`) | `reconcile`, or `reconcile --csw` |
 | GNOME extensions | `install` (remove: `prune`) | `reconcile` — both directions, on this machine's own list — or `[ignore].gnome_extensions` |
 | desktop dconf subtrees | `restore-dconf` | `snapshot-dconf`, or `reconcile` per key |
+| flatpak remotes | `install` (remove: `prune`) | `reconcile` — machine scope |
+| rpm-ostree layered packages | `install` (remove: `prune`, which stages a deployment) | `reconcile` — machine scope |
+| brew tap-trust | `install` / `update` (remove: `prune`) | `reconcile` — the fleet list needs `--include-trust` |
+| deployed-file residue | n/a — it is what a *dropped* step left | `prune` removes it if untouched, reports it if you edited it |
+| retirements (`retire`, `retire_packages`) | `prune` enacts them | you author them by hand; `temper retired` reviews them |
 | assertions (`[[assert]]`) | nothing — drift-only, you resolve the condition | n/a |
 
 So `snapshot-dconf` captures the **dconf** row and nothing else; a leftover finding
@@ -611,6 +702,8 @@ so rather than naming a command that cannot work.
 | Spec to match the machine (everything) | spec←machine | `reconcile --csw` |
 | Desktop captured into the spec (wholesale) | spec←machine | `snapshot-dconf` |
 | Desktop reset to the snapshot | spec→machine | `restore-dconf` |
+| A file a dropped step left behind | machine→spec | `prune` |
+| Something gone for good, everywhere | machine→spec | `retire` / `retire_packages`, then `prune` |
 | A machine that isn't in the folder yet | spec←machine | `init` (once) |
 | Undo the last change | — | `undo` |
 

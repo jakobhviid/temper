@@ -20,10 +20,9 @@
   it implements the eleven-column interface (#13) rather than inventing its own
   verb set. `apt`, `dnf`, `npm`, `cargo` should each be a normal piece of work.
 
-The middle tier is the one that used to be missing. Listing the providers among
-the primitives is what made each of them feel like a bespoke decision — and every
-provider built that way decided its own verb set, differently, and got it wrong
-in its own way.
+The middle tier is what keeps a provider from being a bespoke decision. Listed
+among the primitives, each one feels like a release-sized judgement call, and a
+provider treated that way decides its own verb set — differently every time.
 
 ## 2. Steps stay declarative, idempotent, independently drift-checkable — with one named exception
 
