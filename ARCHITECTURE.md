@@ -346,13 +346,16 @@ So retirement is two mechanisms, not one:
   It is hash-guarded exactly as `undo` is: remove it if it is unmodified since
   temper deployed it, **report** it if you have edited it. Most retirements then
   need no tombstone at all.
-- **An explicit tombstone** covers what a ledger structurally cannot: files
-  deployed before the ledger existed, things temper never deployed but that must
-  be gone, and *anti-state* — "this must not be installed", which no ledger
-  gives you.
+- **An explicit tombstone** — a `retire` list, at bundle or machine scope —
+  covers what a ledger structurally cannot: files deployed before the ledger
+  existed, and things temper never deployed but that must be gone. It is
+  distinct from `[[assert]] absent`, which *reports* a condition you resolve
+  yourself; a `retire` entry temper enacts, via `prune`, with the confirm every
+  destructive thing gets.
 
-Tombstones are reviewed, not expired. A date on one is **metadata a listing sorts
-by**, never a trigger: behaviour that changes with the wall clock would mean two
+Tombstones are reviewed, not expired — `temper retired` lists every entry and
+whether it is still doing work, which is what stops them accumulating unseen. A
+date on one would be **metadata a listing sorts by**, never a trigger: behaviour that changes with the wall clock would mean two
 machines on the same commit doing different things, and a machine offline past
 the date would skip the retirement silently. The review sweep is a verb that
 lists tombstones oldest-first — which is what stops them accumulating unseen,

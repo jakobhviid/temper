@@ -327,6 +327,24 @@ pub struct Machine {
     /// rpm-ostree packages THIS machine layers, on top of its bundles'.
     #[serde(default)]
     pub rpm_ostree: Vec<String>,
+    /// Paths that must **not** exist — state this spec has retired.
+    ///
+    /// The ledger answers "temper deployed this and the spec no longer declares
+    /// it". This answers everything the ledger structurally cannot: files
+    /// deployed before it existed, files temper never deployed but that must be
+    /// gone, and anything whose absence is itself the intent.
+    ///
+    /// Distinct from `[[assert]] absent`, which *reports* a condition you resolve
+    /// yourself — a path owned by something else, a state temper must not touch.
+    /// A `retire` entry is a declaration temper enacts: `prune` removes it, with
+    /// the confirm every destructive thing gets.
+    ///
+    /// Nothing expires on a date. A tombstone is reviewed (`temper retired`),
+    /// not timed out: behaviour that changed with the wall clock would mean two
+    /// machines on one commit doing different things, and a machine offline past
+    /// the date would skip the retirement silently.
+    #[serde(default)]
+    pub retire: Vec<String>,
     /// Flatpak remotes THIS machine adds, as `"<name> <url>"`.
     #[serde(default)]
     pub flatpak_remotes: Vec<String>,
@@ -413,6 +431,24 @@ pub struct Bundle {
     /// brings with it. Group scope, gated with the rest of the bundle.
     #[serde(default)]
     pub ignore: Ignore,
+    /// Paths that must **not** exist — state this spec has retired.
+    ///
+    /// The ledger answers "temper deployed this and the spec no longer declares
+    /// it". This answers everything the ledger structurally cannot: files
+    /// deployed before it existed, files temper never deployed but that must be
+    /// gone, and anything whose absence is itself the intent.
+    ///
+    /// Distinct from `[[assert]] absent`, which *reports* a condition you resolve
+    /// yourself — a path owned by something else, a state temper must not touch.
+    /// A `retire` entry is a declaration temper enacts: `prune` removes it, with
+    /// the confirm every destructive thing gets.
+    ///
+    /// Nothing expires on a date. A tombstone is reviewed (`temper retired`),
+    /// not timed out: behaviour that changed with the wall clock would mean two
+    /// machines on one commit doing different things, and a machine offline past
+    /// the date would skip the retirement silently.
+    #[serde(default)]
+    pub retire: Vec<String>,
     /// Flatpak remotes this bundle's apps come from, as `"<name> <url>"`.
     /// Group scope: a vendor remote belongs with the bundle that needs it, gated
     /// the same way, rather than fleet-wide on every machine.
@@ -1069,6 +1105,30 @@ mod bundle_skew_tests {
     }
 }
 
+/// Every path this machine's spec has retired: its composed bundles (gated with
+/// them) plus its own. No fleet list — retiring something is always specific to
+/// what a group or a machine once had.
+pub fn effective_retire(home: &Path, machine: &Machine) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for app in &machine.apps {
+        let b = load_bundle(home, app)?;
+        if gated(&b.os, &b.role, machine) {
+            continue;
+        }
+        for p in &b.retire {
+            if !out.contains(p) {
+                out.push(p.clone());
+            }
+        }
+    }
+    for p in &machine.retire {
+        if !out.contains(p) {
+            out.push(p.clone());
+        }
+    }
+    Ok(out)
+}
+
 /// A machine's effective tap-trust: the fleet list plus its own, de-duplicated.
 ///
 /// A union, not an override: the fleet list is a group decision this machine is
@@ -1278,6 +1338,7 @@ mod tests {
             brew_trust: Vec::new(),
             rpm_ostree: Vec::new(),
             flatpak_remotes: Vec::new(),
+            retire: Vec::new(),
             ignore: Default::default(),
             dconf: vec![],
             git: None,
@@ -1383,6 +1444,7 @@ mod tests {
             brew_trust: Vec::new(),
             rpm_ostree: Vec::new(),
             flatpak_remotes: Vec::new(),
+            retire: Vec::new(),
             ignore: Default::default(),
             dconf: vec![],
             git: None,

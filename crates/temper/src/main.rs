@@ -155,6 +155,14 @@ enum Cmd {
     /// Report installed extras so you can add them to a bundle, the machine's
     /// loose list, or `[ignore]` — or run `reconcile` to act on them per-item.
     Adopt,
+    /// List every path this spec has retired, and whether it is still present.
+    ///
+    /// The review sweep for tombstones. A `retire` entry never expires on a date
+    /// — behaviour that changed with the wall clock would mean two machines on
+    /// one commit doing different things — so it stays until someone decides it
+    /// has done its job. This is how you decide: oldest-looking first, with the
+    /// ones still doing work marked.
+    Retired,
     /// Interactively absorb extras / drop missing entries (spec←machine).
     ///
     /// Reconcile the machine's Brewfile with reality: add installed-but-
@@ -400,6 +408,7 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Init { name, role, yes }) => cmd_init(name, role, yes, json)?,
         Some(Cmd::Snapshot { machine }) => cmd_snapshot(machine, json)?,
         Some(Cmd::Adopt) => cmd_adopt(json)?,
+        Some(Cmd::Retired) => cmd_retired(json)?,
         Some(Cmd::Reconcile {
             machine,
             current_state_wins,
@@ -1738,6 +1747,53 @@ fn cmd_snapshot(machine: Option<String>, json: bool) -> Result<()> {
     let gc = manifest::effective_git(&ft.git, &m.git);
     let msg = format!("snapshot-dconf {}: {} dconf subtree(s)", m.name, paths.len());
     after_repo_change(&home, &gc, &msg);
+    Ok(())
+}
+
+fn cmd_retired(json: bool) -> Result<()> {
+    let home = discovery::find_home()?;
+    let ft = load_fleet(&home)?;
+    let m = machine::resolve(&ft, None)?;
+    let entries = manifest::effective_retire(&home, &m)?;
+    let rows: Vec<(String, bool)> = entries
+        .into_iter()
+        .map(|p| {
+            let present = manifest::expand_tilde(&p).exists();
+            (p, present)
+        })
+        .collect();
+    if json {
+        let arr: Vec<_> = rows
+            .iter()
+            .map(|(p, present)| serde_json::json!({ "path": p, "present": present }))
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({ "machine": m.name, "retired": arr })
+        );
+        return Ok(());
+    }
+    if rows.is_empty() {
+        println!("retired {}: nothing declared retired.", m.name);
+        return Ok(());
+    }
+    println!("{}", ui::bold(&format!("retired · {}", m.name)));
+    for (p, present) in &rows {
+        if *present {
+            println!("  {} {p}  still present — `temper prune` removes it", ui::red("✗"));
+        } else {
+            println!("  {} {p}", ui::dim("· gone"));
+        }
+    }
+    let done = rows.iter().filter(|(_, p)| !*p).count();
+    println!(
+        "\n  {}",
+        ui::dim(&format!(
+            "{done} of {} have done their job — an entry nobody can still be \
+             migrating from is worth deleting.",
+            rows.len()
+        ))
+    );
     Ok(())
 }
 

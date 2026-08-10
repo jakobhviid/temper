@@ -642,6 +642,17 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         absorb: &[Answer::Verb("temper reconcile")],
     },
     KindSpec {
+        name: "retired-present",
+        detects: Detects::Extra,
+        converge: &[Answer::Verb("temper prune")],
+        // Absorbing means deciding you want it after all, which is deleting the
+        // `retire` entry — an edit to the declaration, not a reconcile.
+        absorb: &[Answer::Hand {
+            file: "the `retire` list that named it",
+            why: "drop the entry if you have decided you want this back",
+        }],
+    },
+    KindSpec {
         name: "deployed-file-extra",
         detects: Detects::Extra,
         converge: &[Answer::Verb("temper prune")],
@@ -1214,6 +1225,19 @@ pub fn run_drift(
             detail: None,
         });
     }
+    // Explicitly retired paths that are still here.
+    for path in crate::manifest::effective_retire(home, machine)? {
+        if crate::manifest::expand_tilde(&path).exists() {
+            findings.push(Finding {
+                app: "retired".into(),
+                kind: "retired-present",
+                target: path,
+                ok: false,
+                status: "still present".into(),
+                detail: Some("declared retired — `prune` removes it".into()),
+            });
+        }
+    }
     // Files this spec used to deploy and no longer declares. Nothing else can
     // see these: a filesystem cannot be asked which of its files temper wrote.
     let declared_paths: Vec<String> = deployed_paths(home, machine)?.into_keys().collect();
@@ -1685,6 +1709,10 @@ pub struct PrunePlan {
     /// `extension-extra`. Without this, gext extras were the one drift no verb
     /// could clear: reported forever, with only a hand edit to answer them.
     pub extensions: Vec<String>,
+    /// Paths a `retire` entry declares must be gone, that are still here.
+    /// Unlike residue these are removed regardless of content: the spec does not
+    /// say "remove this if temper wrote it", it says this must not exist.
+    pub retired: Vec<String>,
     /// Files a `copy`/`sysfile` step deployed and the spec no longer declares,
     /// and which are still byte-identical to what temper wrote. An edited one is
     /// never in here — it is reported instead.
@@ -1708,6 +1736,7 @@ impl PrunePlan {
             && self.rpm_ostree.is_empty()
             && self.flatpak_remotes.is_empty()
             && self.residue.is_empty()
+            && self.retired.is_empty()
     }
     /// Every item the plan would remove. Each variant that `commit_prune` acts
     /// on is counted: a count that omits one is a silent cap (Principle #6) —
@@ -1720,6 +1749,7 @@ impl PrunePlan {
             + self.rpm_ostree.len()
             + self.flatpak_remotes.len()
             + self.residue.len()
+            + self.retired.len()
     }
 }
 
@@ -1826,12 +1856,13 @@ mod prune_plan_tests {
             rpm_ostree: vec!["vpn".into()],
             flatpak_remotes: vec!["vendor".into()],
             residue: vec!["~/.config/gone".into()],
+            retired: vec!["~/.config/retired".into()],
             // Reported, never removed — so deliberately NOT counted as an item
             // prune acts on.
             residue_edited: vec!["~/.config/edited".into()],
         };
         assert!(!p.is_empty());
-        assert_eq!(p.len(), 6, "a list prune acts on is not being counted");
+        assert_eq!(p.len(), 7, "a list prune acts on is not being counted");
 
         // …and each list alone is both non-empty and counted, so no single
         // variant can be the one that is silently dropped.
@@ -1901,6 +1932,10 @@ pub fn run_prune(
         ),
         residue,
         residue_edited,
+        retired: crate::manifest::effective_retire(home, machine)?
+            .into_iter()
+            .filter(|p| crate::manifest::expand_tilde(p).exists())
+            .collect(),
     })
 }
 
@@ -1924,7 +1959,7 @@ pub fn commit_prune(home: &Path, machine: &Machine, plan: &PrunePlan) -> Result<
     if !plan.extensions.is_empty() {
         providers::gext_uninstall(&plan.extensions)?;
     }
-    for path in &plan.residue {
+    for path in plan.retired.iter().chain(&plan.residue) {
         let p = crate::manifest::expand_tilde(path);
         if let Err(e) = std::fs::remove_file(&p) {
             eprintln!(
