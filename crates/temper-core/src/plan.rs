@@ -381,6 +381,41 @@ fn apply_one(
 /// probes nothing, so naming a step costs nothing before we know whether it will
 /// change anything. Kinds match `Finding::kind`, so the step phase and `drift`
 /// speak of the same step by the same name.
+/// The paths this machine's spec currently deploys, with the bytes it intends
+/// to leave there — `copy` and `sysfile` only.
+///
+/// `block` is deliberately absent: it inserts a marker-delimited region into a
+/// file someone else owns, so its residue is the *region*, not the file, and
+/// removing it means editing rather than deleting. That is a different operation
+/// and it is not built; saying so beats recording a path whose removal would
+/// delete a user's `.zshrc`.
+fn deployed_paths(home: &Path, machine: &Machine) -> Result<crate::ledger::Ledger> {
+    let resolved = resolve(home, machine)?;
+    let mut out = crate::ledger::Ledger::new();
+    for (_, step) in &resolved.steps {
+        let (kind, target) = step_parts(step);
+        if !matches!(kind, "copy" | "sysfile") {
+            continue;
+        }
+        let src = step.copy.as_ref().or(step.sysfile.as_ref());
+        let Some(src) = src else { continue };
+        // The hash of what the spec WOULD leave there. Reading the source rather
+        // than the target keeps this honest on a machine that has drifted: the
+        // ledger records what temper deploys, not what happens to be there.
+        let Ok(bytes) = std::fs::read(home.join(src)) else {
+            continue;
+        };
+        out.insert(
+            target,
+            crate::ledger::Deployed {
+                hash: blake3::hash(&bytes).to_hex().to_string(),
+                kind: kind.to_string(),
+            },
+        );
+    }
+    Ok(out)
+}
+
 /// Why a step's effect cannot be reverted, if it cannot.
 ///
 /// `undo` covers file and key writes, and (since installs are journaled) package
@@ -605,6 +640,17 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         detects: Detects::Extra,
         converge: &[Answer::Verb("temper prune")],
         absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "deployed-file-extra",
+        detects: Detects::Extra,
+        converge: &[Answer::Verb("temper prune")],
+        // There is nothing to absorb: re-declaring it means writing the `copy`
+        // step you deleted, which is authoring, not reconciling.
+        absorb: &[Answer::Hand {
+            file: HAND_BUNDLE,
+            why: "re-declare the step you removed, if removing it was the mistake",
+        }],
     },
     KindSpec {
         name: "flatpak-remote",
@@ -1137,6 +1183,24 @@ pub fn run_drift(
             detail: None,
         });
     }
+    // Files this spec used to deploy and no longer declares. Nothing else can
+    // see these: a filesystem cannot be asked which of its files temper wrote.
+    let declared_paths: Vec<String> = deployed_paths(home, machine)?.into_keys().collect();
+    for (path, rec) in crate::ledger::residue(&machine.name, &declared_paths) {
+        let edited = !crate::ledger::is_untouched(&path, &rec);
+        findings.push(Finding {
+            app: "deployed".into(),
+            kind: "deployed-file-extra",
+            target: path,
+            ok: false,
+            status: "extra".into(),
+            detail: Some(if edited {
+                "edited since temper deployed it — prune will report, not remove".into()
+            } else {
+                format!("deployed by a `{}` step the spec no longer declares", rec.kind)
+            }),
+        });
+    }
     let effective_remotes = providers::effective_remotes(home, machine)?;
     for r in providers::remotes_missing(&effective_remotes) {
         findings.push(Finding {
@@ -1550,6 +1614,12 @@ pub fn run_install(
     cl.finish();
     if !dry_run {
         journal.commit()?;
+        // Record what this spec deploys, so a step deleted later leaves residue
+        // that `drift` can see. Best-effort: a ledger that cannot be written
+        // must not fail a converge that already succeeded.
+        if let Ok(l) = deployed_paths(home, machine) {
+            let _ = crate::ledger::save(&machine.name, &l);
+        }
     }
     Ok(InstallReport {
         packages,
@@ -1575,6 +1645,12 @@ pub struct PrunePlan {
     /// `extension-extra`. Without this, gext extras were the one drift no verb
     /// could clear: reported forever, with only a hand edit to answer them.
     pub extensions: Vec<String>,
+    /// Files a `copy`/`sysfile` step deployed and the spec no longer declares,
+    /// and which are still byte-identical to what temper wrote. An edited one is
+    /// never in here — it is reported instead.
+    pub residue: Vec<String>,
+    /// Residue the user has since edited: reported, never removed.
+    pub residue_edited: Vec<String>,
     /// Flatpak remotes to remove — the prune counterpart of a
     /// `flatpak-remote-extra`.
     pub flatpak_remotes: Vec<String>,
@@ -1591,6 +1667,7 @@ impl PrunePlan {
             && self.extensions.is_empty()
             && self.rpm_ostree.is_empty()
             && self.flatpak_remotes.is_empty()
+            && self.residue.is_empty()
     }
     /// Every item the plan would remove. Each variant that `commit_prune` acts
     /// on is counted: a count that omits one is a silent cap (Principle #6) —
@@ -1602,6 +1679,7 @@ impl PrunePlan {
             + self.extensions.len()
             + self.rpm_ostree.len()
             + self.flatpak_remotes.len()
+            + self.residue.len()
     }
 }
 
@@ -1707,9 +1785,13 @@ mod prune_plan_tests {
             extensions: vec!["a@x".into()],
             rpm_ostree: vec!["vpn".into()],
             flatpak_remotes: vec!["vendor".into()],
+            residue: vec!["~/.config/gone".into()],
+            // Reported, never removed — so deliberately NOT counted as an item
+            // prune acts on.
+            residue_edited: vec!["~/.config/edited".into()],
         };
         assert!(!p.is_empty());
-        assert_eq!(p.len(), 5, "a list prune acts on is not being counted");
+        assert_eq!(p.len(), 6, "a list prune acts on is not being counted");
 
         // …and each list alone is both non-empty and counted, so no single
         // variant can be the one that is silently dropped.
@@ -1719,6 +1801,7 @@ mod prune_plan_tests {
             PrunePlan { extensions: p.extensions.clone(), ..Default::default() },
             PrunePlan { rpm_ostree: p.rpm_ostree.clone(), ..Default::default() },
             PrunePlan { flatpak_remotes: p.flatpak_remotes.clone(), ..Default::default() },
+            PrunePlan { residue: p.residue.clone(), ..Default::default() },
         ] {
             assert!(!one.is_empty());
             assert_eq!(one.len(), 1);
@@ -1741,6 +1824,17 @@ pub fn run_prune(
     brew_trust: &[String],
 ) -> Result<PrunePlan> {
     let packages = package_extras(home, machine, ignore)?;
+    // Split residue by whether it is still what temper left: removable, or
+    // reportable. A ledger is a record, not a licence to delete a user's edits.
+    let declared_paths: Vec<String> = deployed_paths(home, machine)?.into_keys().collect();
+    let (mut residue, mut residue_edited) = (Vec::new(), Vec::new());
+    for (path, rec) in crate::ledger::residue(&machine.name, &declared_paths) {
+        if crate::ledger::is_untouched(&path, &rec) {
+            residue.push(path);
+        } else if crate::manifest::expand_tilde(&path).exists() {
+            residue_edited.push(path);
+        }
+    }
 
     // Trusted-but-undeclared taps → untrust (honors `[ignore].tap`). Skipped
     // without brew (`trusted_taps` → None).
@@ -1765,6 +1859,8 @@ pub fn run_prune(
             &providers::effective_remotes(home, machine)?,
             ignore,
         ),
+        residue,
+        residue_edited,
     })
 }
 
@@ -1787,6 +1883,16 @@ pub fn commit_prune(home: &Path, machine: &Machine, plan: &PrunePlan) -> Result<
     }
     if !plan.extensions.is_empty() {
         providers::gext_uninstall(&plan.extensions)?;
+    }
+    for path in &plan.residue {
+        let p = crate::manifest::expand_tilde(path);
+        if let Err(e) = std::fs::remove_file(&p) {
+            eprintln!(
+                "{} could not remove {}: {e}",
+                crate::ui::yellow(crate::ui::g_warn()),
+                p.display()
+            );
+        }
     }
     providers::remotes_delete(&plan.flatpak_remotes)?;
     let reboot = providers::rpm_ostree_uninstall(&plan.rpm_ostree, false)?;
@@ -1958,6 +2064,9 @@ pub fn run_update(
     }
     cl.finish();
     journal.commit()?;
+    if let Ok(l) = deployed_paths(home, machine) {
+        let _ = crate::ledger::save(&machine.name, &l);
+    }
     Ok(InstallReport {
         packages: effective.len(),
         upgraded,

@@ -24,9 +24,15 @@ The feature matrix in `ARCHITECTURE.md` shows where each feature stands against
 the eleven-column interface. These are the open cells, worst first. Every one is
 a *verified* gap, not a suspicion.
 
-1. **No deployment ledger, so the file primitives score zero on residue.** Remove
-   a `copy` step and its file stays on every machine forever, with no extras
-   direction to report it. See "Retirement" in `ARCHITECTURE.md` for the shape.
+1. **`block` residue is unmodelled.** `copy` and `sysfile` are tracked by the
+   deployment ledger, so a dropped step's file becomes an extra that `prune`
+   answers. A `block` inserts a region into a file someone else owns, so its
+   residue is the region — removing it is an edit, not a delete, and recording
+   the path would make prune capable of deleting a user's `.zshrc`.
+2. **No tombstone for state temper never deployed.** The ledger covers what
+   temper wrote. "This must NOT be installed" and "this file must be gone,
+   though temper never put it there" still need an explicit declaration —
+   `[[assert]] absent` reports them, nothing enacts them.
 
 **The provider trait is half built.** `interface.rs` records each provider's
 eleven answers as data and cross-checks them against the finding registry, so a

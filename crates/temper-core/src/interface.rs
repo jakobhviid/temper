@@ -186,6 +186,28 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         residue: Col::NA(NO_RESIDUE),
     },
     ProviderSpec {
+        name: "deployed-files",
+        kinds: &["deployed-file-extra"],
+        fleet_scope: Col::Yes,
+        machine_scope: Col::NA(
+            "a deployed file is declared by a step in a bundle; there is no per-machine file list",
+        ),
+        // The ledger is what makes this observable at all: a filesystem cannot
+        // be asked which of its files temper wrote.
+        observe: Col::Yes,
+        install: Col::Yes,
+        prune: Col::Yes,
+        reconcile: Col::NA(
+            "re-declaring a dropped file means writing the step you deleted — authoring, not reconciling",
+        ),
+        ignore: Col::No(
+            "no ignore list for deployed paths yet; an edited file is reported rather than removed, \
+             which covers the case that matters",
+        ),
+        revertible: Col::Yes,
+        residue: Col::Yes,
+    },
+    ProviderSpec {
         name: "dconf",
         kinds: &["dconf-key", "dconf-extra", "dconf-uncaptured", "dconf-unavailable"],
         // `setkey` steps in a bundle are the fleet-scope declaration; a

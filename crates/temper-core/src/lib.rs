@@ -22,7 +22,8 @@
 //! module below is implemented and exercised end-to-end (see ../../README.md).
 
 pub mod dconf;
-pub mod interface; // whole-desktop dconf snapshots: capture (filtered) + drift + restore
+pub mod interface;
+pub mod ledger; // whole-desktop dconf snapshots: capture (filtered) + drift + restore
 pub mod discovery; // find the temper-home folder across any delivery backend
 pub mod drift; // assertions, exec-hooks, status-only reporting
 pub mod eq_import; // folder-authoring: pull calibrated speaker profiles into the folder

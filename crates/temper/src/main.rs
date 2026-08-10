@@ -1452,7 +1452,10 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
                 serde_json::json!({
                     "machine": m.name, "extras": arr, "untrust": prune_plan.untrust,
                     "extensions": prune_plan.extensions,
-                    "rpm_ostree": prune_plan.rpm_ostree, "removed": removed
+                    "rpm_ostree": prune_plan.rpm_ostree,
+                    "residue": prune_plan.residue,
+                    "residue_edited": prune_plan.residue_edited,
+                    "removed": removed
                 })
             );
             return Ok(());
@@ -1486,6 +1489,20 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
         }
         for pkg in &prune_plan.rpm_ostree {
             println!("  - un-layer rpm {pkg}");
+        }
+        for path in &prune_plan.residue {
+            println!("  - remove {path} (deployed by a step the spec dropped)");
+        }
+        if !prune_plan.residue_edited.is_empty() && !json {
+            println!(
+                "  {} {} file(s) the spec no longer declares were EDITED since \
+                 temper deployed them — reported, not removed:",
+                ui::yellow(ui::g_warn()),
+                prune_plan.residue_edited.len()
+            );
+            for path in &prune_plan.residue_edited {
+                println!("      {path}");
+            }
         }
         if prune_plan.is_empty() {
             println!("prune {}: nothing to remove.", m.name);
