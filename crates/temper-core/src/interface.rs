@@ -16,6 +16,19 @@
 //! trait is the remaining work, and it is deliberately sequenced after enough
 //! providers actually fill their columns to shape it.
 
+/// Why this provider's converge cannot be reverted, if it cannot.
+///
+/// Read at runtime, so the table is a source rather than a comment: the same
+/// knowledge was hand-written in `plan` beside it, which is how a table and the
+/// code it describes drift apart. A provider whose `revertible` flips to `Yes`
+/// stops being reported here without anyone remembering to look.
+pub fn unrevertible_reason(name: &str) -> Option<&'static str> {
+    match spec(name)?.revertible {
+        Col::No(why) => Some(why),
+        _ => None,
+    }
+}
+
 /// How a column is answered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Col {
@@ -253,6 +266,29 @@ pub fn spec(name: &str) -> Option<&'static ProviderSpec> {
 mod tests {
     use super::*;
     use crate::plan::{kind_spec, Answer};
+
+    /// The table is READ at runtime, not merely asserted about.
+    ///
+    /// `interface::PROVIDERS` was, for a while, referenced by no production code
+    /// at all: a capability table checked only by its own tests is a comment
+    /// with a test suite. `plan` derives the "what this run cannot take back"
+    /// list from it, so a provider that flips to `revertible: Yes` stops being
+    /// reported without anyone remembering to look.
+    #[test]
+    fn the_revertible_column_is_the_source_for_the_report() {
+        // The three the package phase touches without journaling.
+        for name in ["brew-trust", "flatpak-remote", "flatpak"] {
+            let why = super::unrevertible_reason(name)
+                .unwrap_or_else(|| panic!("`{name}` should declare why it is not revertible"));
+            assert!(
+                why.len() > 20,
+                "`{name}` needs a real reason, got {why:?}"
+            );
+        }
+        // …and one that IS revertible answers None, so the report stays quiet.
+        assert!(super::unrevertible_reason("brew").is_none());
+        assert!(super::unrevertible_reason("not-a-provider").is_none());
+    }
 
     /// Every kind a provider claims is registered, with both directions.
     #[test]

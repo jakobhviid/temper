@@ -455,25 +455,31 @@ fn packages_only_unrevertible(
     home: &Path,
     machine: &Machine,
 ) -> Vec<String> {
-    let mut out = Vec::new();
-    if !brew_trust.is_empty() {
-        out.push("brew tap-trust — `brew trust` is not journaled".to_string());
-    }
-    if !crate::providers::effective_remotes(home, machine)
-        .unwrap_or_default()
-        .is_empty()
-    {
-        out.push("flatpak remotes — `remote-add` is not journaled".to_string());
-    }
-    if !crate::providers::effective_extensions(home, machine)
-        .unwrap_or_default()
-        .is_empty()
-    {
-        out.push(
-            "GNOME extension enable/disable — asserting the switch is not journaled".to_string(),
-        );
-    }
-    out
+    // The reasons come from `interface::PROVIDERS`, not from here: that table is
+    // where a provider's revertibility is declared, and writing the same thing
+    // twice is how a capability table and its code stop agreeing.
+    let touched: [(&str, bool); 3] = [
+        ("brew-trust", !brew_trust.is_empty()),
+        (
+            "flatpak-remote",
+            !crate::providers::effective_remotes(home, machine)
+                .unwrap_or_default()
+                .is_empty(),
+        ),
+        (
+            "gnome-extensions",
+            !crate::providers::effective_extensions(home, machine)
+                .unwrap_or_default()
+                .is_empty(),
+        ),
+    ];
+    touched
+        .iter()
+        .filter(|(_, would_touch)| *would_touch)
+        .filter_map(|(name, _)| {
+            crate::interface::unrevertible_reason(name).map(|why| format!("{name} — {why}"))
+        })
+        .collect()
 }
 
 /// Why a step's effect cannot be reverted, if it cannot.

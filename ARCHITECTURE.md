@@ -232,6 +232,12 @@ mutation" (Principle #8), which nothing was checking: the finding registry made 
 missing *finding* answer loud, while a *provider* could still claim a capability
 with nothing behind it.
 
+The table is also **read at runtime**, not merely asserted about: `install`
+derives what a run cannot take back from the `revertible` column rather than
+restating it, so a provider that becomes journaled stops being reported without
+anyone remembering to look. A capability table only its own tests consult is a
+comment with a test suite.
+
 It is the registry half, not the dispatch half. Providers still have their own
 function signatures; harmonising those behind a real trait is the remaining work,
 deliberately sequenced after enough providers fill their columns to shape it.
