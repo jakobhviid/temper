@@ -127,7 +127,7 @@ package half is no longer a wholesale overwrite at all:
 
 | what you used `backup` for | run instead | why |
 |---|---|---|
-| capturing desktop (dconf) state | **`temper snapshot-gnome`** | same behaviour, honest name; now errors where dconf is absent instead of silently writing nothing |
+| capturing desktop (dconf) state | **`temper snapshot-dconf`** | same behaviour, honest name; now errors where dconf is absent instead of silently writing nothing |
 | capturing installed packages | **`temper reconcile`**, or `temper reconcile --csw` | per-item and surgical: only the machine's own Brewfile, `[ignore]` respected, canonically sorted, comments intact, undoable |
 | seeding a machine that has no spec yet | **`temper init`** | writes the `[[machine]]` block for you, then seeds it |
 
@@ -138,12 +138,12 @@ Two behaviours also changed:
 
 - **`drift` no longer suggests a wholesale absorb.** It names `reconcile`, in
   both directions. Re-dumping a spec you already have was never the right fix.
-- **`restore-gnome`** (was `restore`) **is now undoable** (`temper undo`) and takes `--dry-run`.
+- **`restore-dconf`** (was `restore`) **is now undoable** (`temper undo`) and takes `--dry-run`.
 
 If your folder declares `[[machine.dconf]]`, run `temper drift` after upgrading:
 desktop state is now compared key-by-key, so you will likely see drift that was
 invisible before. That is the point — decide it with `temper reconcile` (per
-section, so one prompt per extension) or take it wholesale with `temper snapshot-gnome`.
+section, so one prompt per extension) or take it wholesale with `temper snapshot-dconf`.
 
 ## Known Limitations
 

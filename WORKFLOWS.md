@@ -18,7 +18,7 @@ state**. Every loop either converges the machine toward the spec
 `reconcile` (per-item), or `reconcile --csw` when the machine is simply right.
 The fleet is **authored in one
 place** (this folder, in git) and **run per-machine** (locally, or over ssh — see
-§Fleet). `restore-gnome` is used both when bringing a desktop back up *and* mid-life to
+§Fleet). `restore-dconf` is used both when bringing a desktop back up *and* mid-life to
 snap GNOME/Ptyxis back to the known-good snapshot.
 
 Throughout, every verb runs against **this machine** (resolved by hostname); a
@@ -55,12 +55,12 @@ machine that's already declared, pointing you at `reconcile` instead.
 ```sh
 temper setup ~/my-spec # once: record where your folder is (optional)
 temper install       # full converge: packages + all config + one-time setup
-temper restore-gnome # Linux desktop only: load the dconf snapshot back
+temper restore-dconf # Linux desktop only: load the dconf snapshot back
 ```
 
 `install` adds missing packages (brew/flatpak/mas/gext/rpm), applies every
 config step, and runs one-time setup. `manual` steps (e.g. `speaker-eq`) are
-skipped — run them by hand. On a fresh desktop, `restore-gnome` reloads GNOME/Ptyxis
+skipped — run them by hand. On a fresh desktop, `restore-dconf` reloads GNOME/Ptyxis
 state from the snapshot (it's a separate, confirm-gated verb because it clobbers
 live tweaks). *(RIS: `bootstrap.sh` → `just install` → `just gnome-restore`.)*
 
@@ -192,7 +192,7 @@ temper update
 Upgrades the declared package set (`brew upgrade` + `flatpak update`), re-applies
 `always` config steps (so hand-drift is corrected), and backfills `ensure` steps
 that are missing. It does **not** add newly-declared apps wholesale (that's an
-`install`), and it never runs `restore-gnome` (reloading a snapshot would clobber live
+`install`), and it never runs `restore-dconf` (reloading a snapshot would clobber live
 tweaks). *(RIS: `just update`, which deliberately excludes gnome-restore.)*
 
 The summary reports what the run **changed**, not what the machine declares —
@@ -250,7 +250,7 @@ of the drift. You pick a direction and run what it prints:
     or `temper reconcile --csw` to take the machine's state for every item
     at once (see §5).
 - **GNOME extensions installed but not declared:** three answers, like packages —
-`temper reconcile` declares it for **this machine** (its own `extensions` list),
+`temper reconcile` declares it for **this machine** (its own `gnome_extensions` list),
 `temper prune` uninstalls it (asks first), or `[ignore].gext` silences it. Note
 that not-enabled is not not-wanted: an extension disabled in GNOME is still
 installed, and declaring it just means a rebuild puts it back.
@@ -261,12 +261,12 @@ package a **bundle** declares is fleet scope: removing that one is a spec edit,
 and then every machine's `prune` enacts it.
 - **GNOME extensions declared but not installed:** two answers. `temper install
 --packages-only` puts it back; `temper reconcile` offers to drop it from this
-machine's own `extensions` list — the answer when you removed it on purpose and
+machine's own `gnome_extensions` list — the answer when you removed it on purpose and
 every converge keeps reinstalling it. The prompt defaults to *keep*, so absence
 alone never quietly un-declares anything.
 
 Reconcile writes to the machine's own list, never a bundle's — a bundle's
-`extensions` is shared by every machine composing it, so editing there would
+`gnome_extensions` is shared by every machine composing it, so editing there would
 change every machine off one machine's state. An extension a *bundle* declares
 therefore stays a hand edit in either direction, and drift names the file.
 
@@ -393,8 +393,8 @@ you find out the desktop moved without having to capture-and-diff blind.
 ```sh
 temper drift       # per-key: missing / extra / changed, grouped per snapshot
 temper reconcile   # absorb per section (= per extension) — the surgical default
-temper snapshot-gnome # capture whole subtree(s) into the spec (spec←machine)
-temper restore-gnome  # load the snapshot(s) back into live dconf (spec→machine)
+temper snapshot-dconf # capture whole subtree(s) into the spec (spec←machine)
+temper restore-dconf  # load the snapshot(s) back into live dconf (spec→machine)
 ```
 
 Both captures run through the `strip` filter (bookkeeping + per-monitor keys
@@ -404,7 +404,7 @@ a stripped key never reads as drift.
 > **A `missing` desktop key means "at the schema default".** dconf only stores
 > non-default values, so absorbing one *removes* it from the snapshot — right
 > after you reset something deliberately and re-tuned a few keys, wrong on a box
-> where `restore-gnome` has never run. temper can't tell those apart, so `--csw` groups
+> where `restore-dconf` has never run. temper can't tell those apart, so `--csw` groups
 > removals by section in the preview (`extensions/just-perfection — 31 removed`)
 > rather than burying them one per line, and interactive `reconcile` defaults to
 > keeping them.
@@ -413,14 +413,14 @@ a stripped key never reads as drift.
 a snapshot rooted at `/org/gnome/shell/extensions/` that means one ask per
 extension. A key holding a list (`enabled-extensions`, `favorite-apps`) is one
 key, so it is one ask, shown as a member-level `+2 −1` delta rather than two
-walls of GVariant. `snapshot-gnome` is the wholesale sibling when you'd rather
+walls of GVariant. `snapshot-dconf` is the wholesale sibling when you'd rather
 diff-then-trim in git than answer prompts.
 
-`restore-gnome` is confirm-gated and never part of `update` (so a routine `update`
+`restore-dconf` is confirm-gated and never part of `update` (so a routine `update`
 never clobbers live tweaks) — it's a deliberate, on-demand reset. It is
 **journaled**: `temper undo` resets the subtree and reloads your prior state,
 guarded so it skips rather than clobbers if the desktop moved since.
-`temper restore-gnome --dry-run` previews which snapshots would load, touching nothing. *(RIS: `gnome-backup`/`gnome-restore`,
+`temper restore-dconf --dry-run` previews which snapshots would load, touching nothing. *(RIS: `gnome-backup`/`gnome-restore`,
 `ptyxis-backup`/`-restore`.)*
 
 ## 7. Undo a run
@@ -440,7 +440,7 @@ real difference from a formatting artefact, which is what once made a dconf
 double-comparison bug take a hand-audit to find.
 
 Reverts file writes (`copy`/`block`/`setkey` json/toml/ini), `setkey(dconf)`
-values, and a whole-subtree `restore-gnome` (undo resets the subtree and reloads your
+values, and a whole-subtree `restore-dconf` (undo resets the subtree and reloads your
 prior dump — a bare reload would leave behind every key the restore introduced).
 `setkey(defaults)`, `sysfile`, and `exec` aren't journaled — undo skips them.
 You find that out **before** the run rather than after: `temper install
@@ -480,17 +480,17 @@ This is folder-authoring: it writes *into* the folder, then you review + commit.
 ## Save spec changes to git (so the folder doesn't drift)
 
 > **Used to run `temper backup`?** It was split: its dconf half is now
-> `temper snapshot-gnome` (§6), and its package half is `temper reconcile` — per item,
+> `temper snapshot-dconf` (§6), and its package half is `temper reconcile` — per item,
 > or `--csw` for all of them (§5). A machine that isn't in the folder at all
 > starts with `temper init` (§0). See the README's "If you used `temper backup`".
 
-`init`, `reconcile`, `snapshot-gnome`, and `eq-import` — and any hand edit — change the
+`init`, `reconcile`, `snapshot-dconf`, and `eq-import` — and any hand edit — change the
 temper-home *folder*, not a machine. If that folder is a git repo, temper helps
 you persist those changes so it doesn't silently drift:
 
 - Whenever the folder is left dirty, **any** command hints — the spec-writing
   verbs above *and* the read/apply ones (`drift`, `install`, `update`, `prune`,
-  `adopt`, `restore-gnome`), so a stray hand edit surfaces whatever you run next:
+  `adopt`, `restore-dconf`), so a stray hand edit surfaces whatever you run next:
   `ⓘ my-spec has uncommitted spec changes — temper save …` (it names your folder).
 - **`temper save`** = `pull → add -A → commit → push`, with an
   auto-generated message (`reconcile chronos-redux: +2 -1 ~0`) unless you pass
@@ -576,11 +576,11 @@ which is why it has verbs of its own.
 | app config (`copy`/`block`/`setkey`/`sysfile`) | `install` / `update` | you author it by hand |
 | macOS profiles (`profile`) | `install` only — its apply is a System Settings dialog, so `update` skips it rather than re-asking every run | you author it by hand (the `.mobileconfig` too) |
 | packages (brew, cask, tap, flatpak, mas, vscode, rpm) | `install` (remove: `prune`) | `reconcile`, or `reconcile --csw` |
-| GNOME extensions (`gext`) | `install` (remove: `prune`) | `reconcile` — both directions, on this machine's own list — or `[ignore].gext` |
-| desktop dconf subtrees | `restore-gnome` | `snapshot-gnome`, or `reconcile` per key |
+| GNOME extensions | `install` (remove: `prune`) | `reconcile` — both directions, on this machine's own list — or `[ignore].gnome_extensions` |
+| desktop dconf subtrees | `restore-dconf` | `snapshot-dconf`, or `reconcile` per key |
 | assertions (`[[assert]]`) | nothing — drift-only, you resolve the condition | n/a |
 
-So `snapshot-gnome` captures the **dconf** row and nothing else; a leftover finding
+So `snapshot-dconf` captures the **dconf** row and nothing else; a leftover finding
 from any other row is not that verb failing. A **profile** is the one row whose
 converge is deliberately absent from `update`: `drift` tells you it is missing and
 `install` re-offers it, because a dialog can't be re-applied silently the way a
@@ -596,8 +596,8 @@ so rather than naming a command that cannot work.
 | Machine to match the spec (config) | machine→spec | `install` |
 | Spec to match the machine (per item) | spec←machine | `reconcile` |
 | Spec to match the machine (everything) | spec←machine | `reconcile --csw` |
-| Desktop captured into the spec (wholesale) | spec←machine | `snapshot-gnome` |
-| Desktop reset to the snapshot | spec→machine | `restore-gnome` |
+| Desktop captured into the spec (wholesale) | spec←machine | `snapshot-dconf` |
+| Desktop reset to the snapshot | spec→machine | `restore-dconf` |
 | A machine that isn't in the folder yet | spec←machine | `init` (once) |
 | Undo the last change | — | `undo` |
 
@@ -609,7 +609,7 @@ temper completions zsh  > "${fpath[1]}/_temper"   # or bash / fish / elvish / po
 
 Prints a completion script for the named shell to stdout; where it belongs is
 your shell's business, not temper's. Worth doing once — the verb list is long
-enough that completion is how you'll discover `snapshot-gnome` rather than
+enough that completion is how you'll discover `snapshot-dconf` rather than
 guessing at `snapshot`.
 
 ## Status markers

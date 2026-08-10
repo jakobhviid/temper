@@ -169,12 +169,14 @@ flatpak = ["org.example"]   #   unioned per-manager with the fleet [ignore] and
 [machine.vars]              # optional; per-machine vars, merged OVER [vars]
 BREW_PREFIX = "/home/linuxbrew/.linuxbrew"   # e.g. override a Mac-valued global
 
-[[machine.dconf]]           # optional; whole-desktop dconf snapshots (Linux).
-                            #   Captured by `snapshot-gnome`, applied by `restore-gnome`:
-                            #   the verbs are named for the DESKTOP because a future KDE or
-                            #   macOS equivalent won't be dconf at all (KDE uses INI files,
-                            #   macOS `defaults`), while this field is named for the
-                            #   MECHANISM it actually reads.
+[[machine.dconf]]           # optional; the machine's OWN dconf subtrees — the
+                            #   residue left once the extension settings and the
+                            #   `setkey` policy have their own owners. Captured by
+                            #   `snapshot-dconf`, applied by `restore-dconf`.
+                            #   Field and verbs are both named for the MECHANISM:
+                            #   dconf is the store, and it is present under KDE too,
+                            #   while a macOS equivalent would be `defaults` and a
+                            #   different feature entirely.
 path  = "/org/gnome/shell/"                 # subtree to dump/load (trailing /)
 file  = "assets/gnome/shell.chronos.dconf"  # snapshot writes here; restore reads
 strip = ["monitors/", "last-selected"]      # NOISE only: key substrings that would
@@ -204,14 +206,14 @@ doesn't help that either — those keys live at the root wherever you root it.
 Drift on a snapshot is key-level and reported in the same vocabulary as
 packages: `missing` (in the file, not on the machine), `extra` (on the machine,
 not captured), `changed` (both, differing), plus `never captured` when the file
-doesn't exist yet. `reconcile` absorbs per section/key (spec←machine); `restore-gnome` pushes the file
+doesn't exist yet. `reconcile` absorbs per section/key (spec←machine); `restore-dconf` pushes the file
 back out (spec→machine). Both directions are named in drift's Next steps.
 
 > **`missing` means "at the schema default", not "unset".** dconf stores only
 > non-default values, so a key absent from a dump is one the machine holds at its
 > default — itself a value. Absorbing such a key therefore *removes* it from the
 > snapshot, which is exactly right after you deliberately reset something and
-> re-tuned a few keys, and exactly wrong on a machine where `restore-gnome` has never
+> re-tuned a few keys, and exactly wrong on a machine where `restore-dconf` has never
 > run (there, the key is not "reset" — it was simply never applied). temper
 > cannot tell those apart; you can. Interactive `reconcile` defaults to keeping
 > it, and `--current-state-wins` groups removals by section in the preview so a
@@ -246,17 +248,24 @@ it as `[brew].trust` (see `[brew].trust` above).
 > `[ignore].<manager>` as the escape hatch. (brew-family is the exception: any
 > declaration at all enables the dependency-aware brew extras computation.)
 >
-> **`gext` follows the same rule**, and reports both directions once opted in.
-> Only **user-scope** extensions count as extras: system ones ship with the image,
-> and drift reports image-baked items status-only, so a Bazzite box doesn't list
-> seventeen you never chose. Silence one with `[ignore].gext`.
+> **`gnome_extensions` follows the same rule**, and reports both directions once
+> opted in. Only **user-scope** extensions count as extras: system ones ship with
+> the image, and drift reports image-baked items status-only, so a Bazzite box
+> doesn't list seventeen you never chose. Silence one with
+> `[ignore].gnome_extensions`.
 >
 > `reconcile` handles **both** directions against the machine's own
-> `[[machine]].extensions` list: it offers to declare an installed extension no
-> bundle claims, and to drop one this machine declares but no longer has. A
-> bundle's `extensions` is shared by every machine composing it, so neither edit
-> ever touches one — a bundle-declared extension that is absent stays a hand
+> `[[machine]].gnome_extensions` list: it offers to declare an installed extension
+> no bundle claims, and to drop one this machine declares but no longer has. A
+> bundle's `gnome_extensions` is shared by every machine composing it, so neither
+> edit ever touches one — a bundle-declared extension that is absent stays a hand
 > edit, and drift names the file.
+>
+> Whether an extension is **switched on** is part of the declaration, so it drifts
+> like anything else: a bare uuid means enabled, and one declared
+> `{ uuid = "…", enabled = false }` is asserted switched off. temper enables and
+> disables by uuid and never rewrites `enabled-extensions` wholesale, so the
+> image-baked extensions it does not declare are left alone.
 >
 > Both directions are computed only where `gnome-extensions` actually ran and
 > answered. On a host that cannot enumerate, "declared but absent" and "I cannot
@@ -291,7 +300,8 @@ packages       = ["brew \"jq\""]     # Brewfile-grammar tokens (all-OS)
 packages_mac   = []                  # mac-only
 packages_linux = []                  # linux-only
 gnome_extensions = ["ext@uuid"]      # GNOME extensions (Linux) — os/role-gated
-rpm            = ["proton-vpn-gnome-desktop"]  # rpm-ostree layered (Linux) — os/role-gated
+rpm_ostree     = ["proton-vpn-gnome-desktop"]  # rpm-ostree layered (Linux) — os/role-gated
+                                     #   (old name `rpm` still parses)
 
 [[step]]   # ordered; each step sets EXACTLY ONE primitive
 # … see steps below …

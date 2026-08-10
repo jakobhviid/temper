@@ -326,7 +326,7 @@ the family will get a second member and the desktop will get a second store.
 `rpm-ostree`, not `rpm` — a future `apt` is a different feature, not a variant.
 `brew-trust`, not `trust` — flatpak remotes and apt keys are also trust.
 `gnome-extensions`, not `extensions` — VS Code extensions are managed here too,
-and that collision is already live. `snapshot-dconf`, not `snapshot-gnome` —
+and that collision is already live. `snapshot-dconf`, not `snapshot-dconf` —
 dconf is present under KDE, so the desktop was never the right noun.
 
 ## Retirement — what happens to residue
@@ -528,7 +528,7 @@ app-bundles it wants. Drift at app scope is per-file / per-key / per-assertion.
 ### The primitives (closed set) and the providers (open, behind the interface)
 
 Both are listed together below because they are both tool code. The rows for
-`brew`, `flatpak`, `mas`, `gext` (properly `gnome-extensions`) and `rpm-ostree`
+`brew`, `flatpak`, `mas`, `gnome-extensions` and `rpm-ostree`
 are **tier 2 — providers**, not primitives: they are the implementations the
 eleven-column interface exists to standardise, and a future `apt` or `npm` joins
 that list without touching tier 1.
@@ -552,7 +552,7 @@ Every primitive is **planned and drift-checked**. The **file-writing** ones
 `plan.rs`/`apply.rs` shape from `dotsync`, the journal from `amdl`), and so is
 **`setkey(dconf)`** — dconf values round-trip cleanly, so undo snapshots the
 prior value and restores it (or resets a previously-unset key). The same holds a
-subtree at a time for **`restore-gnome`**: undo stores the unfiltered prior dump, then
+subtree at a time for **`restore-dconf`**: undo stores the unfiltered prior dump, then
 reverts by `dconf reset -f` **then** reload — a bare reload merges, and would
 leave behind every key the restore introduced. Its guard is the strip-filtered
 dump, since a raw-dump guard would go stale within minutes of desktop churn and
@@ -678,7 +678,7 @@ primitive, so the modifier is written only for exceptions.
 | `always` | install + update | default for `copy`/`template`/`setkey`; re-applied and drift-tracked |
 | `install` | install only | default for `seed`, `profile`, one-time `exec`; update skips (reloading whole-desktop dconf clobbers live tweaks, and re-opening System Settings for a declined `profile` would nag every run) |
 | `ensure` | install + update, **install-if-missing only** | the corrected "update installs a little": backfill `grove`/`amdl`/`pwtune` and the zsh tool set if absent, without upgrade-churn |
-| `manual` | never automated | only when explicitly invoked (`restore-gnome`, `speaker-eq`, `eq-import`) |
+| `manual` | never automated | only when explicitly invoked (`restore-dconf`, `speaker-eq`, `eq-import`) |
 
 Enforcement steps that today re-run every `update` (git identity via
 `git config`, default shell via `chsh`) are `exec` with `run = always` + a drift
@@ -759,12 +759,12 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
   which machine it is. Refuses a machine that already exists (rewriting a
   hand-authored block would lose intent). Distinct from `setup`, which records
   *which folder* to use rather than putting a machine in one.
-- **`snapshot-gnome [machine]`** (alias `snapshot`) — capture each declared `[[machine.dconf]]` subtree
+- **`snapshot-dconf [machine]`** (alias `snapshot`) — capture each declared `[[machine.dconf]]` subtree
   through its strip-keys filter into its file. Unlike a one-shot seed this is
   **recurring**: it's the spec←machine half of the capture/restore pair and the
   wholesale sibling of a per-key `reconcile`. Errors where dconf is absent
   rather than silently writing nothing.
-- **`restore-gnome [machine]`** (alias `restore`) — load the machine's snapshot(s) back into live
+- **`restore-dconf [machine]`** (alias `restore`) — load the machine's snapshot(s) back into live
   dconf (confirm-gated, `--yes` to skip, `--dry-run` to preview). Clobbers live
   desktop tweaks, so it is a standalone verb, **never** part of `update` (RIS
   excludes gnome-restore from its update for the same reason). Journaled per
@@ -774,9 +774,9 @@ declared but not installed is installed by `install` or dropped from the
 machine's own list by `reconcile`; one installed but undeclared is removed by
 `prune` or declared for this machine by `reconcile`. The extras side is
 user-scope only — system extensions ship with the image, and image-baked items
-are status-only. `[ignore].gext` silences one.
+are status-only. `[ignore].gnome_extensions` silences one.
 
-Reconcile writes only `[[machine]].extensions`, never a bundle's shared list, and
+Reconcile writes only `[[machine]].gnome_extensions`, never a bundle's shared list, and
 computes nothing at all unless `gnome-extensions` answered: capability decides
 whether a direction may be evaluated, not just whether a verb may run.
 
