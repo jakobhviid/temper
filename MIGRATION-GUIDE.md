@@ -206,3 +206,63 @@ The `[brew].trust` **table** is unchanged: `trust` is already namespaced by
 --json`, they are renamed fields rather than aliases — `.items[].kind`, and the
 `remediation` list beside it. The `dconf-*` kinds are **unchanged**; they were
 already named for the store.
+
+### 4.0.4 Behaviour you will notice, with nothing to edit
+
+These need no change to your folder. They are listed because each one alters
+what a verb does on a folder that is already correct, and finding that out from
+a diff is worse than reading it here.
+
+**`prune` is narrower in three places, and wider in one.**
+
+- A spec that declares **no tap at any scope** no longer untrusts anything. Tap
+  trust had no opt-in, unlike every other category, so `prune` on a folder that
+  simply never mentioned taps ran `brew untrust` on all of them — including the
+  ones its own formulae come from. Declare one tap and the extras direction
+  works exactly as before.
+- `[ignore]` now protects a package from removal, not just from the report.
+  `brew bundle cleanup` decides for itself what to remove, and temper had been
+  handing it a file that never mentioned the ignored ones — so they were
+  uninstalled, outside the preview and outside the confirm.
+- A retired path that is a **directory** is removed. It used to fail and be
+  reported as removed anyway.
+- The count is what happened. A removal that fails is listed as still present
+  rather than counted as done, and `--json` gains a `failed` array.
+
+**`prune --json` gains two keys**: `flatpak_remotes` and `retired`. Both were
+already being *removed*; neither appeared in the document or the preview.
+
+**`undo --dry-run` no longer uninstalls packages.** It did — every provider's
+real `uninstall`, then "(dry-run)". If you have been avoiding it, stop.
+
+**`undo` lands on the run you meant.** A converge whose changes were all
+unrevertible (an `exec`, a `sysfile`) recorded no run at all, so a later bare
+`undo` reached past it and reverted the previous one.
+
+**`temper init` seeds what is installed.** It was capturing taps and nothing
+else, because it reconciles the block it has just written and that block declares
+nothing. `--json` also emits one document instead of two.
+
+**One new `Finding.kind`: `package-unavailable`.** A package manager that is
+present and **fails** — `mas list` when you are not signed into the App Store, a
+`brew list` broken by a bad tap — is now reported as unreadable and skipped in
+both directions, instead of reading as "nothing is installed". That last reading
+is what made `reconcile --current-state-wins` capable of emptying a Brewfile and,
+with `auto_push`, sending it to the fleet. Status-only, so it does not count as
+out-of-sync; if you assert on the count, nothing changes.
+
+**rpm-ostree reads one deployment, not all of them.** A rollback keeps the
+`requested-packages` it was built with, so an un-layered package used to be
+reported as layered forever and `prune` claimed to remove it on every run.
+
+**Flatpak remotes are read from both installations** and written to the user
+one. A remote your image provides system-wide now satisfies a declaration
+instead of reading as permanently missing, and no duplicate user-scope copy is
+added. A declared remote whose url has changed is re-pointed rather than
+reported forever.
+
+> **What is still open.** `install` writes flatpaks to the **system**
+> installation (flatpak's default) while `prune` and `undo` act on the **user**
+> one, so on an image-based host an undo of a flatpak install finds nothing.
+> ROADMAP, "Which flatpak installation temper owns", has the evidence and why
+> neither obvious fix is right. It is stated rather than silently half-fixed.
