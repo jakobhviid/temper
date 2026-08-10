@@ -82,6 +82,10 @@ enum Entry {
     /// in order to install it. So it was never that packages *could not* be
     /// journaled — nobody had written down why they weren't.
     ///
+    /// Providers whose uninstall needs root (`mas`) prompt during `undo`, which
+    /// is a user-invoked interactive command, so that is expected rather than a
+    /// surprise.
+    ///
     /// An **upgrade** is deliberately not recorded — reverting one means pinning
     /// a prior version whose bottle or commit may be gone. That applies to brew
     /// and flatpak only, the two things `update` upgrades. temper never runs
@@ -150,6 +154,16 @@ fn uninstall_packages(provider: &str, packages: &[String]) -> bool {
                 .status()
                 .map(|s| s.success())
                 .unwrap_or(false);
+        }
+        "mas" => {
+            // `mas uninstall` takes the numeric id — which is exactly what
+            // `Pkg::match_name` yields for this manager, so the recorded set is
+            // already in the right shape. It removes from /Applications and so
+            // needs root; `undo` is a user-invoked interactive command, so a
+            // prompt here is expected rather than a surprise.
+            let mut c = std::process::Command::new("sudo");
+            c.args(["mas", "uninstall"]);
+            c
         }
         _ => return false,
     };

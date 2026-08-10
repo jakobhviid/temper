@@ -25,10 +25,10 @@ the eleven-column interface. These are the open cells, worst first. Every one is
 a *verified* gap, not a suspicion.
 
 1. **Non-revertibility is not shown before you confirm.** Installs are journaled
-   for brew, cask, flatpak, vscode, gext and rpm-ostree, so `undo` removes them.
-   What is still invisible is the *limit*: `mas` has no uninstall, `update`'s
-   brew/flatpak upgrade phase cannot be reverted, and `setkey(defaults)`/
-   `sysfile`/`exec` are deliberately unjournaled. AGENTS.md question 7 asks that
+   for every package provider, so `undo` removes what a converge added.
+   Every package provider journals now. What is still invisible is the *limit*:
+   `update`'s brew/flatpak upgrade phase cannot be reverted, and
+   `setkey(defaults)`/`sysfile`/`exec` are deliberately unjournaled. AGENTS.md question 7 asks that
    the plan preview say so before the user commits; no code answers it.
 2. **`flatpak` remotes are unmanaged.** There is no `flatpak remote-add` and no
    remote enumeration, so a declared app from a vendor remote or `flathub-beta`

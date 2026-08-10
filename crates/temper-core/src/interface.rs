@@ -70,6 +70,12 @@ const NO_RESIDUE: &str =
     "a package leaves no spec-owned residue: removing the declaration makes it an \
      extra, which prune answers";
 
+/// **VS Code extensions are deliberately not a provider here.** temper parses a
+/// `vscode "…"` token and will converge one if you declare it, but the probe
+/// invariant means a spec that declares none never runs `code --list-extensions`
+/// — so VS Code Settings Sync stays the sole registrar of your extensions and
+/// nothing is ever reported as an extra. Listing it as a managed provider would
+/// claim an ownership temper does not want and Settings Sync already has.
 pub const PROVIDERS: &[ProviderSpec] = &[
     ProviderSpec {
         name: "brew",
@@ -111,6 +117,23 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         prune: Col::Yes,
         reconcile: Col::Yes,
         ignore: Col::Yes,
+        revertible: Col::Yes,
+        residue: Col::NA(NO_RESIDUE),
+    },
+    ProviderSpec {
+        name: "mas",
+        kinds: &["package", "package-extra"],
+        fleet_scope: Col::Yes,
+        machine_scope: Col::Yes,
+        observe: Col::Yes,
+        // Forgiving on purpose: a MAS failure (no App Store sign-in, an app not
+        // tied to this Apple ID) is warned and skipped, never fatal.
+        install: Col::Yes,
+        prune: Col::Yes,
+        reconcile: Col::Yes,
+        ignore: Col::Yes,
+        // `mas uninstall (<id>…|--all)` takes ids — which is what `match_name`
+        // yields for this manager — and requires root, so undo prompts.
         revertible: Col::Yes,
         residue: Col::NA(NO_RESIDUE),
     },

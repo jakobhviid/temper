@@ -239,7 +239,7 @@ above.
 | `brew` / `cask` / `brew-tap` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `brew-trust` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
 | `flatpak` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
-| `mas` / `vscode` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
+| `mas` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `gnome-extensions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `rpm-ostree` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `dconf` | ✅ | ✅ | ✅ | ⚠ | ❌ | ✅ | ✅ | ⚠ | ✅ | ✅ | ❌ |
@@ -273,10 +273,20 @@ owns that, layered packages come along with the deployment, and temper only ever
 layers or un-layers. `gext` likewise only installs. So for those two the revert
 story is unconditional.
 
-Only `mas` still shows ❌ for column 10: `mas` has no uninstall, so removing an
-App Store app means deleting the bundle, which is a different operation from
-every other provider's. Per AGENTS.md question 7, whatever remains unrevertible
-belongs in the plan preview, before the user confirms — no code answers that yet.
+**VS Code extensions are deliberately outside this table.** temper converges a
+`vscode "…"` token if you declare one, but the probe invariant means a spec that
+declares none never runs `code --list-extensions` — Settings Sync stays the sole
+registrar. Listing it as a managed provider would claim an ownership temper does
+not want.
+
+**Every package provider journals its installs**, so `undo` removes exactly what
+a converge added. What remains unrevertible is narrow and specific: the
+brew/flatpak **upgrade** phase of `update` (reverting one means pinning a prior
+version whose bottle or commit may be gone), and the deliberately-unjournaled
+`setkey(defaults)` (`defaults read` loses the value's type), `sysfile` and `exec`.
+
+Per AGENTS.md question 7 those limits belong in the plan preview, before the user
+confirms — no code answers that yet.
 - **col 4, `dconf`** — `restore` is excluded from `install`/`update`, which is a
   symptom of the recording model, not a property of the store (see below).
 - **col 4, `profile`** — its apply is a GUI dialog a human must approve, so it

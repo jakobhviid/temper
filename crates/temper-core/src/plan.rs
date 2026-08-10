@@ -1363,6 +1363,7 @@ pub fn run_install(
         (packages::Manager::Brew, "brew"),
         (packages::Manager::Cask, "cask"),
         (packages::Manager::Vscode, "vscode"),
+        (packages::Manager::Mas, "mas"),
     ] {
         let added: Vec<String> = to_add
             .iter()
