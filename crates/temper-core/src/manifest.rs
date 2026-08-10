@@ -318,6 +318,17 @@ pub struct Bundle {
     #[serde(default)]
     #[serde(alias = "rpm")]
     pub rpm_ostree: Vec<String>,
+    /// Taps this bundle needs trusted. **Group scope**: a bundle is the group
+    /// construct, and it is already `os`/`role`-gated — which is exactly what
+    /// the fleet `[brew].trust` cannot do. A cask tap that only means something
+    /// on a Mac belongs in a `os = "mac"` bundle, not in a fleet list that every
+    /// Linux box then reports as drift forever.
+    #[serde(default)]
+    pub brew_trust: Vec<String>,
+    /// Extras this bundle knows are not worth reporting — the OS baseline it
+    /// brings with it. Group scope, gated with the rest of the bundle.
+    #[serde(default)]
+    pub ignore: Ignore,
     #[serde(default)]
     pub step: Vec<Step>,
     /// Drift-only assertions (no converge action).
@@ -740,6 +751,95 @@ pub fn load_bundle(home: &Path, name: &str) -> Result<Bundle> {
 }
 
 #[cfg(test)]
+mod group_scope_tests {
+    use super::*;
+
+    fn home_with(bundle: &str, body: &str) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("apps")).unwrap();
+        std::fs::write(d.path().join("apps").join(format!("{bundle}.toml")), body).unwrap();
+        d
+    }
+
+    fn machine_with(os: &str, role: Option<&str>, apps: &[&str]) -> Machine {
+        let mut m: Machine = toml::from_str(&format!(
+            "name = \"m\"\nos = \"{os}\"\napps = [{}]\n",
+            apps.iter()
+                .map(|a| format!("\"{a}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+        .unwrap();
+        m.role = role.map(String::from);
+        m
+    }
+
+    /// A bundle is the group construct, so a tap it needs is gated with it.
+    ///
+    /// This is what the fleet `[brew].trust` structurally cannot do: a cask tap
+    /// that only means something on a Mac had to be declared fleet-wide, so
+    /// every Linux box reported it as drift forever — and the resolution
+    /// reconcile offered *there* was to delete the tap the Mac needed.
+    #[test]
+    fn a_bundles_taps_are_gated_with_the_bundle() {
+        let d = home_with(
+            "mac-apps",
+            "os = \"mac\"\nbrew_trust = [\"vendor/cask-tap\"]\n",
+        );
+        let mac = machine_with("mac", None, &["mac-apps"]);
+        let linux = machine_with("linux", None, &["mac-apps"]);
+
+        assert_eq!(
+            effective_trust(d.path(), &[], &mac).unwrap(),
+            vec!["vendor/cask-tap".to_string()]
+        );
+        assert!(
+            effective_trust(d.path(), &[], &linux).unwrap().is_empty(),
+            "a mac-gated bundle's tap must not reach a Linux box"
+        );
+    }
+
+    /// The three scopes stack, in order, without duplicating.
+    #[test]
+    fn fleet_group_and_machine_taps_union() {
+        let d = home_with("g", "brew_trust = [\"group/tap\", \"shared/tap\"]\n");
+        let mut m = machine_with("linux", None, &["g"]);
+        m.brew_trust = vec!["mine/tap".into(), "shared/tap".into()];
+        let got = effective_trust(d.path(), &["shared/tap".to_string()], &m).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                "shared/tap".to_string(),
+                "group/tap".to_string(),
+                "mine/tap".to_string()
+            ],
+            "expected fleet, then group, then machine — de-duplicated"
+        );
+    }
+
+    /// Ignore stacks the same way, per manager.
+    #[test]
+    fn ignore_stacks_fleet_group_and_machine() {
+        let d = home_with("g", "[ignore]\nflatpak = [\"org.group\"]\n");
+        let mut m = machine_with("linux", None, &["g"]);
+        m.ignore.flatpak = vec!["org.mine".into()];
+        let fleet = Ignore {
+            flatpak: vec!["org.fleet".into()],
+            ..Default::default()
+        };
+        let got = effective_ignore(d.path(), &fleet, &m).unwrap();
+        assert_eq!(
+            got.flatpak,
+            vec![
+                "org.fleet".to_string(),
+                "org.group".to_string(),
+                "org.mine".to_string()
+            ]
+        );
+    }
+}
+
+#[cfg(test)]
 mod rename_alias_tests {
     use super::*;
 
@@ -830,19 +930,48 @@ mod bundle_skew_tests {
 /// A union, not an override: the fleet list is a group decision this machine is
 /// a member of, so it cannot opt out of one here — that is a spec edit. What it
 /// can do is add.
-pub fn effective_trust(fleet: &[String], machine: &Machine) -> Vec<String> {
+pub fn effective_trust(home: &Path, fleet: &[String], machine: &Machine) -> Result<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
-    for t in fleet.iter().chain(machine.brew_trust.iter()) {
+    let push = |t: &String, out: &mut Vec<String>| {
         if !out.iter().any(|x| x == t) {
             out.push(t.clone());
         }
+    };
+    for t in fleet {
+        push(t, &mut out);
     }
-    out
+    // Group scope: a bundle's taps, gated like everything else it carries — so
+    // a mac-only tap is simply absent on a Linux box rather than permanently red.
+    for app in &machine.apps {
+        let b = load_bundle(home, app)?;
+        if gated(&b.os, &b.role, machine) {
+            continue;
+        }
+        for t in &b.brew_trust {
+            push(t, &mut out);
+        }
+    }
+    for t in &machine.brew_trust {
+        push(t, &mut out);
+    }
+    Ok(out)
 }
 
 /// A machine's effective ignore lists: the fleet lists plus its own, per
 /// manager. Union, for the same reason as `effective_trust`.
-pub fn effective_ignore(fleet: &Ignore, machine: &Machine) -> Ignore {
+pub fn effective_ignore(home: &Path, fleet: &Ignore, machine: &Machine) -> Result<Ignore> {
+    let mut acc = fleet.clone();
+    for app in &machine.apps {
+        let b = load_bundle(home, app)?;
+        if gated(&b.os, &b.role, machine) {
+            continue;
+        }
+        acc = merge_ignore(&acc, &b.ignore);
+    }
+    Ok(merge_ignore(&acc, &machine.ignore))
+}
+
+fn merge_ignore(fleet: &Ignore, m: &Ignore) -> Ignore {
     let join = |a: &[String], b: &[String]| {
         let mut out: Vec<String> = a.to_vec();
         for x in b {
@@ -852,7 +981,6 @@ pub fn effective_ignore(fleet: &Ignore, machine: &Machine) -> Ignore {
         }
         out
     };
-    let m = &machine.ignore;
     Ignore {
         brew: join(&fleet.brew, &m.brew),
         cask: join(&fleet.cask, &m.cask),

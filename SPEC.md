@@ -13,8 +13,10 @@ Read this before adding anything, because it answers most "can temper do X?"
 questions mechanically. Every declaration sits at one of two scopes, and the
 scope — not the category — decides which verbs may touch it.
 
-**Fleet / group scope** — `[brew-trust]`, `[ignore]`, and everything in an
-`apps/<name>.toml` bundle. It describes a *group* a machine belongs to (its `os`,
+**Fleet / group scope** — `[brew].trust` and `[ignore]` (fleet: *every* machine,
+ungated), and everything in an `apps/<name>.toml` bundle (group: gated by the
+bundle's `os`/`role`, which is how a declaration says which machines it
+describes). It describes a *group* a machine belongs to (its `os`,
 its `role`, the bundles it composes). Verbs: **drift and install. Conform.**
 `reconcile` will never add to it or remove from it, because doing that from one
 machine silently changes every other machine in the group.
@@ -233,6 +235,13 @@ role           = "desktop"           #   `packages`, `gnome_extensions` and `rpm
                                      #   It does NOT gate the bundle's [[step]]s — those
                                      #   gate on their own os/role/when/needs (a server
                                      #   composing this still runs its file/key steps).
+brew_trust     = ["vendor/tap"]      # taps this bundle needs trusted — GROUP scope,
+                                     #   gated with the bundle, which the fleet
+                                     #   [brew].trust cannot be. A mac-only cask tap
+                                     #   belongs in an os = "mac" bundle.
+[ignore]                             # extras this bundle knows aren't worth
+flatpak = ["org.example.Baseline"]   #   reporting (the OS baseline it brings).
+
 packages       = ["brew \"jq\""]     # Brewfile-grammar tokens (all-OS)
 packages_mac   = []                  # mac-only
 packages_linux = []                  # linux-only

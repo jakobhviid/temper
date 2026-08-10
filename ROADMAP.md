@@ -24,28 +24,21 @@ The feature matrix in `ARCHITECTURE.md` shows where each feature stands against
 the eleven-column interface. These are the open cells, worst first. Every one is
 a *verified* gap, not a suspicion.
 
-1. **Fleet `[brew].trust` and `[ignore]` have no `os`/`role` gate.** The
-   machine-scope counterparts now exist (`[[machine]].brew_trust`,
-   `[machine.ignore]`), so a per-machine declaration has a home — but a *group*
-   declaration still cannot say which machines it describes, so one that is only
-   meaningful on some is permanently red on the rest. The natural fix is to let a
-   **bundle** carry them: a bundle is already the group construct and is already
-   os/role-gated, which beats bolting a third gate axis onto the fleet tables.
-2. **Package installs are not journaled, and nothing says so before you confirm.**
+1. **Package installs are not journaled, and nothing says so before you confirm.**
    `undo` covers file and key writes; a `brew`/`flatpak`/`mas`/`gext`/`rpm-ostree`
    converge is not revertible, and on a Mac `setkey(defaults)` is not either. A
    run whose only changes were unjournaled reverts nothing while reporting
    success. AGENTS.md question 7 asks for this at plan time; no code answers it
    yet.
-3. **`flatpak` remotes are unmanaged.** There is no `flatpak remote-add` and no
+2. **`flatpak` remotes are unmanaged.** There is no `flatpak remote-add` and no
    remote enumeration, so a declared app from a vendor remote or `flathub-beta`
    cannot be installed and the converge degrades to a warning. Remotes are the
    flatpak analogue of `[brew].trust` — the same fleet-vs-machine scope question
    that earned trust a machine-scope list.
-4. **`[ignore]` is writable for two of its seven lists.** drift honours all seven;
+3. **`[ignore]` is writable for two of its seven lists.** drift honours all seven;
    only `flatpak` and `tap` can be written by a verb, while the drift status for a
    GNOME extension extra tells the user to use `[ignore].gext`.
-5. **No deployment ledger, so the file primitives score zero on residue.** Remove
+4. **No deployment ledger, so the file primitives score zero on residue.** Remove
    a `copy` step and its file stays on every machine forever, with no extras
    direction to report it. See "Retirement" in `ARCHITECTURE.md` for the shape.
 

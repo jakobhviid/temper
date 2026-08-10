@@ -1085,7 +1085,7 @@ fn cmd_install(
         &home,
         &m,
         &vars,
-        &manifest::effective_trust(&ft.brew.trust, &m),
+        &manifest::effective_trust(&home, &ft.brew.trust, &m)?,
         dry_run,
         packages_only,
         verbose,
@@ -1156,7 +1156,7 @@ fn cmd_update(json: bool, verbose: bool) -> Result<()> {
     let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
     let vars = manifest::effective_vars(&ft.vars, &m);
-    let r = plan::run_update(&home, &m, &vars, &manifest::effective_trust(&ft.brew.trust, &m), verbose)?;
+    let r = plan::run_update(&home, &m, &vars, &manifest::effective_trust(&home, &ft.brew.trust, &m)?, verbose)?;
     if json {
         println!(
             "{}",
@@ -1196,7 +1196,7 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
     let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
     let vars = manifest::effective_vars(&ft.vars, &m);
-    let items = plan::run_drift(&home, &m, &vars, &manifest::effective_ignore(&ft.ignore, &m), &manifest::effective_trust(&ft.brew.trust, &m))?;
+    let items = plan::run_drift(&home, &m, &vars, &manifest::effective_ignore(&home, &ft.ignore, &m)?, &manifest::effective_trust(&home, &ft.brew.trust, &m)?)?;
     let out_of_sync = items.iter().filter(|f| !f.ok).count();
 
     if json {
@@ -1412,7 +1412,7 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
     // fire once on every one of them (below), regardless of which path we take.
     let result = (|| -> Result<()> {
         // Compute the plan WITHOUT removing anything, so we can preview + confirm.
-        let prune_plan = plan::run_prune(&home, &m, &manifest::effective_ignore(&ft.ignore, &m), &manifest::effective_trust(&ft.brew.trust, &m))?;
+        let prune_plan = plan::run_prune(&home, &m, &manifest::effective_ignore(&home, &ft.ignore, &m)?, &manifest::effective_trust(&home, &ft.brew.trust, &m)?)?;
 
         if json {
             // No tty to confirm on: JSON is a preview unless `--yes` explicitly opts
@@ -1707,7 +1707,7 @@ fn cmd_adopt(json: bool) -> Result<()> {
     let home = find_home_pulling()?;
     let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
-    let extras = plan::run_adopt(&home, &m, &manifest::effective_ignore(&ft.ignore, &m))?;
+    let extras = plan::run_adopt(&home, &m, &manifest::effective_ignore(&home, &ft.ignore, &m)?)?;
     if json {
         let arr: Vec<_> = extras
             .iter()
@@ -1757,7 +1757,7 @@ fn cmd_reconcile(
     let home = find_home_pulling()?;
     let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
-    let plan = reconcile::plan(&home, &m, &manifest::effective_ignore(&ft.ignore, &m), &manifest::effective_trust(&ft.brew.trust, &m))?;
+    let plan = reconcile::plan(&home, &m, &manifest::effective_ignore(&home, &ft.ignore, &m)?, &manifest::effective_trust(&home, &ft.brew.trust, &m)?)?;
 
     // Tap-trust is FLEET-scope (temper.toml, every machine) while everything
     // else here is machine-scope, so `--current-state-wins` leaves it alone
