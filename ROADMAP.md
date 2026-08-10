@@ -31,29 +31,19 @@ a *verified* gap, not a suspicion.
    meaningful on some is permanently red on the rest. The natural fix is to let a
    **bundle** carry them: a bundle is already the group construct and is already
    os/role-gated, which beats bolting a third gate axis onto the fleet tables.
-2. **`packages::effective_set` never calls `manifest::gated`.** A bundle gated
-   `os = "linux"` still contributes its `packages` — including `flatpak` lines —
-   to a Mac that composes it, where they are permanently missing with a
-   remediation that cannot help. `SPEC.md` currently documents the gate as
-   applying to `extensions`/`rpm` only, so changing it is a behaviour change
-   (`feat!:`) and needs a decision, not a patch.
-3. **`manifest::gated`'s role clause fails open.** It only fires when *both* sides
-   declare a `role`, and a machine's `role` is optional — so a machine that omits
-   it composes every `role = "desktop"` bundle and layers its extensions and rpms,
-   which is exactly what that gate exists to prevent. Behaviour change → `feat!:`.
-4. **`rpm-ostree` scores 3 of 11.** No machine-scope list, no extras direction, no
+2. **`rpm-ostree` scores 3 of 11.** No machine-scope list, no extras direction, no
    ignore list, and `rpm -q` answers about the *booted* deployment — so a layered
    package reads missing until reboot. `rpm-ostree status --json` exposes both the
    staged deployment and `requested-packages`, which turns the extras direction
    from "impossible" into "an unread field".
-5. **`flatpak` does not model user vs system scope.** `prune` can therefore try to
+3. **`flatpak` does not model user vs system scope.** `prune` can therefore try to
    remove a system flatpak, which needs polkit and over SSH hangs. `gext` draws
    this distinction deliberately; flatpak has the same image-baked baseline
    problem and papers over it with `[ignore]`.
-6. **`[ignore]` is writable for two of its seven lists.** drift honours all seven;
+4. **`[ignore]` is writable for two of its seven lists.** drift honours all seven;
    only `flatpak` and `tap` can be written by a verb, while the drift status for a
    GNOME extension extra tells the user to use `[ignore].gext`.
-7. **No deployment ledger, so the file primitives score zero on residue.** Remove
+5. **No deployment ledger, so the file primitives score zero on residue.** Remove
    a `copy` step and its file stays on every machine forever, with no extras
    direction to report it. See "Retirement" in `ARCHITECTURE.md` for the shape.
 

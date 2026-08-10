@@ -127,6 +127,35 @@ extension, so a uuid enabled in a snapshot but declared nowhere was switched on
 by `restore` and never installed by `install` — and GNOME fails soft, so the
 breakage was silent.
 
+### 4.0.2b Two gates that used to fail open
+
+**Why.** A bundle's `os`/`role` gate covered two of the five ways a bundle
+carries machine-specific content, and the three it missed failed **silently and
+green**.
+
+**Edit.** Check two things, both of which are no-ops for most folders:
+
+1. **A machine that declares no `role` no longer composes a bundle that gates on
+   one.** Previously the gate fired only when *both* sides named a role, so a
+   role-less machine layered every `role = "desktop"` bundle's extensions and
+   rpms — the opposite of what the gate was for. Give every machine a `role`, or
+   drop the `role` from bundles you want everywhere.
+
+   ```sh
+   # machines with no role — these change behaviour
+   grep -A6 '^\[\[machine\]\]' temper.toml | grep -B4 -L '^role'
+   ```
+
+2. **A bundle's `packages` are now gated like its `extensions` and `rpm_ostree`.**
+   An `os = "linux"` bundle no longer contributes packages to a Mac that composes
+   it. If you relied on that — a shared bundle whose `packages` were meant for
+   everyone but which declared an `os` for its *steps* — split the steps out, or
+   drop the bundle-level `os`.
+
+**Verify** with the recipe above: the kinds reported should be unchanged and the
+out-of-sync count should not grow. On the fleet this was developed against, both
+were identical before and after.
+
 ### 4.0.3 Names get specific
 
 Every rename ships with a serde alias or a verb alias; the old name keeps

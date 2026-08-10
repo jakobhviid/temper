@@ -221,11 +221,14 @@ it as `[brew].trust` (see `[brew].trust` above).
 
 ```toml
 os             = "linux"             # optional bundle-level gate: skip this bundle's
-role           = "desktop"           #   `extensions`/`rpm` ONLY unless the machine's
-                                     #   os/role match. It does NOT gate the bundle's
-                                     #   [[step]]s — those gate on their own os/role/
-                                     #   when/needs (a server composing this still runs
-                                     #   its file/key steps).
+role           = "desktop"           #   `packages`, `gnome_extensions` and `rpm_ostree`
+                                     #   unless the machine's os/role match. A machine
+                                     #   that declares NO role fails a role gate closed:
+                                     #   a bundle naming a role describes a group, and a
+                                     #   machine naming none is not in it.
+                                     #   It does NOT gate the bundle's [[step]]s — those
+                                     #   gate on their own os/role/when/needs (a server
+                                     #   composing this still runs its file/key steps).
 packages       = ["brew \"jq\""]     # Brewfile-grammar tokens (all-OS)
 packages_mac   = []                  # mac-only
 packages_linux = []                  # linux-only

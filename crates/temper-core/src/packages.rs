@@ -129,6 +129,14 @@ pub fn effective_set(home: &Path, machine: &Machine) -> Result<Vec<Pkg>> {
     let mut raw: Vec<String> = Vec::new();
     for app in &machine.apps {
         let b = manifest::load_bundle(home, app)?;
+        // Gate packages like every other bundle-level list. Skipping this made
+        // the gate cover two of the five ways a bundle carries machine-specific
+        // content: an `os = "linux"` bundle's `flatpak` lines landed in a Mac's
+        // effective set, where they are permanently missing and the remediation
+        // drift names cannot help. Silent, green, and wrong.
+        if manifest::gated(&b.os, &b.role, machine) {
+            continue;
+        }
         raw.extend(b.packages);
         match machine.os.as_str() {
             "mac" => raw.extend(b.packages_mac),

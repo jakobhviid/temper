@@ -938,7 +938,17 @@ fn peek_current_machine<'a>(v: &'a toml::Value, host: Option<&str>) -> Option<&'
 /// assert, and bundle gating so they can't drift apart.
 pub fn gated(os: &Option<String>, role: &Option<String>, machine: &Machine) -> bool {
     let os_skip = matches!(os, Some(o) if o != &machine.os);
-    let role_skip = matches!((role, &machine.role), (Some(r), Some(mr)) if r != mr);
+    // A declared role gates, and an UNDECLARED machine role fails the gate
+    // closed. Being lenient here meant a machine that simply omitted `role`
+    // composed every `role = "desktop"` bundle and layered its GNOME extensions
+    // and its rpms — precisely what this gate exists to stop, and the opposite
+    // of what the comment on those fields promised. A bundle that names a role
+    // is describing a group; a machine that names none is not in it.
+    let role_skip = match (role, &machine.role) {
+        (Some(r), Some(mr)) => r != mr,
+        (Some(_), None) => true,
+        (None, _) => false,
+    };
     os_skip || role_skip
 }
 
@@ -1107,10 +1117,21 @@ mod tests {
         assert!(gated(&os_l, &role_d, &mac)); // os mismatch
                                               // ...and applies on a Linux desktop.
         assert!(!gated(&os_l, &role_d, &desktop));
-        // Unset gates never skip.
+        // A bundle that gates on nothing applies everywhere.
         assert!(!gated(&None, &None, &server));
-        // A role gate is lenient when the machine declares no role.
-        assert!(!gated(&None, &role_d, &machine("linux", None)));
+        assert!(!gated(&None, &None, &machine("linux", None)));
+
+        // A role gate FAILS CLOSED against a machine that declares no role.
+        //
+        // This was lenient, and the leniency defeated the gate's stated purpose:
+        // a server that simply omitted `role` composed every `role = "desktop"`
+        // bundle and layered its GNOME extensions and rpms. A bundle naming a
+        // role is describing a group; a machine naming none is not in it, and
+        // guessing that it might be is how the gate silently did nothing.
+        assert!(gated(&None, &role_d, &machine("linux", None)));
+        // The os half is unaffected — it never had a "machine declares no os"
+        // case to be lenient about, because os is required.
+        assert!(!gated(&os_l, &None, &machine("linux", None)));
     }
 
     #[test]
