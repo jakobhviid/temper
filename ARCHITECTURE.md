@@ -411,6 +411,21 @@ Three consequences follow, and they are the reason for the split:
   round trip. Ownership is matched **exactly** — a `setkey` on `a/b` does not
   take `a/bc` with it — because ownership is not a pattern.
 
+**Two snapshots must not cover one key.** An extension's `settings` subtree sits
+*inside* `/org/gnome/shell/extensions/<uuid>/`, so a `[[machine.dconf]]` still
+rooted at `/org/gnome/shell/` covers it too — and then both files capture the
+same keys, absorbing into one leaves the other stale, and the drift never
+clears. That is what the split is for: after it, a machine block holds the
+residue (`/org/gnome/Ptyxis/`, a narrowly-rooted subtree of genuinely
+this-box-only state), not the whole desktop. Re-rooting the machine block is
+part of the migration, and temper does not yet detect the overlap for you.
+
+The derivation **fails closed**. If the folder cannot be resolved — one bundle
+with a typo — `setkey_owned` and the snapshot list return an error rather than
+"nothing is owned" and "no extension snapshots". Answering with silence there
+would silently restore the exact second-owner condition the mechanism exists to
+prevent, and write it into the spec.
+
 An extension owns **only its own subtree**. Anything it touches outside that is
 shared keyspace — two extensions can both want
 `/org/gnome/desktop/interface/gtk-theme` — so an implicit ownership claim there

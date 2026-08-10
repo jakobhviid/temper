@@ -1737,7 +1737,7 @@ fn cmd_snapshot(machine: Option<String>, json: bool) -> Result<()> {
     // an extension's `settings = "…"` synthesises one too. Gating on `m.dconf`
     // made those unreachable — drift reported `dconf-uncaptured` and named
     // `temper snapshot-dconf`, which then said there was nothing to capture.
-    if temper_core::dconf::all_snapshots(&home, &m).is_empty() {
+    if temper_core::dconf::all_snapshots(&home, &m)?.is_empty() {
         if json {
             println!(
                 "{}",
@@ -2629,7 +2629,7 @@ fn cmd_restore(machine: Option<String>, yes: bool, dry_run: bool, json: bool) ->
     let result = (|| -> Result<()> {
         // As with snapshot: an extension's `settings` snapshot is restorable
         // even on a machine that declares no `[[machine.dconf]]` of its own.
-        if temper_core::dconf::all_snapshots(&home, &m).is_empty() {
+        if temper_core::dconf::all_snapshots(&home, &m)?.is_empty() {
             if json {
                 println!(
                     "{}",
@@ -2655,7 +2655,7 @@ fn cmd_restore(machine: Option<String>, yes: bool, dry_run: bool, json: bool) ->
             // Everything that will actually load — an extension's own settings
             // subtree included. Previewing only `m.dconf` under-reported what
             // the confirm was about to clobber.
-            for snap in temper_core::dconf::all_snapshots(&home, &m) {
+            for snap in temper_core::dconf::all_snapshots(&home, &m)? {
                 println!("  {} {}  {}", ui::cyan(ui::g_arrow()), snap.path, ui::dim(&snap.file));
             }
             println!(
@@ -2682,7 +2682,7 @@ fn cmd_restore(machine: Option<String>, yes: bool, dry_run: bool, json: bool) ->
             println!("restore {} (dry run) — would load:", m.name);
             // `paths` comes back from `all_snapshots`, so zipping it against
             // `m.dconf` mislabelled every row once an extension contributed one.
-            for (snap, p) in temper_core::dconf::all_snapshots(&home, &m).iter().zip(&paths) {
+            for (snap, p) in temper_core::dconf::all_snapshots(&home, &m)?.iter().zip(&paths) {
                 println!("  {} {}  {}", ui::cyan(ui::g_arrow()), snap.path, ui::dim(p));
             }
         } else {

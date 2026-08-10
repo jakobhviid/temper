@@ -370,12 +370,15 @@ pub enum SnapshotState {
 /// are the bulk of what a desktop snapshot ever held — 95% of the keys, measured
 /// — and giving them a second implementation would mean a second place for the
 /// observability guard, the ownership filter and the undo journal to be forgotten.
-pub fn all_snapshots(home: &Path, machine: &Machine) -> Vec<DconfSnapshot> {
+pub fn all_snapshots(home: &Path, machine: &Machine) -> Result<Vec<DconfSnapshot>> {
     let mut out = machine.dconf.clone();
-    out.extend(
-        crate::providers::extension_snapshots(home, machine).unwrap_or_default(),
-    );
-    out
+    // Fails closed, for the same reason `setkey_owned` does: swallowing a
+    // folder error here meant a bundle that would not parse silently removed
+    // every extension's settings subtree from the set, so `snapshot-dconf`
+    // captured fewer files than declared and `restore-dconf` restored fewer —
+    // both reporting success.
+    out.extend(crate::providers::extension_snapshots(home, machine)?);
+    Ok(out)
 }
 
 /// The snapshot-relative ids of keys a `setkey` step already owns.
@@ -394,10 +397,15 @@ pub fn all_snapshots(home: &Path, machine: &Machine) -> Vec<DconfSnapshot> {
 ///
 /// `strip` keeps its other, unrelated job: dropping keys that are noise
 /// (`monitors/`, `last-selected`) rather than keys that belong to someone else.
-pub fn setkey_owned(home: &Path, machine: &Machine, snap: &DconfSnapshot) -> Vec<String> {
-    let Ok(resolved) = crate::plan::resolve(home, machine) else {
-        return Vec::new();
-    };
+pub fn setkey_owned(home: &Path, machine: &Machine, snap: &DconfSnapshot) -> Result<Vec<String>> {
+    // Fails CLOSED. This used to swallow the error and return "nothing is
+    // owned", which is the most dangerous possible answer: one unparseable
+    // bundle and a capture silently re-absorbed every key a `setkey` step
+    // declares, making the snapshot a second owner of them — precisely the
+    // condition the derivation exists to prevent, restored without a word.
+    // Every other verb already refuses to run on a folder it cannot read.
+    let resolved = crate::plan::resolve(home, machine)
+        .context("deriving which dconf keys a `setkey` step owns")?;
     let mut out = Vec::new();
     for (_, step) in &resolved.steps {
         let Some(sk) = &step.setkey else { continue };
@@ -415,7 +423,7 @@ pub fn setkey_owned(home: &Path, machine: &Machine, snap: &DconfSnapshot) -> Vec
     }
     out.sort();
     out.dedup();
-    out
+    Ok(out)
 }
 
 /// Whether the dconf store can actually be read on this host, and if not, why.
@@ -528,7 +536,7 @@ fn dump_raw(path: &str) -> Result<String> {
 pub fn capture(home: &Path, machine: &Machine, journal: &mut Journal) -> Result<Vec<PathBuf>> {
     // A declared extension's settings are captured with the machine's own
     // subtrees — same guards, same journaling, one implementation.
-    let snaps = all_snapshots(home, machine);
+    let snaps = all_snapshots(home, machine)?;
     if snaps.is_empty() {
         return Ok(Vec::new());
     }
@@ -546,7 +554,7 @@ pub fn capture(home: &Path, machine: &Machine, journal: &mut Journal) -> Result<
         // Never capture a key a `setkey` already declares: that is what turned a
         // snapshot into a second owner and made a prefs-UI tweak fight the
         // bundle on the next converge.
-        let owned = setkey_owned(home, machine, snap);
+        let owned = setkey_owned(home, machine, snap)?;
         excluded += owned.len();
         let filtered = drop_exact(&strip_dump(&dump_raw(&snap.path)?, &snap.strip), &owned);
         let dest = home.join(&snap.file);
@@ -574,7 +582,7 @@ pub fn capture(home: &Path, machine: &Machine, journal: &mut Journal) -> Result<
 /// **unfiltered** state is stored before each load. `dry_run` reports the files
 /// it would load and touches nothing.
 pub fn restore(home: &Path, machine: &Machine, dry_run: bool) -> Result<Vec<PathBuf>> {
-    let snaps = all_snapshots(home, machine);
+    let snaps = all_snapshots(home, machine)?;
     if snaps.is_empty() {
         return Ok(Vec::new());
     }

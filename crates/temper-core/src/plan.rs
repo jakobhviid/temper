@@ -1432,7 +1432,7 @@ pub fn run_drift(
     all_snaps.extend(providers::extension_snapshots(home, machine)?);
     for snap in &all_snaps {
         let group = format!("dconf/{}", snap.name());
-        let owned = crate::dconf::setkey_owned(home, machine, snap);
+        let owned = crate::dconf::setkey_owned(home, machine, snap)?;
         match crate::dconf::snapshot_state_owned(home, snap, &owned)? {
             // Reported, not dropped. A declared snapshot that cannot be
             // evaluated used to vanish from the report entirely, so a Mac — or
@@ -2288,7 +2288,7 @@ pub struct PruneOutcome {
 pub fn run_snapshot(home: &Path, machine: &Machine) -> Result<Vec<std::path::PathBuf>> {
     // A machine that declares no subtrees of its own may still have extensions
     // that declare settings.
-    if crate::dconf::all_snapshots(home, machine).is_empty() {
+    if crate::dconf::all_snapshots(home, machine)?.is_empty() {
         return Ok(Vec::new());
     }
     if let crate::dconf::Store::Unreadable(why) = crate::dconf::observe() {
