@@ -1851,6 +1851,7 @@ fn cmd_reconcile(
                 "gext_adds": plan.gext_adds, "gext_drops": plan.gext_drops,
                 "package_drops": plan.package_drops,
                 "rpm_adds": plan.rpm_adds, "rpm_drops": plan.rpm_drops,
+                "remote_adds": plan.remote_adds, "remote_drops": plan.remote_drops,
                 "fleet_trust_writes": fleet_trust_writes,
                 "dconf": dconf_plans
             })
@@ -1871,6 +1872,8 @@ fn cmd_reconcile(
         && plan.package_drops.is_empty()
         && plan.rpm_adds.is_empty()
         && plan.rpm_drops.is_empty()
+        && plan.remote_adds.is_empty()
+        && plan.remote_drops.is_empty()
         && plan.dconf.is_empty()
     {
         // `--csw --yes` skips the JSON branch above, so this needs its own
@@ -1928,6 +1931,8 @@ fn cmd_reconcile(
     let mut chosen_gext: Vec<String> = Vec::new();
     let mut chosen_gext_drops: Vec<String> = Vec::new();
     let mut chosen_package_drops: Vec<String> = Vec::new();
+    let mut chosen_remote_adds: Vec<String> = Vec::new();
+    let mut chosen_remote_drops: Vec<String> = Vec::new();
     let mut chosen_rpm_adds: Vec<String> = Vec::new();
     let mut chosen_rpm_drops: Vec<String> = Vec::new();
 
@@ -1944,6 +1949,8 @@ fn cmd_reconcile(
         chosen_gext = plan.gext_adds.clone();
         chosen_gext_drops = plan.gext_drops.clone();
         chosen_package_drops = plan.package_drops.clone();
+        chosen_remote_adds = plan.remote_adds.clone();
+        chosen_remote_drops = plan.remote_drops.clone();
         chosen_rpm_adds = plan.rpm_adds.clone();
         chosen_rpm_drops = plan.rpm_drops.clone();
         chosen_trust_adds = plan.trust_adds.clone();
@@ -2012,6 +2019,39 @@ fn cmd_reconcile(
             }
         }
 
+        if !plan.remote_drops.is_empty() {
+            println!(
+                "\n{}",
+                ui::bold("Declared in this machine's `flatpak_remotes` but not configured:")
+            );
+            for token in &plan.remote_drops {
+                if !prompt_yes(&format!("  keep `{token}` in [[machine]].flatpak_remotes?")) {
+                    chosen_remote_drops.push(token.clone());
+                }
+            }
+        }
+        if !plan.remote_adds.is_empty() {
+            println!("\n{}", ui::bold("Flatpak remotes not in the spec:"));
+            for name in &plan.remote_adds {
+                match prompt_add(name, true) {
+                    // The url is what a declaration needs, and only the machine
+                    // has it — so it is read back from the live remote list.
+                    AddChoice::Add => {
+                        let url = providers::flatpak_remotes_installed()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .find(|(n, _)| n == name)
+                            .map(|(_, u)| u)
+                            .unwrap_or_default();
+                        chosen_remote_adds.push(format!("{name} {url}"));
+                    }
+                    AddChoice::Ignore => {
+                        chosen_ignores.push(("flatpak_remote".to_string(), name.clone()))
+                    }
+                    AddChoice::Skip => {}
+                }
+            }
+        }
         if !plan.rpm_drops.is_empty() {
             println!(
                 "\n{}",
@@ -2179,6 +2219,8 @@ fn cmd_reconcile(
         && chosen_package_drops.is_empty()
         && chosen_rpm_adds.is_empty()
         && chosen_rpm_drops.is_empty()
+        && chosen_remote_adds.is_empty()
+        && chosen_remote_drops.is_empty()
     {
         if json {
             println!(
@@ -2259,6 +2301,22 @@ fn cmd_reconcile(
                 ui::green("+"),
                 uuid,
                 ui::dim(&format!("{} [[machine]].extensions in temper.toml", ui::g_arrow()))
+            );
+        }
+        for t in &chosen_remote_adds {
+            println!(
+                "  {} remote {}  {}",
+                ui::green("+"),
+                t,
+                ui::dim(&format!("{} [[machine]].flatpak_remotes", ui::g_arrow()))
+            );
+        }
+        for t in &chosen_remote_drops {
+            println!(
+                "  {} remote {}  {}",
+                ui::red("-"),
+                t,
+                ui::dim(&format!("{} [[machine]].flatpak_remotes", ui::g_arrow()))
             );
         }
         for pkg in &chosen_rpm_adds {
@@ -2388,7 +2446,9 @@ fn cmd_reconcile(
         || !chosen_gext_drops.is_empty()
         || !chosen_package_drops.is_empty()
         || !chosen_rpm_adds.is_empty()
-        || !chosen_rpm_drops.is_empty();
+        || !chosen_rpm_drops.is_empty()
+        || !chosen_remote_adds.is_empty()
+        || !chosen_remote_drops.is_empty();
     if tt_edits {
         let tt_path = home.join("temper.toml");
         let before_tt = std::fs::read_to_string(&tt_path)?;
@@ -2422,6 +2482,12 @@ fn cmd_reconcile(
         for pkg in &chosen_rpm_adds {
             tt = reconcile::append_machine_rpm(&tt, &m.name, pkg)?;
         }
+        for t in &chosen_remote_adds {
+            tt = reconcile::append_machine_remote(&tt, &m.name, t)?;
+        }
+        for t in &chosen_remote_drops {
+            tt = reconcile::remove_machine_remote(&tt, &m.name, t)?;
+        }
         for pkg in &chosen_rpm_drops {
             tt = reconcile::remove_machine_rpm(&tt, &m.name, pkg)?;
         }
@@ -2441,7 +2507,8 @@ fn cmd_reconcile(
         + chosen_trust_drops.len()
         + chosen_gext_drops.len()
         + chosen_package_drops.len()
-        + chosen_rpm_drops.len();
+        + chosen_rpm_drops.len()
+        + chosen_remote_drops.len();
     let ignored = chosen_ignores.len() + chosen_tap_ignores.len();
     if json {
         // Only reachable via --current-state-wins --yes (nothing prompted).

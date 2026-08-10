@@ -197,6 +197,9 @@ pub struct Ignore {
     /// hand-layer, or one the image provides.
     #[serde(default)]
     pub rpm_ostree: Vec<String>,
+    /// Flatpak remote NAMES not to report as extras — the image's own remotes.
+    #[serde(default)]
+    pub flatpak_remote: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -246,6 +249,9 @@ pub struct Machine {
     /// rpm-ostree packages THIS machine layers, on top of its bundles'.
     #[serde(default)]
     pub rpm_ostree: Vec<String>,
+    /// Flatpak remotes THIS machine adds, as `"<name> <url>"`.
+    #[serde(default)]
+    pub flatpak_remotes: Vec<String>,
     /// Extras THIS machine should not be told about, on top of the fleet
     /// `[ignore]`. Same reason: silencing something is a per-machine judgement
     /// far more often than a fleet one, and the fleet list could not express
@@ -329,6 +335,11 @@ pub struct Bundle {
     /// brings with it. Group scope, gated with the rest of the bundle.
     #[serde(default)]
     pub ignore: Ignore,
+    /// Flatpak remotes this bundle's apps come from, as `"<name> <url>"`.
+    /// Group scope: a vendor remote belongs with the bundle that needs it, gated
+    /// the same way, rather than fleet-wide on every machine.
+    #[serde(default)]
+    pub flatpak_remotes: Vec<String>,
     #[serde(default)]
     pub step: Vec<Step>,
     /// Drift-only assertions (no converge action).
@@ -990,6 +1001,7 @@ fn merge_ignore(fleet: &Ignore, m: &Ignore) -> Ignore {
         tap: join(&fleet.tap, &m.tap),
         gnome_extensions: join(&fleet.gnome_extensions, &m.gnome_extensions),
         rpm_ostree: join(&fleet.rpm_ostree, &m.rpm_ostree),
+        flatpak_remote: join(&fleet.flatpak_remote, &m.flatpak_remote),
     }
 }
 
@@ -1132,6 +1144,7 @@ mod tests {
                 .collect(),
             brew_trust: Vec::new(),
             rpm_ostree: Vec::new(),
+            flatpak_remotes: Vec::new(),
             ignore: Default::default(),
             dconf: vec![],
             git: None,
@@ -1236,6 +1249,7 @@ mod tests {
             vars: Default::default(),
             brew_trust: Vec::new(),
             rpm_ostree: Vec::new(),
+            flatpak_remotes: Vec::new(),
             ignore: Default::default(),
             dconf: vec![],
             git: None,

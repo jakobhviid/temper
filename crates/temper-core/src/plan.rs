@@ -607,6 +607,18 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         absorb: &[Answer::Verb("temper reconcile")],
     },
     KindSpec {
+        name: "flatpak-remote",
+        detects: Detects::Missing,
+        converge: &[Answer::Verb("temper install --packages-only")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "flatpak-remote-extra",
+        detects: Detects::Extra,
+        converge: &[Answer::Verb("temper prune")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
         name: "rpm-ostree-extra",
         detects: Detects::Extra,
         converge: &[Answer::Verb("temper prune")],
@@ -1125,6 +1137,27 @@ pub fn run_drift(
             detail: None,
         });
     }
+    let effective_remotes = providers::effective_remotes(home, machine)?;
+    for r in providers::remotes_missing(&effective_remotes) {
+        findings.push(Finding {
+            app: "flatpak-remote".into(),
+            kind: "flatpak-remote",
+            target: r,
+            ok: false,
+            status: "missing".into(),
+            detail: None,
+        });
+    }
+    for r in providers::remotes_extras(&effective_remotes, ignore) {
+        findings.push(Finding {
+            app: "flatpak-remote".into(),
+            kind: "flatpak-remote-extra",
+            target: r,
+            ok: false,
+            status: "extra".into(),
+            detail: None,
+        });
+    }
     let effective_rpm = providers::effective_rpm(home, machine)?;
     for pkg in providers::rpm_ostree_extras(&effective_rpm, ignore) {
         findings.push(Finding {
@@ -1413,6 +1446,7 @@ pub fn run_install(
         verbose,
     )?;
     journal.record_packages("rpm-ostree", &rpm_installed);
+    providers::remotes_converge(&providers::effective_remotes(home, machine)?, dry_run)?;
     // Layering stages a deployment, so anything layered means a reboot.
     let reboot = !rpm_installed.is_empty();
 
@@ -1541,6 +1575,9 @@ pub struct PrunePlan {
     /// `extension-extra`. Without this, gext extras were the one drift no verb
     /// could clear: reported forever, with only a hand edit to answer them.
     pub extensions: Vec<String>,
+    /// Flatpak remotes to remove — the prune counterpart of a
+    /// `flatpak-remote-extra`.
+    pub flatpak_remotes: Vec<String>,
     /// Layered rpms to un-layer — the prune counterpart of an
     /// `rpm-ostree-extra`. Stages a new deployment, so it sets the reboot signal
     /// exactly as layering does.
@@ -1553,13 +1590,18 @@ impl PrunePlan {
             && self.untrust.is_empty()
             && self.extensions.is_empty()
             && self.rpm_ostree.is_empty()
+            && self.flatpak_remotes.is_empty()
     }
     /// Every item the plan would remove. Each variant that `commit_prune` acts
     /// on is counted: a count that omits one is a silent cap (Principle #6) —
     /// this once asked "remove 0 item(s)?" and then uninstalled three
     /// extensions.
     pub fn len(&self) -> usize {
-        self.packages.len() + self.untrust.len() + self.extensions.len() + self.rpm_ostree.len()
+        self.packages.len()
+            + self.untrust.len()
+            + self.extensions.len()
+            + self.rpm_ostree.len()
+            + self.flatpak_remotes.len()
     }
 }
 
@@ -1664,9 +1706,10 @@ mod prune_plan_tests {
             untrust: vec!["user/tap".into()],
             extensions: vec!["a@x".into()],
             rpm_ostree: vec!["vpn".into()],
+            flatpak_remotes: vec!["vendor".into()],
         };
         assert!(!p.is_empty());
-        assert_eq!(p.len(), 4, "a list prune acts on is not being counted");
+        assert_eq!(p.len(), 5, "a list prune acts on is not being counted");
 
         // …and each list alone is both non-empty and counted, so no single
         // variant can be the one that is silently dropped.
@@ -1675,6 +1718,7 @@ mod prune_plan_tests {
             PrunePlan { untrust: p.untrust.clone(), ..Default::default() },
             PrunePlan { extensions: p.extensions.clone(), ..Default::default() },
             PrunePlan { rpm_ostree: p.rpm_ostree.clone(), ..Default::default() },
+            PrunePlan { flatpak_remotes: p.flatpak_remotes.clone(), ..Default::default() },
         ] {
             assert!(!one.is_empty());
             assert_eq!(one.len(), 1);
@@ -1717,6 +1761,10 @@ pub fn run_prune(
         untrust,
         extensions,
         rpm_ostree: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
+        flatpak_remotes: providers::remotes_extras(
+            &providers::effective_remotes(home, machine)?,
+            ignore,
+        ),
     })
 }
 
@@ -1740,6 +1788,7 @@ pub fn commit_prune(home: &Path, machine: &Machine, plan: &PrunePlan) -> Result<
     if !plan.extensions.is_empty() {
         providers::gext_uninstall(&plan.extensions)?;
     }
+    providers::remotes_delete(&plan.flatpak_remotes)?;
     let reboot = providers::rpm_ostree_uninstall(&plan.rpm_ostree, false)?;
     Ok(reboot)
 }

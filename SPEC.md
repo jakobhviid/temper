@@ -60,6 +60,7 @@ tap     = []
 gnome_extensions = []       # user-installed GNOME extension UUIDs not to flag
                             #   (old name `gext` still parses)
 rpm_ostree = []             # layered rpms not to flag as extras
+flatpak_remote = []         # flatpak remote NAMES not to flag as extras
 
 [ui]                        # optional; how temper draws its status markers
 icons = "unicode"           # "unicode" (default) | "nerd"
@@ -117,6 +118,9 @@ gnome_extensions = ["tilingshell@ferrarodomenico.com"]  # optional; for THIS
                             #   `reconcile` absorbs an undeclared extension here, because
                             #   a bundle's list is shared by every machine composing it.
 brewfile = "brewfiles/chronos"   # optional; a Brewfile whose lines join the set
+flatpak_remotes = ["vendor https://example.com/vendor.flatpakrepo"]
+                            # optional; remotes THIS machine adds, as "<name> <url>".
+                            #   The name is the identity; the url can drift.
 rpm_ostree = ["proton-vpn"] # optional; rpms THIS machine layers, unioned with its
                             #   bundles' lists. Machine scope, so reconcile absorbs
                             #   and drops here.
@@ -240,6 +244,9 @@ brew_trust     = ["vendor/tap"]      # taps this bundle needs trusted — GROUP 
                                      #   gated with the bundle, which the fleet
                                      #   [brew].trust cannot be. A mac-only cask tap
                                      #   belongs in an os = "mac" bundle.
+flatpak_remotes = ["vendor https://example.com/vendor.flatpakrepo"]
+                                     # remotes this bundle's apps come from —
+                                     #   GROUP scope, gated with the bundle.
 [ignore]                             # extras this bundle knows aren't worth
 flatpak = ["org.example.Baseline"]   #   reporting (the OS baseline it brings).
 

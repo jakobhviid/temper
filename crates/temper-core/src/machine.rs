@@ -97,6 +97,7 @@ mod tests {
             vars: Default::default(),
             brew_trust: Vec::new(),
             rpm_ostree: Vec::new(),
+            flatpak_remotes: Vec::new(),
             ignore: Default::default(),
             dconf: vec![],
             git: None,

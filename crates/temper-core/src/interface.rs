@@ -121,6 +121,28 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         residue: Col::NA(NO_RESIDUE),
     },
     ProviderSpec {
+        name: "flatpak-remote",
+        kinds: &["flatpak-remote", "flatpak-remote-extra"],
+        // No fleet list: a remote belongs with the bundle whose apps need it,
+        // which is the group scope and is gated. A fleet-wide remote nobody can
+        // gate is the shape that made `[brew].trust` a problem.
+        fleet_scope: Col::NA(
+            "a remote belongs to the bundle whose apps need it — group scope, gated",
+        ),
+        machine_scope: Col::Yes,
+        observe: Col::Yes,
+        install: Col::Yes,
+        prune: Col::Yes,
+        reconcile: Col::Yes,
+        ignore: Col::Yes,
+        revertible: Col::No(
+            "remote-add is not journaled yet; the pattern applies but is unwired",
+        ),
+        residue: Col::NA(
+            "a remote leaves nothing behind: un-declaring it makes it an extra, which prune answers",
+        ),
+    },
+    ProviderSpec {
         name: "mas",
         kinds: &["package", "package-extra"],
         fleet_scope: Col::Yes,

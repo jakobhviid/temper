@@ -1183,6 +1183,165 @@ pub fn flatpak_user_apps() -> Option<Vec<String>> {
     )
 }
 
+// --- flatpak remotes ------------------------------------------------------
+//
+// A remote is where a flatpak comes FROM, and it was the one thing about flatpak
+// temper did not model: a declared app from a vendor remote simply could not be
+// installed, and the converge degraded to a warning. It is also the flatpak
+// analogue of tap-trust — the same fleet/group/machine scope question — so it
+// gets the same three-scope treatment rather than a fleet list nobody can gate.
+
+/// A declared remote: `"<name> <url>"`. The **name** is the identity (flatpak
+/// allows only one remote per name); the url is the value that can drift.
+pub fn parse_remote(token: &str) -> Option<(String, String)> {
+    let (name, url) = token.split_once(char::is_whitespace)?;
+    let (name, url) = (name.trim(), url.trim());
+    (!name.is_empty() && !url.is_empty()).then(|| (name.to_string(), url.to_string()))
+}
+
+/// Every remote this machine declares: fleet, then its composed bundles (gated
+/// with them), then its own. First declaration of a name wins, so a machine
+/// cannot silently redefine a group's remote — that would be a spec edit.
+pub fn effective_remotes(home: &Path, machine: &Machine) -> Result<Vec<(String, String)>> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let push = |t: &String, out: &mut Vec<(String, String)>| {
+        if let Some((n, u)) = parse_remote(t) {
+            if !out.iter().any(|(x, _)| *x == n) {
+                out.push((n, u));
+            }
+        }
+    };
+    for app in &machine.apps {
+        let b = manifest::load_bundle(home, app)?;
+        if manifest::gated(&b.os, &b.role, machine) {
+            continue;
+        }
+        for t in &b.flatpak_remotes {
+            push(t, &mut out);
+        }
+    }
+    for t in &machine.flatpak_remotes {
+        push(t, &mut out);
+    }
+    Ok(out)
+}
+
+/// Remotes configured in the **user** scope, three-valued.
+///
+/// User scope for the same reason `flatpak_user_apps` is: a system remote
+/// belongs to the image, and removing one needs polkit. `None` is "could not
+/// ask", never "no remotes".
+pub fn flatpak_remotes_installed() -> Option<Vec<(String, String)>> {
+    if !have("flatpak") {
+        return None;
+    }
+    let out = Command::new("flatpak")
+        .args(["remotes", "--user", "--columns=name,url"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| {
+                let (n, u) = l.split_once('\t')?;
+                Some((n.trim().to_string(), u.trim().to_string()))
+            })
+            .collect(),
+    )
+}
+
+/// Declared remotes that are absent, or present under a different url.
+pub fn remotes_missing(effective: &[(String, String)]) -> Vec<String> {
+    if effective.is_empty() {
+        return Vec::new();
+    }
+    let Some(live) = flatpak_remotes_installed() else {
+        return Vec::new();
+    };
+    effective
+        .iter()
+        .filter(|(n, u)| !live.iter().any(|(ln, lu)| ln == n && lu.trim_end_matches('/') == u.trim_end_matches('/')))
+        .map(|(n, u)| format!("{n} {u}"))
+        .collect()
+}
+
+/// Remotes configured but declared nowhere. Gated on declaring at least one, the
+/// probe invariant every other manager follows.
+pub fn remotes_extras(effective: &[(String, String)], ignore: &manifest::Ignore) -> Vec<String> {
+    if effective.is_empty() {
+        return Vec::new();
+    }
+    let Some(live) = flatpak_remotes_installed() else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = live
+        .into_iter()
+        .map(|(n, _)| n)
+        .filter(|n| {
+            !effective.iter().any(|(en, _)| en == n) && !ignore.flatpak_remote.contains(n)
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Add declared remotes. `--if-not-exists` makes it idempotent, `--user` keeps
+/// it in the scope temper owns.
+pub fn remotes_converge(effective: &[(String, String)], dry_run: bool) -> Result<Vec<String>> {
+    if dry_run || effective.is_empty() || !have("flatpak") {
+        return Ok(Vec::new());
+    }
+    let missing = remotes_missing(effective);
+    // One invocation per remote is unavoidable here: `remote-add` takes exactly
+    // one name/url pair, unlike every other converge on this page.
+    let mut added = Vec::new();
+    for token in &missing {
+        let Some((name, url)) = parse_remote(token) else {
+            continue;
+        };
+        let ok = Command::new("flatpak")
+            .args(["remote-add", "--user", "--if-not-exists", &name, &url])
+            .stdin(Stdio::null())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if ok {
+            added.push(name);
+        } else {
+            eprintln!(
+                "{} flatpak remote-add {name} failed — skipped",
+                crate::ui::yellow(crate::ui::g_warn())
+            );
+        }
+    }
+    Ok(added)
+}
+
+/// Remove undeclared remotes — the prune side.
+pub fn remotes_delete(names: &[String]) -> Result<()> {
+    if names.is_empty() {
+        return Ok(());
+    }
+    if !have("flatpak") {
+        bail!("flatpak not found — cannot remove remotes on this host");
+    }
+    let landed = batch_then_isolate(names, "flatpak remote-delete", |batch| {
+        let mut c = Command::new("flatpak");
+        c.args(["remote-delete", "--user", "--force"]);
+        for n in batch {
+            c.arg(n);
+        }
+        c
+    });
+    if landed.len() != names.len() {
+        bail!("could not remove every remote");
+    }
+    Ok(())
+}
+
 /// What this host can do about rpm-ostree layering, answered once.
 ///
 /// `rpm` and `rpm-ostree` are different facts: a plain Fedora or RHEL box has
@@ -1647,6 +1806,7 @@ mod gating_tests {
             vars: Default::default(),
             brew_trust: Vec::new(),
             rpm_ostree: Vec::new(),
+            flatpak_remotes: Vec::new(),
             ignore: Default::default(),
             dconf: vec![],
             git: None,

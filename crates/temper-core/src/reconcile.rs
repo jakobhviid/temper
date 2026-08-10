@@ -81,6 +81,11 @@ pub struct ReconcilePlan {
     /// have had this since the beginning via `drops`; the loose list is equally
     /// machine scope and had no way to remove an entry at all.
     pub package_drops: Vec<String>,
+    /// Flatpak remotes configured but declared nowhere — absorb into THIS
+    /// machine's own `flatpak_remotes`.
+    pub remote_adds: Vec<String>,
+    /// Entries in THIS machine's own `flatpak_remotes` that are not configured.
+    pub remote_drops: Vec<String>,
     /// Layered rpms no bundle or machine declares — absorb into THIS machine's
     /// own `rpm_ostree` list.
     pub rpm_adds: Vec<String>,
@@ -113,6 +118,27 @@ fn classify_brew(name: &str, installed: &Installed) -> Manager {
     } else {
         Manager::Brew
     }
+}
+
+/// Remotes in the machine's own `flatpak_remotes` that are not configured.
+/// Machine scope only; a group's remote is not this box's to un-declare.
+fn machine_remote_drops(machine: &Machine) -> Vec<String> {
+    if machine.flatpak_remotes.is_empty() {
+        return Vec::new();
+    }
+    let Some(live) = providers::flatpak_remotes_installed() else {
+        return Vec::new();
+    };
+    machine
+        .flatpak_remotes
+        .iter()
+        .filter(|t| {
+            providers::parse_remote(t)
+                .map(|(n, _)| !live.iter().any(|(ln, _)| *ln == n))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect()
 }
 
 /// Entries in the machine's own loose `packages` list that are declared but not
@@ -174,7 +200,9 @@ pub fn plan(
             ),
             package_drops: machine_package_drops(machine)?,
             gext_drops: providers::gext_machine_absent(&machine.gnome_extensions),
-            rpm_adds: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
+            remote_adds: providers::remotes_extras(&providers::effective_remotes(home, machine)?, ignore),
+            remote_drops: machine_remote_drops(machine),
+        rpm_adds: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
             rpm_drops: providers::rpm_ostree_machine_absent(&machine.rpm_ostree),
             dconf: dconf_plans(home, machine)?,
         });
@@ -314,6 +342,8 @@ pub fn plan(
         gext_drops: providers::gext_machine_absent(&machine.gnome_extensions),
         rpm_adds: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
         rpm_drops: providers::rpm_ostree_machine_absent(&machine.rpm_ostree),
+        remote_adds: providers::remotes_extras(&providers::effective_remotes(home, machine)?, ignore),
+        remote_drops: machine_remote_drops(machine),
         dconf: dconf_plans(home, machine)?,
     })
 }
@@ -685,6 +715,16 @@ pub fn append_machine_trust(temper_toml: &str, machine: &str, tap: &str) -> Resu
 /// list: a tap the group declares is not this machine's to un-declare.
 pub fn remove_machine_trust(temper_toml: &str, machine: &str, tap: &str) -> Result<String> {
     remove_machine_list(temper_toml, machine, "brew_trust", tap)
+}
+
+/// Absorb a flatpak remote into THIS machine's own `flatpak_remotes`.
+pub fn append_machine_remote(temper_toml: &str, machine: &str, token: &str) -> Result<String> {
+    append_machine_list(temper_toml, machine, "flatpak_remotes", token)
+}
+
+/// Drop a remote from THIS machine's own `flatpak_remotes`.
+pub fn remove_machine_remote(temper_toml: &str, machine: &str, token: &str) -> Result<String> {
+    remove_machine_list(temper_toml, machine, "flatpak_remotes", token)
 }
 
 /// Absorb a layered rpm into THIS machine's own `rpm_ostree` list.

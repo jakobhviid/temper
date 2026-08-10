@@ -24,12 +24,7 @@ The feature matrix in `ARCHITECTURE.md` shows where each feature stands against
 the eleven-column interface. These are the open cells, worst first. Every one is
 a *verified* gap, not a suspicion.
 
-1. **`flatpak` remotes are unmanaged.** There is no `flatpak remote-add` and no
-   remote enumeration, so a declared app from a vendor remote or `flathub-beta`
-   cannot be installed and the converge degrades to a warning. Remotes are the
-   flatpak analogue of `[brew].trust` — the same fleet-vs-machine scope question
-   that earned trust a machine-scope list.
-2. **No deployment ledger, so the file primitives score zero on residue.** Remove
+1. **No deployment ledger, so the file primitives score zero on residue.** Remove
    a `copy` step and its file stays on every machine forever, with no extras
    direction to report it. See "Retirement" in `ARCHITECTURE.md` for the shape.
 
