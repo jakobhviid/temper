@@ -254,6 +254,11 @@ of the drift. You pick a direction and run what it prints:
 `temper prune` uninstalls it (asks first), or `[ignore].gext` silences it. Note
 that not-enabled is not not-wanted: an extension disabled in GNOME is still
 installed, and declaring it just means a rebuild puts it back.
+- **A machine-scope package declared but not installed:** `temper install
+--packages-only` puts it back, or `temper reconcile` drops it — from the
+machine's Brewfile *or* its loose `packages` list, whichever declared it. A
+package a **bundle** declares is fleet scope: removing that one is a spec edit,
+and then every machine's `prune` enacts it.
 - **GNOME extensions declared but not installed:** two answers. `temper install
 --packages-only` puts it back; `temper reconcile` offers to drop it from this
 machine's own `extensions` list — the answer when you removed it on purpose and

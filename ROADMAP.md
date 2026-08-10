@@ -38,30 +38,28 @@ a *verified* gap, not a suspicion.
    declare a `role`, and a machine's `role` is optional — so a machine that omits
    it composes every `role = "desktop"` bundle and layers its extensions and rpms,
    which is exactly what that gate exists to prevent. Behaviour change → `feat!:`.
-4. **`[[machine]].packages` cannot be dropped.** `reconcile` scans the Brewfile
-   only, so a loose machine-scope package is machine scope with no remove cell.
-5. **`rpm-ostree` scores 3 of 11.** No machine-scope list, no extras direction, no
+4. **`rpm-ostree` scores 3 of 11.** No machine-scope list, no extras direction, no
    ignore list, and `rpm -q` answers about the *booted* deployment — so a layered
    package reads missing until reboot. `rpm-ostree status --json` exposes both the
    staged deployment and `requested-packages`, which turns the extras direction
    from "impossible" into "an unread field".
-6. **`flatpak` does not model user vs system scope.** `prune` can therefore try to
+5. **`flatpak` does not model user vs system scope.** `prune` can therefore try to
    remove a system flatpak, which needs polkit and over SSH hangs. `gext` draws
    this distinction deliberately; flatpak has the same image-baked baseline
    problem and papers over it with `[ignore]`.
-7. **`[ignore]` is writable for two of its seven lists.** drift honours all seven;
+6. **`[ignore]` is writable for two of its seven lists.** drift honours all seven;
    only `flatpak` and `tap` can be written by a verb, while the drift status for a
    GNOME extension extra tells the user to use `[ignore].gext`.
-8. **No deployment ledger, so the file primitives score zero on residue.** Remove
+7. **No deployment ledger, so the file primitives score zero on residue.** Remove
    a `copy` step and its file stays on every machine forever, with no extras
    direction to report it. See "Retirement" in `ARCHITECTURE.md` for the shape.
-9. **`configure set|unset` writes `temper.toml` without firing the repo hook**, so
+8. **`configure set|unset` writes `temper.toml` without firing the repo hook**, so
    a git-backed folder is left silently dirty by it.
-10. **`prune` inherits brew's cleanup defaults.** temper passes no type flags, so
+9. **`prune` inherits brew's cleanup defaults.** temper passes no type flags, so
     which categories get cleaned depends on the user's
     `HOMEBREW_BUNDLE_CLEANUP_NO_*` environment. Previewed-then-silently-skipped is
     a silent cap (Principle #6); pass the explicit flags for what is being pruned.
-11. **Missing structural tests**: nothing asserts that every plan field reaches
+10. **Missing structural tests**: nothing asserts that every plan field reaches
     the `--json` document, the emptiness check and the selection check; and
     nothing asserts that a folder-writing verb fires `after_repo_change`. Both
     classes have shipped defects.

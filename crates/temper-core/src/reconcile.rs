@@ -68,6 +68,11 @@ pub struct ReconcilePlan {
     /// User-installed GNOME extensions no bundle or machine declares —
     /// candidates to absorb into THIS machine's own `extensions` list.
     pub gext_adds: Vec<String>,
+    /// Entries in THIS machine's own loose `packages` list that aren't
+    /// installed — the undeclare cell for machine-scope packages. Brewfile lines
+    /// have had this since the beginning via `drops`; the loose list is equally
+    /// machine scope and had no way to remove an entry at all.
+    pub package_drops: Vec<String>,
     /// Extensions in THIS machine's own `extensions` list that aren't installed
     /// — candidates to drop. The other half of `gext_adds`, without which
     /// reconcile could only ever grow the list: absorb an extension, uninstall
@@ -97,6 +102,39 @@ fn classify_brew(name: &str, installed: &Installed) -> Manager {
     }
 }
 
+/// Entries in the machine's own loose `packages` list that are declared but not
+/// installed. Machine scope, so removing one is this machine's decision.
+///
+/// Probes only the machine's own tokens, so it works on a machine that declares
+/// no `brewfile` — that early return exists to skip the *Brewfile*, and a loose
+/// list is not a Brewfile.
+fn machine_package_drops(machine: &Machine) -> Result<Vec<String>> {
+    if machine.packages.is_empty() {
+        return Ok(Vec::new());
+    }
+    let parsed: Vec<packages::Pkg> = machine
+        .packages
+        .iter()
+        .filter_map(|t| packages::parse(t).ok())
+        .collect();
+    if parsed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let installed = providers::probe(&parsed)?;
+    let mut out = Vec::new();
+    for token in &machine.packages {
+        if let Ok(pkg) = packages::parse(token) {
+            // `probed` means the manager's tool answered. Without it, absence is
+            // "I could not ask", which must never become a drop.
+            if installed.probed(pkg.manager) && !installed.contains(pkg.manager, &pkg.match_name())
+            {
+                out.push(token.clone());
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Compute the reconcile plan for a machine. Read-only — mutates nothing.
 /// `brew_trust` is the declared fleet-level `[brew].trust`, reconciled against
 /// what Homebrew actually trusts (both directions, mirroring packages).
@@ -121,6 +159,7 @@ pub fn plan(
                 &providers::effective_extensions(home, machine)?,
                 ignore,
             ),
+            package_drops: machine_package_drops(machine)?,
             gext_drops: providers::gext_machine_absent(&machine.extensions),
             dconf: dconf_plans(home, machine)?,
         });
@@ -248,6 +287,7 @@ pub fn plan(
             &providers::effective_extensions(home, machine)?,
             ignore,
         ),
+        package_drops: machine_package_drops(machine)?,
         gext_drops: providers::gext_machine_absent(&machine.extensions),
         dconf: dconf_plans(home, machine)?,
     })
@@ -548,6 +588,30 @@ pub fn remove_machine_extension(temper_toml: &str, machine: &str, uuid: &str) ->
     Ok(doc.to_string())
 }
 
+/// Remove a token from a machine's own loose `packages` list, preserving
+/// comments + formatting. A no-op if the machine, the list, or the entry is
+/// absent. Machine-scoped for the same reason every absorb is.
+pub fn remove_machine_package(temper_toml: &str, machine: &str, token: &str) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = temper_toml
+        .parse()
+        .context("parsing temper.toml for the package edit")?;
+    if let Some(arr) = doc
+        .as_table_mut()
+        .get_mut("machine")
+        .and_then(|m| m.as_array_of_tables_mut())
+    {
+        if let Some(t) = arr
+            .iter_mut()
+            .find(|t| t.get("name").and_then(|v| v.as_str()) == Some(machine))
+        {
+            if let Some(list) = t.get_mut("packages").and_then(|e| e.as_array_mut()) {
+                list.retain(|v| v.as_str() != Some(token));
+            }
+        }
+    }
+    Ok(doc.to_string())
+}
+
 pub fn append_trust(temper_toml: &str, tap: &str) -> Result<String> {
     let mut doc: toml_edit::DocumentMut = temper_toml
         .parse()
@@ -605,6 +669,21 @@ mod tests {
         assert!(!dropped.contains("gone@x"));
         assert!(dropped.contains("keep@x"), "dropped a sibling it was not asked about");
         assert!(dropped.contains("# fleet"), "lost a comment");
+    }
+
+    /// The loose-list twin of the extension round-trip: a machine-scope package
+    /// can be un-declared, and only from that machine's own block.
+    #[test]
+    fn a_machine_package_can_be_dropped_without_touching_another_machine() {
+        let src = "[[machine]]\nname = \"atlas\"\npackages = [\"brew \\\"jq\\\"\", \"brew \\\"bat\\\"\"]\n\n[[machine]]\nname = \"helios\"\npackages = [\"brew \\\"jq\\\"\"]\n";
+        let out = remove_machine_package(src, "atlas", "brew \"jq\"").unwrap();
+        assert!(out.contains("bat"), "dropped a sibling it was not asked about");
+        // helios keeps its own declaration of the same package.
+        assert_eq!(out.matches("jq").count(), 1);
+        // Unknown machine / absent token / no list: all no-ops, never an error.
+        for (machine, token) in [("nope", "brew \"jq\""), ("helios", "brew \"absent\"")] {
+            assert_eq!(remove_machine_package(&out, machine, token).unwrap(), out);
+        }
     }
 
     /// Dropping is machine-scoped and forgiving: an unknown machine, a machine

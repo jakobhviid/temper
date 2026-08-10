@@ -1820,6 +1820,7 @@ fn cmd_reconcile(
                 // `--json` consumer previews a reconcile that then changes
                 // something it was never shown (Principle #8's `--json` clause).
                 "gext_adds": plan.gext_adds, "gext_drops": plan.gext_drops,
+                "package_drops": plan.package_drops,
                 "trust_skipped": skipped_trust_count,
                 "dconf": dconf_plans
             })
@@ -1837,6 +1838,7 @@ fn cmd_reconcile(
         && plan.trust_drops.is_empty()
         && plan.gext_adds.is_empty()
         && plan.gext_drops.is_empty()
+        && plan.package_drops.is_empty()
         && plan.dconf.is_empty()
     {
         // `--csw --yes` skips the JSON branch above, so this needs its own
@@ -1892,6 +1894,7 @@ fn cmd_reconcile(
     let mut chosen_dconf: Vec<(usize, Vec<dconf::KeyDiff>)> = Vec::new();
     let mut chosen_gext: Vec<String> = Vec::new();
     let mut chosen_gext_drops: Vec<String> = Vec::new();
+    let mut chosen_package_drops: Vec<String> = Vec::new();
 
     if csw {
         // Machine-scope only. `[ignore]` routing is a judgement, not a state, so
@@ -1905,6 +1908,7 @@ fn cmd_reconcile(
         // transfer here.
         chosen_gext = plan.gext_adds.clone();
         chosen_gext_drops = plan.gext_drops.clone();
+        chosen_package_drops = plan.package_drops.clone();
         if include_trust {
             // Adds only — see the note above on why a drop is never automatic.
             chosen_trust_adds = plan.trust_adds.clone();
@@ -1968,6 +1972,20 @@ fn cmd_reconcile(
                     AddChoice::Add => chosen_trust_adds.push(tap.clone()),
                     AddChoice::Ignore => chosen_tap_ignores.push(tap.clone()),
                     AddChoice::Skip => {}
+                }
+            }
+        }
+
+        // The loose-list twin of the Brewfile drops above: same question, same
+        // default, different file.
+        if !plan.package_drops.is_empty() {
+            println!(
+                "\n{}",
+                ui::bold("Declared in this machine's `packages` but not installed:")
+            );
+            for token in &plan.package_drops {
+                if !prompt_yes(&format!("  keep `{token}` in [[machine]].packages?")) {
+                    chosen_package_drops.push(token.clone());
                 }
             }
         }
@@ -2117,6 +2135,7 @@ fn cmd_reconcile(
         && chosen_dconf.is_empty()
         && chosen_gext.is_empty()
         && chosen_gext_drops.is_empty()
+        && chosen_package_drops.is_empty()
     {
         if json {
             println!(
@@ -2193,6 +2212,14 @@ fn cmd_reconcile(
                 ui::green("+"),
                 uuid,
                 ui::dim(&format!("{} [[machine]].extensions in temper.toml", ui::g_arrow()))
+            );
+        }
+        for token in &chosen_package_drops {
+            println!(
+                "  {} {}  {}",
+                ui::red("-"),
+                token,
+                ui::dim(&format!("{} [[machine]].packages in temper.toml", ui::g_arrow()))
             );
         }
         for uuid in &chosen_gext_drops {
@@ -2295,7 +2322,8 @@ fn cmd_reconcile(
         || !chosen_trust_drops.is_empty()
         || !chosen_tap_ignores.is_empty()
         || !chosen_gext.is_empty()
-        || !chosen_gext_drops.is_empty();
+        || !chosen_gext_drops.is_empty()
+        || !chosen_package_drops.is_empty();
     if tt_edits {
         let tt_path = home.join("temper.toml");
         let before_tt = std::fs::read_to_string(&tt_path)?;
@@ -2318,6 +2346,9 @@ fn cmd_reconcile(
         for uuid in &chosen_gext_drops {
             tt = reconcile::remove_machine_extension(&tt, &m.name, uuid)?;
         }
+        for token in &chosen_package_drops {
+            tt = reconcile::remove_machine_package(&tt, &m.name, token)?;
+        }
         // Stamp the temper that wrote this file, so a skew is later distinguishable
         // from a genuine parse error (monotonic — never lowers a newer stamp).
         tt = manifest::stamp_version(&tt)?;
@@ -2329,7 +2360,10 @@ fn cmd_reconcile(
     jrnl.commit()?;
     let keys: usize = chosen_dconf.iter().map(|(_, p)| p.len()).sum();
     let added = chosen_adds.len() + chosen_trust_adds.len() + chosen_gext.len();
-    let dropped = chosen_drops.len() + chosen_trust_drops.len() + chosen_gext_drops.len();
+    let dropped = chosen_drops.len()
+        + chosen_trust_drops.len()
+        + chosen_gext_drops.len()
+        + chosen_package_drops.len();
     let ignored = chosen_ignores.len() + chosen_tap_ignores.len();
     if json {
         // Only reachable via --current-state-wins --yes (nothing prompted).
