@@ -1402,11 +1402,28 @@ pub fn effective_remotes(home: &Path, machine: &Machine) -> Result<Vec<(String, 
 /// belongs to the image, and removing one needs polkit. `None` is "could not
 /// ask", never "no remotes".
 pub fn flatpak_remotes_installed() -> Option<Vec<(String, String)>> {
+    remotes_in_scope(&[])
+}
+
+/// The remotes temper may **remove** — the user installation only. A system
+/// remote belongs to the image or to root, exactly as a system app does.
+pub fn flatpak_user_remotes() -> Option<Vec<(String, String)>> {
+    remotes_in_scope(&["--user"])
+}
+
+/// Remotes visible in the given scope. With no scope flag `flatpak remotes`
+/// spans **both** installations, which is what a declaration has to be checked
+/// against: reading only `--user` made a declared remote that exists system-wide
+/// permanently `missing`, and every converge added a duplicate user-scope copy
+/// of a remote the machine already had.
+fn remotes_in_scope(scope: &[&str]) -> Option<Vec<(String, String)>> {
     if !have("flatpak") {
         return None;
     }
     let out = Command::new("flatpak")
-        .args(["remotes", "--user", "--columns=name,url"])
+        .args(["remotes"])
+        .args(scope)
+        .args(["--columns=name,url"])
         .output()
         .ok()?;
     if !out.status.success() {
@@ -1444,7 +1461,10 @@ pub fn remotes_extras(effective: &[(String, String)], ignore: &manifest::Ignore)
     if effective.is_empty() {
         return Vec::new();
     }
-    let Some(live) = flatpak_remotes_installed() else {
+    // Only the user installation, because that is the only one `remotes_delete`
+    // can act on. Offering a system remote would be a removal with no code path
+    // behind it — the defect the feature interface exists to catch.
+    let Some(live) = flatpak_user_remotes() else {
         return Vec::new();
     };
     let mut out: Vec<String> = live
@@ -1472,8 +1492,23 @@ pub fn remotes_converge(effective: &[(String, String)], dry_run: bool) -> Result
         let Some((name, url)) = parse_remote(token) else {
             continue;
         };
+        // `--if-not-exists` exits 0 doing nothing when the name is already
+        // configured with a DIFFERENT url — and the url is exactly what
+        // `remotes_missing` compares, so such a remote reported missing forever
+        // and every converge claimed to have added it. The name is the identity
+        // and the url is the thing that drifts, so converging one means setting
+        // it: `remote-modify` where it exists, `remote-add` where it does not.
+        let exists = flatpak_user_remotes()
+            .unwrap_or_default()
+            .iter()
+            .any(|(n, _)| *n == name);
+        let args: Vec<&str> = if exists {
+            vec!["remote-modify", "--user", "--url", &url, &name]
+        } else {
+            vec!["remote-add", "--user", "--if-not-exists", &name, &url]
+        };
         let ok = Command::new("flatpak")
-            .args(["remote-add", "--user", "--if-not-exists", &name, &url])
+            .args(&args)
             .stdin(Stdio::null())
             .output()
             .map(|o| o.status.success())
@@ -1559,18 +1594,87 @@ pub fn rpm_ostree_requested() -> Option<Vec<String>> {
     if !out.status.success() {
         return None;
     }
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    let mut pkgs: Vec<String> = Vec::new();
-    for dep in v.get("deployments")?.as_array()? {
-        if let Some(list) = dep.get("requested-packages").and_then(|r| r.as_array()) {
-            for p in list.iter().filter_map(|p| p.as_str()) {
-                if !pkgs.iter().any(|x| x == p) {
-                    pkgs.push(p.to_string());
-                }
-            }
-        }
+    requested_from_status(&out.stdout)
+}
+
+
+#[cfg(test)]
+mod rpm_ostree_status_tests {
+    use super::requested_from_status;
+
+    /// The layered set comes from ONE deployment — staged if a change is
+    /// pending, else booted. Not the union.
+    ///
+    /// The shape below is this fleet's real `rpm-ostree status --json` on a
+    /// Bazzite box that has un-layered a package: the rollback still lists it,
+    /// because a rollback keeps the `requested-packages` it was built with.
+    /// Unioning made an un-layered package permanently "layered", so `prune`
+    /// re-offered it and reported one item removed on every single run, for as
+    /// long as the rollback survived.
+    #[test]
+    fn only_the_pending_deployment_decides_what_is_layered() {
+        let staged_differs = br#"{"deployments":[
+            {"staged":true,  "requested-packages":["kept"]},
+            {"booted":true,  "requested-packages":["kept","dropped"]},
+            {"requested-packages":["kept","dropped","ancient"]}
+        ]}"#;
+        assert_eq!(
+            requested_from_status(staged_differs).unwrap(),
+            vec!["kept".to_string()],
+            "a staged deployment is what the machine is becoming"
+        );
+
+        // Nothing staged: the booted deployment is the answer, and the rollback
+        // is still ignored.
+        let nothing_staged = br#"{"deployments":[
+            {"booted":true, "requested-packages":["vpn"]},
+            {"requested-packages":["vpn","gone"]}
+        ]}"#;
+        assert_eq!(
+            requested_from_status(nothing_staged).unwrap(),
+            vec!["vpn".to_string()]
+        );
+
+        // A deployment layering nothing is an answer, not a failure to read.
+        let bare = br#"{"deployments":[{"booted":true}]}"#;
+        assert_eq!(requested_from_status(bare).unwrap(), Vec::<String>::new());
+
+        // Unreadable output is `None` — never an empty set (Principle #12).
+        assert!(requested_from_status(b"not json").is_none());
+        assert!(requested_from_status(br#"{"deployments":[]}"#).is_none());
     }
+}
+
+/// The layered set named by ONE deployment. Pure, so the deployment-selection
+/// rule is testable without an ostree host.
+fn requested_from_status(json: &[u8]) -> Option<Vec<String>> {
+    let v: serde_json::Value = serde_json::from_slice(json).ok()?;
+    let deployments = v.get("deployments")?.as_array()?;
+    // Exactly ONE deployment describes what this machine will be: the staged one
+    // if a change is pending, else the booted one. Unioning all of them folded
+    // in the ROLLBACK, which keeps its own `requested-packages` forever — so an
+    // un-layered package stayed "layered", `prune` re-offered it every run, and
+    // each run reported one item removed for as long as the rollback survived.
+    // A rollback is history, not state.
+    let flagged = |key: &str| {
+        deployments
+            .iter()
+            .find(|d| d.get(key).and_then(|b| b.as_bool()).unwrap_or(false))
+    };
+    let current = flagged("staged")
+        .or_else(|| flagged("booted"))
+        .or_else(|| deployments.first())?;
+    let mut pkgs: Vec<String> = current
+        .get("requested-packages")
+        .and_then(|r| r.as_array())
+        .map(|l| {
+            l.iter()
+                .filter_map(|p| p.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
     pkgs.sort();
+    pkgs.dedup();
     Some(pkgs)
 }
 

@@ -114,10 +114,23 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         machine_scope: Col::Yes,
         observe: Col::Yes,
         install: Col::Yes,
+        // Removes user-scope apps and *reports* the system-scope ones it
+        // declined, which is a real path with an honest answer — so `Yes`.
         prune: Col::Yes,
         reconcile: Col::Yes,
         ignore: Col::Yes,
-        revertible: Col::Yes,
+        // Not the same claim. `install` runs `flatpak install` with no scope
+        // flag, whose default is the SYSTEM installation, while undo uninstalls
+        // `--user` — so on an image-based host (this fleet's Bazzite boxes have
+        // 83 apps and zero user-scope) a revert finds nothing and reports
+        // success. Which installation temper should own is an open design
+        // question rather than an oversight: a user-scope operation cannot
+        // resolve a system remote, so passing `--user` to install would break
+        // the converge. See ROADMAP, "Which flatpak installation temper owns".
+        revertible: Col::No(
+            "undo uninstalls `--user`, which is not necessarily the scope install \
+             wrote to — see ROADMAP",
+        ),
         residue: Col::NA(NO_RESIDUE),
     },
     ProviderSpec {

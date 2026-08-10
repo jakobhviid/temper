@@ -20,7 +20,36 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 
 ## Scope-model gaps (known, ranked, each one a filled ⚠ or ❌ in the feature matrix)
 
-*(none open — the matrix is clean apart from the ignore column on deployed files,
+**Which flatpak installation temper owns.** flatpak has two installations, and
+temper currently uses different ones in different directions: `install` runs
+`flatpak install` with no scope flag, whose default is the **system**
+installation, while `prune` and `undo` pass `--user`. On a host whose apps are
+all system-scope — any image-based one; the box this was found on has 83 apps
+and **zero** in the user installation — that means prune removes nothing temper
+installed and undo reverts nothing, silently.
+
+Neither direction is obviously the right one to change:
+
+- Passing `--user` to `install` does **not** work as-is: a user-scope operation
+  cannot see a system remote (`flatpak remote-info --user flathub …` → *"Remote
+  not found in the user installation"*), so an image's system `flathub` would
+  stop resolving. It would need temper to add a user copy of every declared
+  remote, duplicating what the machine already has and re-downloading apps that
+  are already present system-wide.
+- Letting `prune`/`undo` act on the system installation makes them able to
+  remove image-baked apps, needs polkit, and can hang over ssh. `[ignore]` and
+  the confirm are the existing guards, and they may well be enough — but that is
+  a fleet-behaviour decision, not a cleanup.
+
+Until it is decided, the honest state is recorded rather than papered over:
+`interface.rs` scores flatpak `prune` and `revertible` as **No** with the reason,
+and `prune` already reports the system-scope apps it declined to touch. The
+remote provider is settled by contrast — remotes are **observed in both**
+installations (so a declared remote the image provides is not permanently
+missing, and no duplicate user copy is added) and **written to the user** one,
+which is the only one `remote-delete` may act on.
+
+*(Otherwise the matrix is clean apart from the ignore column on deployed files,
 which is deliberate: an edited file is reported rather than removed, which covers
 the case that matters.)*
 

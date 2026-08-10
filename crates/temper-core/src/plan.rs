@@ -1615,6 +1615,12 @@ pub fn run_install(
     if !dry_run {
         providers::trust_taps(brew_trust, verbose)?;
     }
+    // Remotes before the packages that come from them. A remote is where a
+    // flatpak is fetched FROM, so adding it after the converge meant the first
+    // run on a fresh box could not resolve a vendor app at all — it failed
+    // (best-effort, warned), the remote appeared, and only a SECOND converge
+    // installed it. Same reason tap-trust runs before brew.
+    providers::remotes_converge(&providers::effective_remotes(home, machine)?, dry_run)?;
     // The journal opens BEFORE the converge, not after it. It used to be created
     // for the config-step phase only, so `install --packages-only` returned
     // without ever journaling anything — packages were unrevertible because
@@ -1668,7 +1674,6 @@ pub fn run_install(
         verbose,
     )?;
     journal.record_packages("rpm-ostree", &rpm_installed);
-    providers::remotes_converge(&providers::effective_remotes(home, machine)?, dry_run)?;
     // Layering stages a deployment, so anything layered means a reboot.
     let reboot = !rpm_installed.is_empty();
 

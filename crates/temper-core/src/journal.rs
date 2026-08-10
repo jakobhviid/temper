@@ -126,9 +126,12 @@ fn uninstall_packages(provider: &str, packages: &[String]) -> bool {
         }
         "flatpak" => {
             let mut c = std::process::Command::new("flatpak");
-            // `--user`: temper only ever installs into the user scope, so that is
-            // the only scope an undo may remove from. A system app belongs to the
-            // image or to root.
+            // `--user` is the scope temper may safely remove from: a system app
+            // belongs to the image or to root. It is NOT necessarily the scope
+            // the install wrote to — `flatpak install` defaults to the system
+            // installation — so on an image-based host this revert finds nothing
+            // and says so. Deliberately narrow rather than wrong: see ROADMAP,
+            // "Which flatpak installation temper owns".
             c.args(["uninstall", "-y", "--noninteractive", "--user"]);
             c
         }
