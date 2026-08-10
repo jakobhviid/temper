@@ -801,7 +801,37 @@ pub fn upgrade(verbose: bool) -> Result<()> {
 /// dependency-aware `brew bundle cleanup --force` against the effective
 /// Brewfile (so a kept package's transitive deps aren't removed); flatpak
 /// extras are uninstalled by id. VM-verified.
-pub fn prune_apply(effective: &[Pkg], extras: &[(Manager, String)]) -> Result<()> {
+/// `[ignore]` entries rendered as Brewfile tokens, so `brew bundle cleanup`
+/// treats them as things that may stay.
+///
+/// `mas` is keyed by its numeric id (that is what `Pkg::match_name` yields and
+/// what `[ignore].mas` holds), so the id stands in for the display name too —
+/// cleanup matches on the id, and no name is available here anyway.
+fn ignored_brewfile_lines(ignore: &crate::manifest::Ignore) -> Vec<String> {
+    let mut out = Vec::new();
+    for name in &ignore.brew {
+        out.push(format!("brew \"{name}\""));
+    }
+    for name in &ignore.cask {
+        out.push(format!("cask \"{name}\""));
+    }
+    for name in &ignore.tap {
+        out.push(format!("tap \"{name}\""));
+    }
+    for id in &ignore.mas {
+        out.push(format!("mas \"{id}\", id: {id}"));
+    }
+    for name in &ignore.vscode {
+        out.push(format!("vscode \"{name}\""));
+    }
+    out
+}
+
+pub fn prune_apply(
+    effective: &[Pkg],
+    extras: &[(Manager, String)],
+    ignore: &crate::manifest::Ignore,
+) -> Result<()> {
     let has_brewish = effective.iter().any(|p| {
         matches!(
             p.manager,
@@ -809,7 +839,14 @@ pub fn prune_apply(effective: &[Pkg], extras: &[(Manager, String)]) -> Result<()
         )
     });
     if has_brewish && have("brew") {
-        let body: String = effective
+        // The file brew reads is "what may stay", and that is the declared set
+        // PLUS everything `[ignore]` covers. `[ignore]` never subtracts from the
+        // declared set (Principle #4), so an ignored package is by definition
+        // absent from `effective` — and building the cleanup file from
+        // `effective` alone therefore handed brew every ignored package as an
+        // orphan. It uninstalled them: unpreviewed, uncounted, unconfirmed, and
+        // outside the plan the user confirmed.
+        let mut body: String = effective
             .iter()
             .filter(|p| {
                 matches!(
@@ -819,6 +856,10 @@ pub fn prune_apply(effective: &[Pkg], extras: &[(Manager, String)]) -> Result<()
             })
             .map(|p| format!("{}\n", p.raw))
             .collect();
+        for line in ignored_brewfile_lines(ignore) {
+            body.push_str(&line);
+            body.push('\n');
+        }
         let tmp =
             std::env::temp_dir().join(format!("temper-Brewfile-prune-{}", std::process::id()));
         fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;

@@ -76,6 +76,10 @@ trust = ["ublue-os/tap"]   # third-party taps to `brew trust` before converge/up
                             #   declared-but-untrusted (install/update re-trusts) and
                             #   trusted-but-undeclared (reconcile absorbs / prune untrusts;
                             #   [ignore].tap silences)
+                            #   Declaring NO tap at any scope opts the question out
+                            #   entirely — the same rule as packages, where a manager
+                            #   you never declare is never probed. A spec silent about
+                            #   taps is not a spec asking for every tap to be untrusted.
 
 [eq_import]                 # optional; `temper eq-import` fetches speaker profiles
 repo = "https://github.com/…/pipewire-speaker-profiles"
@@ -235,7 +239,10 @@ Effective package set for a machine = union(each app's `packages`(+`_mac`/
 is the seed case (`init`). `[ignore]`
 is **not** subtracted here — it only stops installed-but-undeclared packages from
 being flagged as extras by `drift`/`prune`. A package that is both declared and
-ignored is still installed (declaration wins). `[ignore].tap` does double duty: it
+ignored is still installed (declaration wins). An ignored package is also
+**protected from `prune`**: it is named in the Brewfile temper hands
+`brew bundle cleanup`, because that command decides for itself what to remove and
+would treat anything missing from the file as an orphan. `[ignore].tap` does double duty: it
 also silences a *trusted-but-undeclared* tap so `drift`/`reconcile` stop offering
 it as `[brew].trust` (see `[brew].trust` above).
 

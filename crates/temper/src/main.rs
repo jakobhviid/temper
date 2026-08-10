@@ -1455,14 +1455,15 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
     // fire once on every one of them (below), regardless of which path we take.
     let result = (|| -> Result<()> {
         // Compute the plan WITHOUT removing anything, so we can preview + confirm.
-        let prune_plan = plan::run_prune(&home, &m, &manifest::effective_ignore(&home, &ft.ignore, &m)?, &manifest::effective_trust(&home, &ft.brew.trust, &m)?)?;
+        let ignore = manifest::effective_ignore(&home, &ft.ignore, &m)?;
+        let prune_plan = plan::run_prune(&home, &m, &ignore, &manifest::effective_trust(&home, &ft.brew.trust, &m)?)?;
 
         if json {
             // No tty to confirm on: JSON is a preview unless `--yes` explicitly opts
             // into the (destructive) removal.
             let removed = yes && !dry_run && !prune_plan.is_empty();
             if removed {
-                let _reboot = plan::commit_prune(&home, &m, &prune_plan)?;
+                let _reboot = plan::commit_prune(&home, &m, &prune_plan, &ignore)?;
             }
             println!("{}", prune_plan.to_json(&m.name, removed));
             return Ok(());
@@ -1534,7 +1535,7 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
             println!("aborted — nothing removed.");
             return Ok(());
         }
-        let reboot = plan::commit_prune(&home, &m, &prune_plan)?;
+        let reboot = plan::commit_prune(&home, &m, &prune_plan, &ignore)?;
         println!("prune {}: {} item(s) removed", m.name, prune_plan.len());
         if reboot {
             println!("  ! reboot required (rpm-ostree staged a deployment)");

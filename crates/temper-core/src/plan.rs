@@ -1207,7 +1207,7 @@ pub fn run_drift(
     // brew tap-trust drift — both directions, mirroring packages. Skipped
     // entirely when brew is absent (`trusted_taps` → None), so a declared
     // `[brew].trust` on a non-brew host doesn't read as "all untrusted".
-    if let Some(trusted) = providers::trusted_taps()? {
+    if let (true, Some(trusted)) = (trust_is_declared(brew_trust), providers::trusted_taps()?) {
         // Declared but not trusted → a gap (brew silently skips the tap's
         // formulae). Fixed by `install`/`update`, which run `brew trust`.
         for tap in brew_trust {
@@ -2055,6 +2055,20 @@ mod prune_plan_tests {
 ///
 /// Each of the three is gated independently: a machine that declares no
 /// packages still prunes its extension extras, because `drift` reports them.
+/// Whether the spec expresses an opinion about tap-trust at all.
+///
+/// The opt-in every other provider has, and the one tap-trust never got: "a
+/// manager is only probed if you declare at least one of its packages". A spec
+/// that names no tap is not a spec asking for every tap to be untrusted — but
+/// `prune` read it that way, and would `brew untrust` the taps its own formulae
+/// come from on any folder that simply never mentioned them.
+///
+/// Shared by `drift` and `prune` so the report and the removal cannot disagree
+/// about whether the question is even being asked.
+fn trust_is_declared(brew_trust: &[String]) -> bool {
+    !brew_trust.is_empty()
+}
+
 pub fn run_prune(
     home: &Path,
     machine: &Machine,
@@ -2087,9 +2101,10 @@ pub fn run_prune(
     }
 
     // Trusted-but-undeclared taps → untrust (honors `[ignore].tap`). Skipped
-    // without brew (`trusted_taps` → None).
+    // without brew (`trusted_taps` → None), and skipped on a spec that says
+    // nothing about taps (`trust_is_declared`).
     let mut untrust = Vec::new();
-    if let Some(trusted) = providers::trusted_taps()? {
+    if let (true, Some(trusted)) = (trust_is_declared(brew_trust), providers::trusted_taps()?) {
         for tap in &trusted {
             if !brew_trust.iter().any(|t| t == tap) && !ignore.tap.iter().any(|t| t == tap) {
                 untrust.push(tap.clone());
@@ -2123,14 +2138,22 @@ pub fn run_prune(
 /// the plan without touching anything). Recomputes the effective set so `brew
 /// bundle cleanup` keeps a declared package's transitive deps. A no-op on an
 /// empty plan.
-pub fn commit_prune(home: &Path, machine: &Machine, plan: &PrunePlan) -> Result<bool> {
+pub fn commit_prune(
+    home: &Path,
+    machine: &Machine,
+    plan: &PrunePlan,
+    ignore: &Ignore,
+) -> Result<bool> {
     // Uninstalling a pkg-based cask needs root per cask, same as installing one.
     // No `acquire` here: the plan is already confirmed and brew asks in its own
     // words on the first one — this just stops it asking again for the rest.
     let _sudo = crate::sudo::keep_alive();
     if !plan.packages.is_empty() {
         let effective = packages::effective_set(home, machine)?;
-        providers::prune_apply(&effective, &plan.packages)?;
+        // `ignore` reaches the executor because `brew bundle cleanup` decides
+        // for itself what to remove: what temper leaves out of the file, brew
+        // takes away.
+        providers::prune_apply(&effective, &plan.packages, ignore)?;
     }
     if !plan.untrust.is_empty() {
         providers::untrust_taps(&plan.untrust)?;
