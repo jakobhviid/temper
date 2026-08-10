@@ -1419,7 +1419,7 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
             // into the (destructive) removal.
             let removed = yes && !dry_run && !prune_plan.is_empty();
             if removed {
-                plan::commit_prune(&home, &m, &prune_plan)?;
+                let _reboot = plan::commit_prune(&home, &m, &prune_plan)?;
             }
             let arr: Vec<_> = prune_plan
                 .packages
@@ -1430,7 +1430,8 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
                 "{}",
                 serde_json::json!({
                     "machine": m.name, "extras": arr, "untrust": prune_plan.untrust,
-                    "extensions": prune_plan.extensions, "removed": removed
+                    "extensions": prune_plan.extensions,
+                    "rpm_ostree": prune_plan.rpm_ostree, "removed": removed
                 })
             );
             return Ok(());
@@ -1462,6 +1463,9 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
         for uuid in &prune_plan.extensions {
             println!("  - uninstall extension {uuid}");
         }
+        for pkg in &prune_plan.rpm_ostree {
+            println!("  - un-layer rpm {pkg}");
+        }
         if prune_plan.is_empty() {
             println!("prune {}: nothing to remove.", m.name);
             return Ok(());
@@ -1477,15 +1481,19 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
         // Removal is destructive (dependency-aware uninstall + untrust) — confirm.
         if !yes
             && !prompt_no(&format!(
-                "remove {} item(s) listed above? this uninstalls packages and untrusts taps",
+                "remove {} item(s) listed above? this uninstalls packages, GNOME extensions \
+                 and flatpaks, untrusts taps, and un-layers rpms (a reboot applies that last one)",
                 prune_plan.len()
             ))
         {
             println!("aborted — nothing removed.");
             return Ok(());
         }
-        plan::commit_prune(&home, &m, &prune_plan)?;
+        let reboot = plan::commit_prune(&home, &m, &prune_plan)?;
         println!("prune {}: {} item(s) removed", m.name, prune_plan.len());
+        if reboot {
+            println!("  ! reboot required (rpm-ostree staged a deployment)");
+        }
         Ok(())
     })();
     remind_if_dirty(&home, &gc);

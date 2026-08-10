@@ -584,14 +584,7 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
     KindSpec {
         name: "rpm-ostree-extra",
         detects: Detects::Extra,
-        // No prune path yet: `rpm-ostree uninstall` is a deployment change with
-        // a reboot, which is a different shape from every other prune and is not
-        // built. Said here rather than left blank.
-        converge: &[Answer::Hand {
-            file: "the machine",
-            why: "`rpm-ostree uninstall` stages a new deployment and needs a reboot — \
-                  temper does not drive that yet",
-        }],
+        converge: &[Answer::Verb("temper prune")],
         absorb: &[Answer::Verb("temper reconcile")],
     },
     KindSpec {
@@ -1471,18 +1464,25 @@ pub struct PrunePlan {
     /// `extension-extra`. Without this, gext extras were the one drift no verb
     /// could clear: reported forever, with only a hand edit to answer them.
     pub extensions: Vec<String>,
+    /// Layered rpms to un-layer — the prune counterpart of an
+    /// `rpm-ostree-extra`. Stages a new deployment, so it sets the reboot signal
+    /// exactly as layering does.
+    pub rpm_ostree: Vec<String>,
 }
 
 impl PrunePlan {
     pub fn is_empty(&self) -> bool {
-        self.packages.is_empty() && self.untrust.is_empty() && self.extensions.is_empty()
+        self.packages.is_empty()
+            && self.untrust.is_empty()
+            && self.extensions.is_empty()
+            && self.rpm_ostree.is_empty()
     }
     /// Every item the plan would remove. Each variant that `commit_prune` acts
     /// on is counted: a count that omits one is a silent cap (Principle #6) —
     /// this once asked "remove 0 item(s)?" and then uninstalled three
     /// extensions.
     pub fn len(&self) -> usize {
-        self.packages.len() + self.untrust.len() + self.extensions.len()
+        self.packages.len() + self.untrust.len() + self.extensions.len() + self.rpm_ostree.len()
     }
 }
 
@@ -1520,6 +1520,44 @@ fn package_extras(
     Ok(out)
 }
 
+#[cfg(test)]
+mod prune_plan_tests {
+    use super::*;
+
+    /// Every list a prune can act on is counted.
+    ///
+    /// A count is output, so a count that omits a variant reports work it did as
+    /// work it didn't (Principle #6). This has already been wrong once: `len()`
+    /// summed two of three lists, so a prune whose only items were GNOME
+    /// extensions asked "remove **0** item(s)?", uninstalled three, and reported
+    /// "0 item(s) removed". Adding a fourth list is exactly when that recurs.
+    #[test]
+    fn the_count_covers_every_list_prune_acts_on() {
+        let p = PrunePlan {
+            packages: vec![(packages::Manager::Brew, "jq".into())],
+            untrust: vec!["user/tap".into()],
+            extensions: vec!["a@x".into()],
+            rpm_ostree: vec!["vpn".into()],
+        };
+        assert!(!p.is_empty());
+        assert_eq!(p.len(), 4, "a list prune acts on is not being counted");
+
+        // …and each list alone is both non-empty and counted, so no single
+        // variant can be the one that is silently dropped.
+        for one in [
+            PrunePlan { packages: p.packages.clone(), ..Default::default() },
+            PrunePlan { untrust: p.untrust.clone(), ..Default::default() },
+            PrunePlan { extensions: p.extensions.clone(), ..Default::default() },
+            PrunePlan { rpm_ostree: p.rpm_ostree.clone(), ..Default::default() },
+        ] {
+            assert!(!one.is_empty());
+            assert_eq!(one.len(), 1);
+        }
+        assert!(PrunePlan::default().is_empty());
+        assert_eq!(PrunePlan::default().len(), 0);
+    }
+}
+
 /// Prune installed-but-not-declared packages, trusted-but-undeclared taps, and
 /// user-scope GNOME extensions no bundle declares. Returns the plan; the caller
 /// previews and confirms before `commit_prune` applies it.
@@ -1552,6 +1590,7 @@ pub fn run_prune(
         packages,
         untrust,
         extensions,
+        rpm_ostree: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
     })
 }
 
@@ -1560,7 +1599,7 @@ pub fn run_prune(
 /// the plan without touching anything). Recomputes the effective set so `brew
 /// bundle cleanup` keeps a declared package's transitive deps. A no-op on an
 /// empty plan.
-pub fn commit_prune(home: &Path, machine: &Machine, plan: &PrunePlan) -> Result<()> {
+pub fn commit_prune(home: &Path, machine: &Machine, plan: &PrunePlan) -> Result<bool> {
     // Uninstalling a pkg-based cask needs root per cask, same as installing one.
     // No `acquire` here: the plan is already confirmed and brew asks in its own
     // words on the first one — this just stops it asking again for the rest.
@@ -1575,7 +1614,8 @@ pub fn commit_prune(home: &Path, machine: &Machine, plan: &PrunePlan) -> Result<
     if !plan.extensions.is_empty() {
         providers::gext_uninstall(&plan.extensions)?;
     }
-    Ok(())
+    let reboot = providers::rpm_ostree_uninstall(&plan.rpm_ostree, false)?;
+    Ok(reboot)
 }
 
 /// Snapshot: capture each declared `[[machine.dconf]]` subtree (filtered) into

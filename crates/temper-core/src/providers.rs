@@ -1241,6 +1241,34 @@ pub fn rpm_ostree_machine_absent(machine_own: &[String]) -> Vec<String> {
     out
 }
 
+/// Un-layer rpms — the prune side of rpm-ostree.
+///
+/// Symmetric with `rpm_converge`, which is the point: layering and un-layering
+/// are the *same* mechanism. Both stage a new deployment and both need a reboot
+/// to take effect, so a prune here is no more exotic than the install that put
+/// the package there. (This was briefly written off as "a different shape from
+/// every other prune" — a comparison against `brew bundle cleanup` rather than
+/// against rpm-ostree's own install, which is the one that matters.)
+///
+/// `--idempotent` so a package already gone is not an error, `-y` because the
+/// caller has already confirmed, and deliberately **no** `-r`: temper reports
+/// that a reboot is required and never initiates one.
+pub fn rpm_ostree_uninstall(pkgs: &[String], verbose: bool) -> Result<bool> {
+    if pkgs.is_empty() {
+        return Ok(false);
+    }
+    if !rpm_ostree_caps().converge {
+        bail!("rpm-ostree not found — cannot un-layer packages on this host");
+    }
+    let mut cmd = Command::new("rpm-ostree");
+    cmd.args(["uninstall", "--idempotent", "-y"]);
+    for p in pkgs {
+        cmd.arg(p);
+    }
+    run_child(cmd, verbose, "rpm-ostree uninstall", "un-layering rpms");
+    Ok(true) // a staged deployment needs a reboot, same as layering
+}
+
 /// Layered rpms no bundle or machine declares — the extras direction.
 ///
 /// Gated on the machine declaring at least one, like every other manager

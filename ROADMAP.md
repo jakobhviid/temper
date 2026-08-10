@@ -31,12 +31,12 @@ a *verified* gap, not a suspicion.
    meaningful on some is permanently red on the rest. The natural fix is to let a
    **bundle** carry them: a bundle is already the group construct and is already
    os/role-gated, which beats bolting a third gate axis onto the fleet tables.
-2. **`rpm-ostree` has no prune path.** Machine scope, the extras direction,
-   staged-deployment awareness and an ignore list all exist now; removal does
-   not. `rpm-ostree uninstall` stages a new deployment and needs a reboot, which
-   is a different shape from every other prune — closer to `restore-dconf` than
-   to `brew bundle cleanup`. Its `converge` cell says so rather than sitting
-   blank.
+2. **Package installs are not journaled, and nothing says so before you confirm.**
+   `undo` covers file and key writes; a `brew`/`flatpak`/`mas`/`gext`/`rpm-ostree`
+   converge is not revertible, and on a Mac `setkey(defaults)` is not either. A
+   run whose only changes were unjournaled reverts nothing while reporting
+   success. AGENTS.md question 7 asks for this at plan time; no code answers it
+   yet.
 3. **`flatpak` remotes are unmanaged.** There is no `flatpak remote-add` and no
    remote enumeration, so a declared app from a vendor remote or `flathub-beta`
    cannot be installed and the converge degrades to a warning. Remotes are the

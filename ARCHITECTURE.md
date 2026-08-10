@@ -228,15 +228,27 @@ above.
 | `flatpak` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
 | `mas` / `vscode` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
 | `gnome-extensions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
-| `rpm-ostree` | ✅ | ✅ | ✅ | ✅ | ⚠ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
+| `rpm-ostree` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
 | `dconf` | ✅ | ✅ | ✅ | ⚠ | ❌ | ✅ | ✅ | ⚠ | ✅ | ✅ | ❌ |
 | `copy` / `block` / `sysfile` | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ⚠ | ✅ | ❌ |
 | `profile` | ✅ | ❌ | ✅ | ⚠ | ❌ | ❌ | ❌ | ❌ | ⚠ | ❌ | ❌ |
 
-What the ⚠ marks mean, briefly:
+**Install and uninstall are a pair, in every provider.** `brew install`/
+`uninstall`, `flatpak install`/`uninstall`, `gext install`/`uninstall`,
+`rpm-ostree install`/`uninstall` — column 5 is just column 4 backwards, and a
+provider claiming it cannot prune is usually comparing itself to the wrong
+sibling. rpm-ostree looked exceptional because it stages a deployment and needs a
+reboot, until you notice its own *install* does exactly that too.
 
-- **col 5, `rpm-ostree`** — no prune path: `rpm-ostree uninstall` stages a
-  deployment and needs a reboot, a different shape from every other prune.
+The one real deviation is **brew**, which prunes via `brew bundle cleanup` rather
+than `brew uninstall`, because cleanup is dependency-aware: a formula kept only as
+another package's transitive dependency must not be removed. That is a
+correctness requirement, and it is the documented exception rather than a second
+pattern.
+
+Column 10 is the remaining ❌ across the package providers: a package install is
+not journaled, so `undo` does not cover it — and per AGENTS.md question 7, that
+should be visible before the user confirms rather than discovered afterwards.
 - **col 4, `dconf`** — `restore` is excluded from `install`/`update`, which is a
   symptom of the recording model, not a property of the store (see below).
 - **col 4, `profile`** — its apply is a GUI dialog a human must approve, so it
