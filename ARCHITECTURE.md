@@ -326,7 +326,7 @@ the family will get a second member and the desktop will get a second store.
 `rpm-ostree`, not `rpm` — a future `apt` is a different feature, not a variant.
 `brew-trust`, not `trust` — flatpak remotes and apt keys are also trust.
 `gnome-extensions`, not `extensions` — VS Code extensions are managed here too,
-and that collision is already live. `snapshot-dconf`, not `snapshot-dconf` —
+and that collision is already live. `snapshot-dconf`, not `snapshot-gnome` —
 dconf is present under KDE, so the desktop was never the right noun.
 
 ## Retirement — what happens to residue
