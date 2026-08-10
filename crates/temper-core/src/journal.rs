@@ -74,11 +74,59 @@ enum Entry {
         before: String,
         after: String,
     },
+    /// Packages this run **newly installed** — not upgraded.
+    ///
+    /// Reversing an install is the same operation the provider already offers
+    /// backwards (`gext uninstall`, `rpm-ostree uninstall`), and the set is
+    /// known before the converge runs, because temper computes what is missing
+    /// in order to install it. So it was never that packages *could not* be
+    /// journaled — nobody had written down why they weren't.
+    ///
+    /// An **upgrade** is deliberately not recorded. Reverting one means pinning
+    /// a prior version, and the old bottle or commit may simply be gone; a
+    /// revert that silently installs "some earlier version" is worse than one
+    /// that says it cannot. `undo` reports the difference rather than guessing.
+    PackagesInstalled {
+        /// The provider name from `interface::PROVIDERS`.
+        provider: String,
+        packages: Vec<String>,
+    },
     /// An op written by a NEWER temper than the one reading. Undo skips and
     /// reports it rather than failing to parse the whole run — a downgrade
     /// loses the ability to revert that entry, not the ability to revert at all.
     #[serde(other)]
     Unknown,
+}
+
+/// Un-install packages this run installed. Best-effort per provider: one that
+/// fails must not strand the rest of the revert, and a provider whose tool is
+/// gone reports rather than errors.
+fn uninstall_packages(provider: &str, packages: &[String]) -> bool {
+    if packages.is_empty() {
+        return true;
+    }
+    let mut cmd = match provider {
+        "gnome-extensions" => {
+            let mut c = std::process::Command::new("gext");
+            c.arg("uninstall");
+            c
+        }
+        "rpm-ostree" => {
+            let mut c = std::process::Command::new("rpm-ostree");
+            // Stages a new deployment, exactly as layering did. No `-r`: temper
+            // reports that a reboot is needed and never initiates one.
+            c.args(["uninstall", "--idempotent", "-y"]);
+            c
+        }
+        _ => return false,
+    };
+    for p in packages {
+        cmd.arg(p);
+    }
+    cmd.stdout(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 fn dconf_read(key: &str) -> Option<String> {
@@ -194,6 +242,18 @@ impl Journal {
     }
 
     /// Record a `setkey(dconf)` write for undo (`before` = prior value or None).
+    /// Record packages a converge newly installed, so `undo` can remove them.
+    /// A no-op on an empty set, so a run that installed nothing adds no entry.
+    pub fn record_packages(&mut self, provider: &str, packages: &[String]) {
+        if packages.is_empty() {
+            return;
+        }
+        self.entries.push(Entry::PackagesInstalled {
+            provider: provider.to_string(),
+            packages: packages.to_vec(),
+        });
+    }
+
     pub fn record_dconf(&mut self, key: &str, before: Option<String>, after: String) {
         self.entries.push(Entry::DconfKey {
             key: key.to_string(),
@@ -320,6 +380,20 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
     // the spinner is never in anyone's way.
     let cl = crate::ui::Checklist::new(rf.entries.len(), "reverting", false);
     for entry in rf.entries.iter().rev() {
+        // Package entries revert by un-installing exactly what this run added.
+        if let Entry::PackagesInstalled { provider, packages } = entry {
+            if uninstall_packages(provider, packages) {
+                reverted += packages.len();
+                cl.done(&format!("{provider}: {} package(s)", packages.len()));
+            } else {
+                skipped += packages.len();
+                cl.skipped(
+                    &format!("{provider}: {} package(s)", packages.len()),
+                    "could not un-install",
+                );
+            }
+            continue;
+        }
         // dconf key entries guard on the live value, not a file hash.
         if let Entry::DconfKey { key, before, after } = entry {
             cl.start(&format!("dconf {key}"));
@@ -435,6 +509,45 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
 
 #[cfg(test)]
 mod tests {
+    /// A package entry round-trips, and an empty install adds none.
+    ///
+    /// The claim that packages "cannot" be journaled was never examined: the set
+    /// temper installs is known *before* the converge, because temper computes
+    /// what is missing in order to install it, and every provider's uninstall is
+    /// the same operation backwards. What is genuinely not revertible is an
+    /// UPGRADE — reverting one means pinning a prior version whose bottle or
+    /// commit may be gone — so only new installs are recorded.
+    #[test]
+    fn package_installs_are_recorded_and_empty_ones_are_not() {
+        let mut j = Journal::begin();
+        j.record_packages("gnome-extensions", &[]);
+        assert!(j.entries.is_empty(), "an empty install must add no entry");
+
+        j.record_packages("rpm-ostree", &["vpn".to_string(), "vpn-gui".to_string()]);
+        match &j.entries[0] {
+            Entry::PackagesInstalled { provider, packages } => {
+                assert_eq!(provider, "rpm-ostree");
+                assert_eq!(packages.len(), 2);
+            }
+            _ => panic!("expected a package entry"),
+        }
+
+        // Serialises and parses back — the on-disk manifest is the contract, and
+        // an older temper must skip it as Unknown rather than fail the whole run.
+        let json = serde_json::to_string(&j.entries[0]).unwrap();
+        assert!(json.contains("PackagesInstalled"), "{json}");
+        let back: Entry = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, Entry::PackagesInstalled { .. }));
+    }
+
+    /// An unknown provider is refused rather than shelled out blindly.
+    #[test]
+    fn an_unknown_provider_is_not_uninstalled() {
+        assert!(!uninstall_packages("not-a-provider", &["x".to_string()]));
+        // …and an empty set is trivially fine, without running anything.
+        assert!(uninstall_packages("not-a-provider", &[]));
+    }
+
     use super::*;
 
     #[test]

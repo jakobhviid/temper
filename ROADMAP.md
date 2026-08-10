@@ -24,12 +24,14 @@ The feature matrix in `ARCHITECTURE.md` shows where each feature stands against
 the eleven-column interface. These are the open cells, worst first. Every one is
 a *verified* gap, not a suspicion.
 
-1. **Package installs are not journaled, and nothing says so before you confirm.**
-   `undo` covers file and key writes; a `brew`/`flatpak`/`mas`/`gext`/`rpm-ostree`
-   converge is not revertible, and on a Mac `setkey(defaults)` is not either. A
-   run whose only changes were unjournaled reverts nothing while reporting
-   success. AGENTS.md question 7 asks for this at plan time; no code answers it
-   yet.
+1. **Only two providers journal their installs.** `gext` and `rpm-ostree` record
+   what they added, so `undo` removes it. brew, flatpak, mas and vscode do not —
+   the same pattern applies (the missing set is known before the converge, and
+   each provider's uninstall is its own install backwards), it is simply unwired.
+   An **upgrade** stays out of scope by design: reverting one means pinning a
+   prior version whose bottle or commit may be gone.
+   Still open either way: AGENTS.md question 7 asks that non-revertibility be
+   visible in the plan preview, before the user confirms. No code answers that.
 2. **`flatpak` remotes are unmanaged.** There is no `flatpak remote-add` and no
    remote enumeration, so a declared app from a vendor remote or `flathub-beta`
    cannot be installed and the converge degrades to a warning. Remotes are the

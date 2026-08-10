@@ -1337,20 +1337,30 @@ pub fn run_install(
     if !dry_run {
         providers::trust_taps(brew_trust, verbose)?;
     }
+    // The journal opens BEFORE the converge, not after it. It used to be created
+    // for the config-step phase only, so `install --packages-only` returned
+    // without ever journaling anything — packages were unrevertible because
+    // nothing recorded them, not because reversing them is hard.
+    let mut journal = Journal::begin();
     let packages = providers::converge(&effective, dry_run, verbose)?;
-    providers::gext_converge(
+    let gext_installed = providers::gext_converge(
         &providers::effective_extensions(home, machine)?,
         dry_run,
         verbose,
     )?;
-    let reboot = providers::rpm_converge(
+    journal.record_packages("gnome-extensions", &gext_installed);
+    let rpm_installed = providers::rpm_converge(
         &providers::effective_rpm(home, machine)?,
         dry_run,
         verbose,
     )?;
+    journal.record_packages("rpm-ostree", &rpm_installed);
+    // Layering stages a deployment, so anything layered means a reboot.
+    let reboot = !rpm_installed.is_empty();
 
     // `install-missing`: packages only — skip the config-step phase entirely.
     if packages_only {
+        journal.commit()?;
         return Ok(InstallReport {
             packages,
             upgraded: None, // `install-missing` adds, never upgrades
@@ -1363,7 +1373,6 @@ pub fn run_install(
     }
 
     // Phase 2 — config steps (`resolved` was needed above, for the root ask).
-    let mut journal = Journal::begin();
     let (mut changed, mut total, mut ran) = (0usize, 0usize, 0usize);
     let mut skipped = Vec::new();
     // Candidates are known before any of them runs, so the phase has an honest

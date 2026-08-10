@@ -240,8 +240,8 @@ above.
 | `brew-trust` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
 | `flatpak` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
 | `mas` / `vscode` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
-| `gnome-extensions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
-| `rpm-ostree` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
+| `gnome-extensions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
+| `rpm-ostree` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `dconf` | ✅ | ✅ | ✅ | ⚠ | ❌ | ✅ | ✅ | ⚠ | ✅ | ✅ | ❌ |
 | `copy` / `block` / `sysfile` | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ⚠ | ✅ | ❌ |
 | `profile` | ✅ | ❌ | ✅ | ⚠ | ❌ | ❌ | ❌ | ❌ | ⚠ | ❌ | ❌ |
@@ -259,9 +259,19 @@ another package's transitive dependency must not be removed. That is a
 correctness requirement, and it is the documented exception rather than a second
 pattern.
 
-Column 10 is the remaining ❌ across the package providers: a package install is
-not journaled, so `undo` does not cover it — and per AGENTS.md question 7, that
-should be visible before the user confirms rather than discovered afterwards.
+**Column 10 was never a real constraint, and saying so cost a release.** "Packages
+cannot be journaled" was repeated until someone asked why: the set temper installs
+is known *before* the converge — temper computes what is missing in order to
+install it — and every provider's uninstall is its own install backwards. `gext`
+and `rpm-ostree` now journal what they installed, and `undo` removes exactly that.
+
+What is genuinely not revertible is an **upgrade**: reverting one means pinning a
+prior version whose bottle or commit may be gone, and a revert that silently
+installs "some earlier version" is worse than one that says it cannot. So only
+new installs are recorded, and `undo` reports the difference. brew, flatpak, mas
+and vscode still show ❌ because they are not wired yet, not because they can't
+be — and per AGENTS.md question 7 that limit belongs in the plan preview, before
+the user confirms.
 - **col 4, `dconf`** — `restore` is excluded from `install`/`update`, which is a
   symptom of the recording model, not a property of the store (see below).
 - **col 4, `profile`** — its apply is a GUI dialog a human must approve, so it

@@ -1044,9 +1044,9 @@ pub fn gext_uninstall(uuids: &[String]) -> Result<()> {
 /// install one at a time, and `gext`'s own per-extension chatter would otherwise
 /// stand in temper's output as if it were temper speaking. A failure is warned
 /// and skipped — one unavailable extension must not fail a converge.
-pub fn gext_converge(effective: &[String], dry_run: bool, verbose: bool) -> Result<()> {
+pub fn gext_converge(effective: &[String], dry_run: bool, verbose: bool) -> Result<Vec<String>> {
     if dry_run {
-        return Ok(());
+        return Ok(Vec::new());
     }
     // No installer: say so instead of returning quietly. Silence here meant
     // `drift` reported missing extensions, named `install --packages-only` as
@@ -1061,10 +1061,13 @@ pub fn gext_converge(effective: &[String], dry_run: bool, verbose: bool) -> Resu
                 missing.len()
             );
         }
-        return Ok(());
+        return Ok(Vec::new());
     }
     let pb = (!verbose && !missing.is_empty())
         .then(|| crate::ui::spinner_counted(missing.len() as u64, "GNOME extensions"));
+    // Only what actually landed is journaled: a failed install must not leave an
+    // undo entry that then tries to remove something that was never there.
+    let mut installed: Vec<String> = Vec::new();
     for uuid in &missing {
         if let Some(pb) = &pb {
             pb.set_message(format!("Installing {uuid}"));
@@ -1082,7 +1085,9 @@ pub fn gext_converge(effective: &[String], dry_run: bool, verbose: bool) -> Resu
         if let Some(pb) = &pb {
             pb.inc(1);
         }
-        if !ok {
+        if ok {
+            installed.push(uuid.clone());
+        } else {
             let warn = || eprintln!("{} gext install {uuid} failed — skipped", crate::ui::yellow(crate::ui::g_warn()));
             match &pb {
                 Some(pb) => pb.suspend(warn),
@@ -1093,7 +1098,7 @@ pub fn gext_converge(effective: &[String], dry_run: bool, verbose: bool) -> Resu
     if let Some(pb) = pb {
         pb.finish_and_clear();
     }
-    Ok(())
+    Ok(installed)
 }
 
 // --- rpm-ostree: layered rpms that can't be image-baked (Linux) ---------------
@@ -1626,10 +1631,10 @@ mod gating_tests {
 ///
 /// Captured like every other converge child (see `run_child`) — rpm-ostree is
 /// chatty and slow, so it gets the spinner rather than the terminal.
-pub fn rpm_converge(effective: &[String], dry_run: bool, verbose: bool) -> Result<bool> {
+pub fn rpm_converge(effective: &[String], dry_run: bool, verbose: bool) -> Result<Vec<String>> {
     let missing = rpm_missing(effective);
     if dry_run || missing.is_empty() {
-        return Ok(false);
+        return Ok(Vec::new());
     }
     if !rpm_ostree_caps().converge {
         eprintln!(
@@ -1637,7 +1642,7 @@ pub fn rpm_converge(effective: &[String], dry_run: bool, verbose: bool) -> Resul
             crate::ui::yellow(crate::ui::g_warn()),
             missing.len()
         );
-        return Ok(false);
+        return Ok(Vec::new());
     }
     let mut cmd = Command::new("rpm-ostree");
     cmd.args(["install", "--idempotent"]);
@@ -1645,7 +1650,8 @@ pub fn rpm_converge(effective: &[String], dry_run: bool, verbose: bool) -> Resul
         cmd.arg(p);
     }
     run_child(cmd, verbose, "rpm-ostree install", "layering rpms");
-    Ok(true) // layered rpms require a reboot to take effect
+    // A non-empty set is also the reboot signal: layering stages a deployment.
+    Ok(missing)
 }
 
 // --- dependency-aware brew extras (read-only) ---------------------------------

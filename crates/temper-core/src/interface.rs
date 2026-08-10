@@ -123,7 +123,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         prune: Col::Yes,
         reconcile: Col::Yes,
         ignore: Col::Yes,
-        revertible: Col::No(NOT_JOURNALED),
+        revertible: Col::Yes,
         residue: Col::NA(NO_RESIDUE),
     },
     ProviderSpec {
@@ -136,7 +136,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         prune: Col::Yes,
         reconcile: Col::Yes,
         ignore: Col::Yes,
-        revertible: Col::No(NOT_JOURNALED),
+        revertible: Col::Yes,
         residue: Col::NA(NO_RESIDUE),
     },
     ProviderSpec {
