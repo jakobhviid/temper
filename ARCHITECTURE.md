@@ -177,6 +177,14 @@ equivalent of `reconcile` is `git commit`. An item deployed from fleet scope and
 later removed from the group becomes undeclared like any other, and prune cleans
 it up — that is how a fleet-scope retirement lands on every machine.
 
+**Scope is a property of the declaration, not of the kind.** The finding
+registry answers per kind, so it can say "a missing extension is absorbed by
+`reconcile`" — and be wrong for the half of them a *bundle* declares, because
+reconcile's candidates are machine-scope only. A drift finding therefore carries
+the file where its declaration actually lives, and names that instead of a verb
+with no code path for it. `gnome-extension`, `rpm-ostree` and `flatpak-remote`
+answer this per item.
+
 Getting this wrong is the tool's recurring defect. Every category that was built
 before this rule was written down re-decided its own verb set, and each got it
 wrong differently: `gext` could be added but never removed, `[brew].trust` and

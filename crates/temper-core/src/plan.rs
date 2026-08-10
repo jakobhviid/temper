@@ -1281,13 +1281,25 @@ pub fn run_drift(
     // GNOME extensions + rpm-ostree (Linux; inert where their CLIs are absent).
     let effective_ext = providers::effective_extensions(home, machine)?;
     for uuid in providers::gext_missing(&effective_ext) {
+        // Scope is a property of the declaration, so the answer differs per
+        // item even though the kind is one. A bundle-declared extension is a
+        // hand edit in that file; `reconcile` has no candidate for it and would
+        // silently do nothing.
+        let from = providers::declaring_bundle(
+            home,
+            machine,
+            providers::DeclKind::GnomeExtension,
+            &uuid,
+        );
         findings.push(Finding {
             app: "gnome-extensions".into(),
             kind: "gnome-extension",
             target: uuid,
             ok: false,
             status: "missing".into(),
-            detail: None,
+            detail: from.map(|f| {
+                format!("declared in {f} — fleet scope, so removing it is a hand edit there")
+            }),
         });
     }
     // The extras direction, which every other manager already reported. Carries
@@ -1383,13 +1395,19 @@ pub fn run_drift(
     }
     let effective_remotes = providers::effective_remotes(home, machine)?;
     for r in providers::remotes_missing(&effective_remotes) {
+        // `remotes_missing` yields "<name> <url>"; the name is the identity.
+        let name = r.split_whitespace().next().unwrap_or(&r).to_string();
+        let from =
+            providers::declaring_bundle(home, machine, providers::DeclKind::FlatpakRemote, &name);
         findings.push(Finding {
             app: "flatpak-remote".into(),
             kind: "flatpak-remote",
             target: r,
             ok: false,
             status: "missing".into(),
-            detail: None,
+            detail: from.map(|f| {
+                format!("declared in {f} — fleet scope, so removing it is a hand edit there")
+            }),
         });
     }
     for r in providers::remotes_extras(&effective_remotes, ignore) {
@@ -1414,13 +1432,17 @@ pub fn run_drift(
         });
     }
     for pkg in providers::rpm_missing(&effective_rpm) {
+        let from =
+            providers::declaring_bundle(home, machine, providers::DeclKind::RpmOstree, &pkg);
         findings.push(Finding {
             app: "rpm-ostree".into(),
             kind: "rpm-ostree",
             target: pkg,
             ok: false,
             status: "missing".into(),
-            detail: None,
+            detail: from.map(|f| {
+                format!("declared in {f} — fleet scope, so removing it is a hand edit there")
+            }),
         });
     }
 

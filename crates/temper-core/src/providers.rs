@@ -1040,6 +1040,54 @@ pub fn effective_extension_specs(
     Ok(out)
 }
 
+/// Which bundle file declares this thing, if a bundle does — `None` when the
+/// machine's own block does.
+///
+/// Scope decides the verb set, and it is a property of the *declaration*, not of
+/// the kind. `KIND_ANSWERS` can only answer per kind, so drift told everyone to
+/// run `temper reconcile` for a missing extension, rpm or remote — and
+/// reconcile's candidates are machine-scope only, so for a bundle-declared one
+/// it silently did nothing. That is the bug this whole model exists to prevent,
+/// one notch narrower than the original. Naming the file is the honest answer,
+/// and SPEC already claimed drift did it.
+pub fn declaring_bundle(
+    home: &Path,
+    machine: &Machine,
+    kind: DeclKind,
+    item: &str,
+) -> Option<String> {
+    for app in &machine.apps {
+        let Ok(bundle) = manifest::load_bundle(home, app) else {
+            continue;
+        };
+        if manifest::gated(&bundle.os, &bundle.role, machine) {
+            continue;
+        }
+        let hit = match kind {
+            DeclKind::GnomeExtension => bundle.gnome_extensions.iter().any(|e| e.uuid() == item),
+            DeclKind::RpmOstree => bundle.rpm_ostree.iter().any(|r| r == item),
+            DeclKind::FlatpakRemote => bundle
+                .flatpak_remotes
+                .iter()
+                .filter_map(|t| parse_remote(t))
+                .any(|(n, _)| n == item),
+        };
+        if hit {
+            return Some(format!("apps/{app}.toml"));
+        }
+    }
+    None
+}
+
+/// The categories `declaring_bundle` can answer for — the ones whose absorb cell
+/// names `temper reconcile`.
+#[derive(Clone, Copy)]
+pub enum DeclKind {
+    GnomeExtension,
+    RpmOstree,
+    FlatpakRemote,
+}
+
 /// Every snapshot this machine's declared extensions bring with them.
 ///
 /// Returned alongside `machine.dconf` everywhere a snapshot is captured,
