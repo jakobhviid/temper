@@ -215,6 +215,19 @@ the thing simply has not been built.
 | 10 | **revertible** | journaled, or explicitly not — and if not, the user learns *before* confirming |
 | 11 | **residue** | what happens to what it deployed when the declaration goes away (see "Retirement") |
 
+The table is also **data**, in `interface.rs`: each provider records how it
+answers each column, and tests hold that against the finding registry —
+a provider claiming it can prune must have a kind that actually names `temper
+prune`, claiming reconcile requires a machine scope to write to, and a declined
+column must carry a reason. That is the feature-level version of "advice is a
+mutation" (Principle #8), which nothing was checking: the finding registry made a
+missing *finding* answer loud, while a *provider* could still claim a capability
+with nothing behind it.
+
+It is the registry half, not the dispatch half. Providers still have their own
+function signatures; harmonising those behind a real trait is the remaining work,
+deliberately sequenced after enough providers fill their columns to shape it.
+
 ### Where each feature stands
 
 Filled in so the gaps are *readable* rather than re-argued every time someone

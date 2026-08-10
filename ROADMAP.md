@@ -49,6 +49,13 @@ a *verified* gap, not a suspicion.
    a `copy` step and its file stays on every machine forever, with no extras
    direction to report it. See "Retirement" in `ARCHITECTURE.md` for the shape.
 
+**The provider trait is half built.** `interface.rs` records each provider's
+eleven answers as data and cross-checks them against the finding registry, so a
+claimed capability with nothing behind it now fails a test. What remains is
+dispatch: the providers still have bespoke function signatures, so `install`,
+`prune` and the reconcile pair are wired per provider rather than driven from the
+table. Harmonising them is what makes adding `apt` or `npm` routine.
+
 **Sequencing note.** Build the settings-backend seam only after a *second real
 consumer* exists. Flatpak overrides (`~/.local/share/flatpak/overrides/<app>`) is
 the best candidate — sectioned key=value, one file per app, no cascade, no flag
