@@ -391,6 +391,43 @@ mod tests {
         }
     }
 
+    /// The matrix's `revertible` cell says what the table says.
+    ///
+    /// The doc scored `flatpak` as ✅ revertible while the code had just been
+    /// changed to No — twice in one session, in both directions. A row that
+    /// contradicts the table is worse than no row: ROADMAP rides `--llm`
+    /// precisely so an agent can tell a working cell from a broken one.
+    ///
+    /// Only this column is checked, because only this one has an unambiguous
+    /// glyph mapping (`Yes` → ✅, anything else → ❌/⚠). Checking all eleven
+    /// would mean parsing the whole table, which rots faster than it catches.
+    #[test]
+    fn the_matrix_agrees_with_the_table_about_revertibility() {
+        let doc = include_str!("../../../ARCHITECTURE.md");
+        let start = doc.find("### Where each feature stands").expect("matrix section");
+        for p in PROVIDERS {
+            // The row is the matrix line naming this provider first.
+            let Some(row) = doc[start..]
+                .lines()
+                .find(|l| l.starts_with(&format!("| `{}`", p.name)))
+            else {
+                continue; // covered by every_provider_is_in_the_architecture_matrix
+            };
+            let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+            // ["", name, 1 fleet, 2 machine, 3 obs, 4 inst, 5 prune, 6 r+, 7 r−,
+            //  8 ign, 9 drift, 10 rev, 11 res, ""] → `revertible` is index 11.
+            let Some(cell) = cells.get(11) else { continue };
+            let doc_says_yes = *cell == "✅";
+            assert_eq!(
+                doc_says_yes,
+                p.revertible.answered(),
+                "ARCHITECTURE scores `{}` revertible as {cell:?} but the table says                  {:?} — one of them is lying to whoever reads `--llm`",
+                p.name,
+                p.revertible
+            );
+        }
+    }
+
     /// A declined column carries a real reason. `No("")` is how a gap becomes
     /// invisible again.
     #[test]

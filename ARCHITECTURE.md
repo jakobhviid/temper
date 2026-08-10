@@ -252,7 +252,7 @@ above.
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | `brew` / `cask` / `brew-tap` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `brew-trust` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
-| `flatpak` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
+| `flatpak` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
 | `flatpak-remote` | n/a | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
 | `mas` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `gnome-extensions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
@@ -261,10 +261,12 @@ above.
 | `deployed-files` (`copy` / `sysfile` / `block`) | ✅ | n/a | ✅ | ✅ | ✅ | n/a | n/a | ❌ | ✅ | ✅ | ✅ |
 | `profile` | ✅ | ❌ | ✅ | ⚠ | ❌ | ❌ | ❌ | ❌ | ⚠ | ❌ | ❌ |
 
-**One command per type, not one per item.** Every provider's CLI takes a list —
-`gext install UUID [UUID…]`, `mas install <id>…`, `rpm-ostree install <pkg>…`,
-`brew bundle`, `flatpak install` — so a converge issues one invocation per
-provider. That is not only faster than N process spawns: for anything needing
+**One command per type, not one per item.** Nearly every provider's CLI takes a
+list — `gext install UUID [UUID…]`, `mas install <id>…`,
+`rpm-ostree install <pkg>…`, `brew bundle`, `flatpak install` — so a converge
+issues one invocation per provider. (`flatpak remote-add` and `remote-delete` are
+the exceptions: both take exactly one name, so remotes are converged one at a
+time.) That is not only faster than N process spawns: for anything needing
 root it is the difference between one password prompt and one per item, which is
 what decides whether a converge can be walked away from.
 
