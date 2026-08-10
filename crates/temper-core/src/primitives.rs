@@ -1068,7 +1068,57 @@ fn defaults_target(sk: &SetKey) -> Result<String> {
 fn defaults_matches(have: &str, want: &toml::Value) -> bool {
     match want {
         toml::Value::Boolean(b) => have == if *b { "1" } else { "0" },
+        // Numbers are compared NUMERICALLY, not as text — the same fix dconf
+        // already carries. `defaults` prints a whole-numbered float as `48`
+        // while `toml::Value::Float(48.0).to_string()` is `48.0`, so a value
+        // temper had just written read as drifted, was re-written every
+        // converge, counted as "changed" every time, and was listed as an
+        // unrevertible change on each one.
+        toml::Value::Float(f) => have
+            .trim()
+            .parse::<f64>()
+            .map(|h| h == *f)
+            .unwrap_or(false),
+        toml::Value::Integer(i) => have
+            .trim()
+            .parse::<i64>()
+            .map(|h| h == *i)
+            .unwrap_or_else(|_| have.trim().parse::<f64>().map(|h| h == *i as f64).unwrap_or(false)),
         other => have == scalar_str(other),
+    }
+}
+
+#[cfg(test)]
+mod defaults_compare_tests {
+    use super::defaults_matches;
+
+    /// A number is compared numerically, on both sides.
+    ///
+    /// macOS `defaults` prints a whole-numbered float as `48`; the manifest says
+    /// `48.0`. Comparing the two as text made a value temper had just written
+    /// read as drifted forever — re-applied every converge, counted as changed
+    /// each time, and named as an unrevertible change on every run. dconf hit
+    /// exactly this and was fixed; `defaults` was not.
+    #[test]
+    fn numbers_compare_by_value_not_by_spelling() {
+        let f = |x: f64| toml::Value::Float(x);
+        assert!(defaults_matches("48", &f(48.0)), "the case that drifted forever");
+        assert!(defaults_matches("48.0", &f(48.0)));
+        assert!(defaults_matches("0.47", &f(0.47)));
+        assert!(defaults_matches(" 48 ", &f(48.0)), "whitespace is not a difference");
+        assert!(!defaults_matches("49", &f(48.0)));
+        assert!(!defaults_matches("", &f(48.0)));
+        assert!(!defaults_matches("not-a-number", &f(48.0)));
+
+        let i = |x: i64| toml::Value::Integer(x);
+        assert!(defaults_matches("3", &i(3)));
+        assert!(defaults_matches("3.0", &i(3)), "defaults may print an int as a float");
+        assert!(!defaults_matches("4", &i(3)));
+
+        // Non-numbers keep their exact-text comparison.
+        assert!(defaults_matches("1", &toml::Value::Boolean(true)));
+        assert!(!defaults_matches("true", &toml::Value::Boolean(true)));
+        assert!(defaults_matches("dark", &toml::Value::String("dark".into())));
     }
 }
 
@@ -1326,10 +1376,30 @@ pub struct SysfileOpts<'a> {
     pub group: Option<&'a str>,
 }
 
-/// The `sudo install` argv for an escalated system-file write. `-D` creates
-/// parent dirs; mode/owner/group are applied atomically by `install` itself.
+/// The `sudo install -d` argv that creates the destination's parent directory.
+///
+/// Separate from the file write because `install -D` — which would have done
+/// both — is a **GNU** extension. macOS ships BSD `install`, which rejects it,
+/// so every `sysfile` step failed on every Mac; and because the error propagates
+/// before `journal.commit()`, it also discarded the undo record for everything
+/// the run had already applied. `install -d` is in both.
+fn sysfile_mkdir_argv(dest: &Path) -> Option<Vec<String>> {
+    let parent = dest.parent()?;
+    if parent.as_os_str().is_empty() || parent.is_dir() {
+        return None;
+    }
+    Some(vec![
+        "sudo".into(),
+        "install".into(),
+        "-d".into(),
+        parent.to_string_lossy().into_owned(),
+    ])
+}
+
+/// The `sudo install` argv for an escalated system-file write. Mode/owner/group
+/// are applied atomically by `install` itself.
 fn sysfile_install_argv(src: &Path, dest: &Path, opts: &SysfileOpts) -> Vec<String> {
-    let mut a: Vec<String> = ["sudo", "install", "-D"]
+    let mut a: Vec<String> = ["sudo", "install"]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -1360,8 +1430,10 @@ fn uid_of(name: &str) -> Option<u32> {
 }
 
 fn gid_of(name: &str) -> Option<u32> {
-    // `getent group <name>` → "name:x:GID:members"
-    std::process::Command::new("getent")
+    // `getent group <name>` → "name:x:GID:members". Absent on macOS, which has
+    // no getent at all — so a `sysfile` group never resolved there and its drift
+    // was silently never detected.
+    let getent = std::process::Command::new("getent")
         .args(["group", name])
         .output()
         .ok()
@@ -1370,6 +1442,22 @@ fn gid_of(name: &str) -> Option<u32> {
             String::from_utf8_lossy(&o.stdout)
                 .split(':')
                 .nth(2)
+                .and_then(|g| g.trim().parse().ok())
+        });
+    if getent.is_some() {
+        return getent;
+    }
+    // macOS: Directory Services. `dscl . -read /Groups/<name> PrimaryGroupID`
+    // → "PrimaryGroupID: 20".
+    std::process::Command::new("dscl")
+        .args([".", "-read", &format!("/Groups/{name}"), "PrimaryGroupID"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split_whitespace()
+                .next_back()
                 .and_then(|g| g.trim().parse().ok())
         })
 }
@@ -1419,6 +1507,22 @@ pub fn sysfile_apply(src: &Path, dest: &Path, opts: &SysfileOpts) -> Result<bool
     if matches!(sysfile_state(src, dest, opts)?, FileState::InSync) {
         return Ok(false);
     }
+    // The parent first, where it is missing — `install -D` would have folded
+    // this into the write, but it is not portable.
+    if let Some(mk) = sysfile_mkdir_argv(dest) {
+        let ok = std::process::Command::new(&mk[0])
+            .args(&mk[1..])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            bail!(
+                "could not create {} for {}",
+                dest.parent().unwrap_or(dest).display(),
+                dest.display()
+            );
+        }
+    }
     let argv = sysfile_install_argv(src, dest, opts);
     let status = std::process::Command::new(&argv[0])
         .args(&argv[1..])
@@ -1445,7 +1549,7 @@ mod sysfile_tests {
         let argv = sysfile_install_argv(&PathBuf::from("/s"), &PathBuf::from("/etc/x"), &opts);
         assert_eq!(
             argv,
-            vec!["sudo", "install", "-D", "-m", "0755", "-o", "root", "-g", "root", "/s", "/etc/x"]
+            vec!["sudo", "install", "-m", "0755", "-o", "root", "-g", "root", "/s", "/etc/x"]
         );
         // minimal (no mode/owner/group)
         let bare = SysfileOpts {
@@ -1454,7 +1558,7 @@ mod sysfile_tests {
             group: None,
         };
         let argv = sysfile_install_argv(&PathBuf::from("/s"), &PathBuf::from("/d"), &bare);
-        assert_eq!(argv, vec!["sudo", "install", "-D", "/s", "/d"]);
+        assert_eq!(argv, vec!["sudo", "install", "/s", "/d"]);
     }
 
     #[test]

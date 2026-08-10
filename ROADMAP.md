@@ -121,6 +121,43 @@ feature:
 
 ---
 
+## macOS claims that need a Mac to settle
+
+Everything on this list was raised by review, is **not** settled, and cannot be
+settled from Linux. None is a guess dressed as a finding — each names the check
+that would decide it. Run these on a Mac before trusting the corresponding cell
+in the feature matrix.
+
+- **`mas uninstall` arity.** `interface.rs` records `mas uninstall (<id>…|--all)`,
+  and `undo` passes the whole set in one invocation. mas 1.8's usage line reads
+  `mas uninstall [--dry-run] <app-id>` — singular. If that holds, a multi-app
+  revert fails argument parsing and, because `undo`'s package path has no
+  per-item fallback, reports the *whole* set as un-uninstallable.
+  → `mas uninstall --help`.
+- **`brew bundle cleanup --mas` / `--vscode`.** Homebrew documents those type
+  flags for `install`/`list`/`dump`; `prune` passes them to `cleanup`, relying on
+  "naming one type turns the others off". If `cleanup` does not accept `--mas`,
+  a mas-only spec cleans nothing while reporting success.
+  → `brew bundle cleanup --help`, then a dry run against a scratch Brewfile.
+- **`sudo mas uninstall` and `secure_path`.** The revert shells out through
+  `sudo`, so it depends on `mas` being on **root's** PATH.
+- **`MAS_NO_AUTO_INDEX`.** temper sets it to mute the Spotlight reindex and
+  ARCHITECTURE states it as fact; it is not in mas's documented environment.
+- **`profile_apply` counts a cancelled dialog as a change.** It writes the
+  content stamp and returns `Changed` as soon as `open` returns — which is when
+  the window appears, not when the user approves. Declining a profile therefore
+  reports an applied change and an unrevertible one.
+- **`sudo temper …` splits the state root.** The journal, ledger and profile
+  stamps land under `/var/root/Library/Application Support/temper`, so a later
+  unprivileged `undo` sees nothing to undo. Nothing detects the split. (Not
+  mac-specific in principle, but that is where the path differs most.)
+
+Fixed blind, and portably, rather than left for the hardware: `sudo install -D`
+(GNU-only, so every `sysfile` step failed on macOS — and the error propagated
+before `journal.commit()`, discarding the run's undo record), `getent` in
+`gid_of` (absent on macOS; now falls back to `dscl`), and the `defaults` numeric
+comparison (`48` vs `48.0` drifted forever).
+
 ## Verification gap (a state, not a feature)
 
 The Linux half of the `steel` migration (`steel` = the author's own fleet spec,
