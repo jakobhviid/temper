@@ -860,9 +860,13 @@ fn cmd_status(json: bool) -> Result<()> {
 /// Get/set/unset/list the home's scalar settings (`[git]` toggles, `[update].mode`).
 fn cmd_configure(action: ConfigureAction, json: bool) -> Result<()> {
     let home = discovery::find_home()?;
+    // `set` and `unset` write temper.toml, so they owe the git hook every other
+    // folder-writing verb fires. `get`/`list`/`keys` read only.
+    let mut wrote: Option<String> = None;
     match action {
         ConfigureAction::Set { key, value } => {
             let display = settings::set(&home, &key, &value)?;
+            wrote = Some(format!("configure: set {key}"));
             if json {
                 println!("{}", serde_json::json!({ "key": key, "value": display }));
             } else {
@@ -879,6 +883,7 @@ fn cmd_configure(action: ConfigureAction, json: bool) -> Result<()> {
         }
         ConfigureAction::Unset { key } => {
             settings::unset(&home, &key)?;
+            wrote = Some(format!("configure: unset {key}"));
             if json {
                 println!("{}", serde_json::json!({ "unset": key }));
             } else {
@@ -908,6 +913,17 @@ fn cmd_configure(action: ConfigureAction, json: bool) -> Result<()> {
                     println!("  {:<16} {}", s.key, ui::dim(s.desc));
                 }
             }
+        }
+    }
+    if let Some(msg) = wrote {
+        // Best-effort: a folder whose fleet config can't be loaded still had its
+        // setting written, and a failed hook must not turn that into an error.
+        if let Ok(ft) = load_fleet(&home) {
+            let gc = match machine::resolve(&ft, None) {
+                Ok(m) => manifest::effective_git(&ft.git, &m.git),
+                Err(_) => manifest::effective_git(&ft.git, &None),
+            };
+            after_repo_change(&home, &gc, &msg);
         }
     }
     Ok(())

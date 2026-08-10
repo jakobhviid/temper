@@ -746,8 +746,33 @@ pub fn prune_apply(effective: &[Pkg], extras: &[(Manager, String)]) -> Result<()
         let tmp =
             std::env::temp_dir().join(format!("temper-Brewfile-prune-{}", std::process::id()));
         fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
+        // Name the types explicitly instead of inheriting brew's defaults.
+        //
+        // With no type flags, `brew bundle cleanup` cleans every supported type —
+        // but `HOMEBREW_BUNDLE_CLEANUP_NO_CASK` and friends turn individual ones
+        // off from the user's environment. temper would then preview a cask
+        // removal, get it confirmed, watch brew skip it, and report success: a
+        // silent cap (Principle #6) whose cause lives outside the repo. Passing
+        // the flag for each type we actually put in the file makes the set
+        // temper's decision, which is the only way temper can honestly report on
+        // it. Note this must cover EVERY type present — naming one type turns
+        // the others off.
+        let mut flags: Vec<&str> = Vec::new();
+        for (m, flag) in [
+            (Manager::Brew, "--formula"),
+            (Manager::Cask, "--cask"),
+            (Manager::Tap, "--tap"),
+            (Manager::Mas, "--mas"),
+            (Manager::Vscode, "--vscode"),
+        ] {
+            if effective.iter().any(|p| p.manager == m) {
+                flags.push(flag);
+            }
+        }
         let status = Command::new("brew")
-            .args(["bundle", "cleanup", "--force", "--file"])
+            .args(["bundle", "cleanup", "--force"])
+            .args(&flags)
+            .arg("--file")
             .arg(&tmp)
             .status()
             .context("running brew bundle cleanup")?;

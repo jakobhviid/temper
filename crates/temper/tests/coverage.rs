@@ -101,3 +101,103 @@ fn no_output_glyph_renders_double_width() {
     }
     }
 }
+
+/// Every candidate list a `ReconcilePlan` carries must reach BOTH aggregation
+/// points in `cmd_reconcile`: the `--json` plan document, and the emptiness
+/// check that decides whether there is anything to do at all.
+///
+/// This is the test that would have caught `gext_adds`. It was wired into the
+/// prompt loop, the `--csw` path, the selection check and the counts — four
+/// sites — and missed the two that matter most. Missing from `--json` meant a
+/// consumer previewed a reconcile that then changed something it was never
+/// shown; missing from the emptiness check made the whole feature UNREACHABLE
+/// whenever an undeclared extension was the only drift, behind a note claiming
+/// reconcile could not absorb them.
+///
+/// A field-per-kind plan struct invites exactly this: N fields, ~10 aggregation
+/// points, nothing relating them. Until the plan is one homogeneous item list,
+/// a source scrape is the honest enforcement.
+#[test]
+fn every_reconcile_plan_field_reaches_json_and_the_emptiness_check() {
+    let plan_src = include_str!("../../temper-core/src/reconcile.rs");
+    let cli_src = include_str!("../src/main.rs");
+
+    // Candidate lists declared on `ReconcilePlan` (skip `brewfile_rel`, which is
+    // a location, not a candidate).
+    let struct_body = {
+        let start = plan_src
+            .find("pub struct ReconcilePlan {")
+            .expect("ReconcilePlan struct");
+        let rest = &plan_src[start..];
+        &rest[..rest.find("\n}").expect("struct end")]
+    };
+    let fields: Vec<&str> = struct_body
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("pub "))
+        .filter_map(|l| l.split_once(':'))
+        .map(|(name, _)| name)
+        .filter(|n| *n != "brewfile_rel")
+        .collect();
+    assert!(fields.len() >= 6, "scrape found too few fields: {fields:?}");
+
+    let body = {
+        let start = cli_src.find("fn cmd_reconcile(").expect("cmd_reconcile");
+        &cli_src[start..]
+    };
+    // The `--json` plan document, and the emptiness check just after it.
+    let json_doc = {
+        let s = body.find("if json && !(csw && yes)").expect("json branch");
+        let rest = &body[s..];
+        &rest[..rest.find("return Ok(());").expect("json branch end")]
+    };
+    let emptiness = {
+        let s = body.find("if plan.adds.is_empty()").expect("emptiness check");
+        let rest = &body[s..];
+        &rest[..rest.find("    {").expect("emptiness end")]
+    };
+
+    for f in &fields {
+        assert!(
+            json_doc.contains(f),
+            "ReconcilePlan.{f} never reaches the --json plan document — a consumer \
+             would preview a reconcile that changes something it was not shown"
+        );
+        assert!(
+            emptiness.contains(f),
+            "ReconcilePlan.{f} is missing from the emptiness check — its feature is \
+             UNREACHABLE whenever it is the only drift present"
+        );
+    }
+}
+
+/// Every verb that writes the temper folder must fire `after_repo_change`.
+///
+/// A folder-writing verb that skips it leaves a git-backed home silently dirty.
+/// `init` did (it delegated to a `reconcile` that returned early), then `undo`
+/// did — the one command whose whole job is putting things back — and then
+/// `configure set|unset`. Three instances of one omission, none of which any
+/// test could see.
+#[test]
+fn every_folder_writing_verb_fires_the_repo_hook() {
+    let cli_src = include_str!("../src/main.rs");
+    for verb in [
+        "cmd_reconcile",
+        "cmd_init",
+        "cmd_configure",
+        "cmd_undo",
+        "cmd_snapshot",
+        "cmd_eq_import",
+    ] {
+        let Some(start) = cli_src.find(&format!("fn {verb}(")) else {
+            continue; // renamed or removed — the verb-name test covers that
+        };
+        let rest = &cli_src[start..];
+        // Function body ends at the next top-level `\n}` .
+        let body = &rest[..rest.find("\n}\n").unwrap_or(rest.len())];
+        assert!(
+            body.contains("after_repo_change"),
+            "{verb} writes the folder but never calls after_repo_change — a \
+             git-backed home is left silently dirty"
+        );
+    }
+}
