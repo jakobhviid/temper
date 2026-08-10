@@ -244,8 +244,7 @@ above.
 | `gnome-extensions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `rpm-ostree` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `dconf` | ✅ | ✅ | ✅ | ⚠ | ❌ | ✅ | ✅ | ⚠ | ✅ | ✅ | ❌ |
-| `copy` / `sysfile` | ✅ | n/a | ✅ | ✅ | ✅ | n/a | n/a | ❌ | ✅ | ✅ | ✅ |
-| `block` | ✅ | n/a | ✅ | ✅ | ❌ | n/a | n/a | ❌ | ⚠ | ✅ | ❌ |
+| `copy` / `sysfile` / `block` | ✅ | n/a | ✅ | ✅ | ✅ | n/a | n/a | ❌ | ✅ | ✅ | ✅ |
 | `profile` | ✅ | ❌ | ✅ | ⚠ | ❌ | ❌ | ❌ | ❌ | ⚠ | ❌ | ❌ |
 
 **One command per type, not one per item.** Every provider's CLI takes a list —
@@ -311,11 +310,12 @@ confirms — no code answers that yet.
   because of col 11.
 - **col 10, packages** — the journal covers file and key writes; a package
   install is not revertible, and that is not currently said before you confirm.
-- **col 5/11, `block`** — a block inserts a marker-delimited region into a file
-  someone else owns, so its residue is the *region*, not the file. Removing it
-  means editing rather than deleting, which is a different operation and is not
-  built. Recording a `block` target in the ledger would be worse than not: its
-  removal would delete a user's `.zshrc`.
+- **`block` residue is the region, not the file.** The file belongs to the user —
+  a `.zshrc` — so retiring a block is an *edit*: the marker-delimited region is
+  removed and the file stays. The ledger records `(file, marker)` and hashes the
+  region body, so the same "untouched or reported" guard applies to the part
+  temper actually wrote. Recording the path and deleting it would have been the
+  most destructive thing in the tool.
 
 ### Naming: be specific, minimise overlap
 

@@ -394,10 +394,14 @@ fn deployed_paths(home: &Path, machine: &Machine) -> Result<crate::ledger::Ledge
     let mut out = crate::ledger::Ledger::new();
     for (_, step) in &resolved.steps {
         let (kind, target) = step_parts(step);
-        if !matches!(kind, "copy" | "sysfile") {
+        if !matches!(kind, "copy" | "sysfile" | "block") {
             continue;
         }
-        let src = step.copy.as_ref().or(step.sysfile.as_ref());
+        let src = step
+            .copy
+            .as_ref()
+            .or(step.sysfile.as_ref())
+            .or(step.block.as_ref());
         let Some(src) = src else { continue };
         // The hash of what the spec WOULD leave there. Reading the source rather
         // than the target keeps this honest on a machine that has drifted: the
@@ -405,11 +409,27 @@ fn deployed_paths(home: &Path, machine: &Machine) -> Result<crate::ledger::Ledge
         let Ok(bytes) = std::fs::read(home.join(src)) else {
             continue;
         };
+        // A block's identity is (file, marker) and its content is the region
+        // body, so it is hashed and keyed differently from a whole-file deploy.
+        let (key, hash, marker) = if kind == "block" {
+            let Some(marker) = step.marker.clone() else {
+                continue;
+            };
+            let body = String::from_utf8_lossy(&bytes).trim_end_matches('\n').to_string();
+            (
+                target,
+                blake3::hash(body.as_bytes()).to_hex().to_string(),
+                Some(marker),
+            )
+        } else {
+            (target, blake3::hash(&bytes).to_hex().to_string(), None)
+        };
         out.insert(
-            target,
+            key,
             crate::ledger::Deployed {
-                hash: blake3::hash(&bytes).to_hex().to_string(),
+                hash,
                 kind: kind.to_string(),
+                marker,
             },
         );
     }
@@ -640,6 +660,15 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         detects: Detects::Extra,
         converge: &[Answer::Verb("temper prune")],
         absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "retired-package",
+        detects: Detects::Extra,
+        converge: &[Answer::Verb("temper prune")],
+        absorb: &[Answer::Hand {
+            file: "the `retire_packages` list that named it",
+            why: "drop the entry if you have decided you want this back",
+        }],
     },
     KindSpec {
         name: "retired-present",
@@ -1224,6 +1253,28 @@ pub fn run_drift(
             status: "extra".into(),
             detail: None,
         });
+    }
+    // Packages declared unwanted that are nonetheless installed.
+    {
+        let unwanted: Vec<packages::Pkg> = crate::manifest::effective_retire_packages(home, machine)?
+            .iter()
+            .filter_map(|t| packages::parse(t).ok())
+            .collect();
+        if !unwanted.is_empty() {
+            let installed = providers::probe(&unwanted)?;
+            for p in &unwanted {
+                if installed.probed(p.manager) && installed.contains(p.manager, &p.match_name()) {
+                    findings.push(Finding {
+                        app: "retired".into(),
+                        kind: "retired-package",
+                        target: format!("{} {}", p.manager.as_str(), p.match_name()),
+                        ok: false,
+                        status: "still installed".into(),
+                        detail: Some("declared retired — `prune` removes it".into()),
+                    });
+                }
+            }
+        }
     }
     // Explicitly retired paths that are still here.
     for path in crate::manifest::effective_retire(home, machine)? {
@@ -1894,7 +1945,19 @@ pub fn run_prune(
     ignore: &Ignore,
     brew_trust: &[String],
 ) -> Result<PrunePlan> {
-    let packages = package_extras(home, machine, ignore)?;
+    let mut packages = package_extras(home, machine, ignore)?;
+    // A retired package is removed even though it is not an "extra": the spec
+    // says it must not be here, which is a stronger statement than not
+    // mentioning it. `[ignore]` deliberately does not silence this — ignoring is
+    // "do not tell me about it", and retiring is "get rid of it".
+    for token in crate::manifest::effective_retire_packages(home, machine)? {
+        if let Ok(p) = packages::parse(&token) {
+            let entry = (p.manager, p.match_name());
+            if !packages.contains(&entry) {
+                packages.push(entry);
+            }
+        }
+    }
     // Split residue by whether it is still what temper left: removable, or
     // reportable. A ledger is a record, not a licence to delete a user's edits.
     let declared_paths: Vec<String> = deployed_paths(home, machine)?.into_keys().collect();
@@ -1959,13 +2022,25 @@ pub fn commit_prune(home: &Path, machine: &Machine, plan: &PrunePlan) -> Result<
     if !plan.extensions.is_empty() {
         providers::gext_uninstall(&plan.extensions)?;
     }
-    for path in plan.retired.iter().chain(&plan.residue) {
+    for path in &plan.retired {
         let p = crate::manifest::expand_tilde(path);
         if let Err(e) = std::fs::remove_file(&p) {
             eprintln!(
                 "{} could not remove {}: {e}",
                 crate::ui::yellow(crate::ui::g_warn()),
                 p.display()
+            );
+        }
+    }
+    // Residue carries how to remove it: a file is deleted, a block's region is
+    // edited out of a file that stays.
+    let recorded = crate::ledger::load(&machine.name);
+    for path in &plan.residue {
+        let Some(rec) = recorded.get(path) else { continue };
+        if let Err(e) = crate::ledger::remove(path, rec) {
+            eprintln!(
+                "{} could not remove {path}: {e}",
+                crate::ui::yellow(crate::ui::g_warn())
             );
         }
     }

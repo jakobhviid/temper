@@ -20,21 +20,9 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 
 ## Scope-model gaps (known, ranked, each one a filled ⚠ or ❌ in the feature matrix)
 
-The feature matrix in `ARCHITECTURE.md` shows where each feature stands against
-the eleven-column interface. These are the open cells, worst first. Every one is
-a *verified* gap, not a suspicion.
-
-1. **`block` residue is unmodelled.** `copy` and `sysfile` are tracked by the
-   deployment ledger, so a dropped step's file becomes an extra that `prune`
-   answers. A `block` inserts a region into a file someone else owns, so its
-   residue is the region — removing it is an edit, not a delete, and recording
-   the path would make prune capable of deleting a user's `.zshrc`.
-2. **No anti-state for packages.** `retire` declares a *path* that must be gone
-   and `prune` enacts it. There is no equivalent for "this package must NOT be
-   installed" — a declaration that would make an unwanted package drift rather
-   than merely un-declared. Today the only way to express it is to not declare
-   it and rely on `prune`, which cannot distinguish "I never wanted this" from
-   "I have not got round to declaring it".
+*(none open — the matrix is clean apart from the ignore column on deployed files,
+which is deliberate: an edited file is reported rather than removed, which covers
+the case that matters.)*
 
 **The provider trait is half built.** `interface.rs` records each provider's
 eleven answers as data and cross-checks them against the finding registry, so a

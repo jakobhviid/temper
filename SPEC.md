@@ -134,6 +134,15 @@ gnome_extensions = [                        # optional; for THIS machine, unione
                                             #   it inherits the scope of whatever
                                             #   declared the extension.
 brewfile = "brewfiles/chronos"   # optional; a Brewfile whose lines join the set
+retire_packages = ["brew \"foo\""]  # optional; packages that must NOT be installed.
+                            #   Reported as drift every run and removed by
+                            #   `prune`. Not declaring something is NOT the same
+                            #   as declaring you don't want it: an undeclared
+                            #   package is an extra (silent until prune, and
+                            #   re-absorbable by `reconcile --csw`), while a
+                            #   retired one is drift. [ignore] does not silence
+                            #   it — ignoring is "don't tell me", retiring is
+                            #   "get rid of it".
 retire = ["~/.config/old-app"]  # optional; paths that must NOT exist. `prune`
                             #   removes them (confirmed). Distinct from
                             #   [[assert]] absent, which REPORTS a condition you
@@ -271,7 +280,7 @@ brew_trust     = ["vendor/tap"]      # taps this bundle needs trusted — GROUP 
                                      #   [brew].trust cannot be. A mac-only cask tap
                                      #   belongs in an os = "mac" bundle.
 retire         = ["~/.config/old"]   # paths this bundle has retired — group
-                                     #   scope, gated with the bundle.
+retire_packages = ["brew \"old\""]     #   scope, gated with the bundle.
 flatpak_remotes = ["vendor https://example.com/vendor.flatpakrepo"]
                                      # remotes this bundle's apps come from —
                                      #   GROUP scope, gated with the bundle.

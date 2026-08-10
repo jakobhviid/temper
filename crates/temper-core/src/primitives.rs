@@ -324,6 +324,40 @@ fn block_desired(existing: &str, begin: &str, end: &str, body: &str) -> Result<S
     }
 }
 
+/// The file content with a marker region **removed**, and the body it held.
+///
+/// The residue of a `block` is the region, not the file — so retiring one is an
+/// edit to a file someone else owns, never a delete. Returns `None` when there
+/// is no well-formed region, which is the already-clean case; a malformed one
+/// refuses for the same reason `block_desired` does.
+pub fn block_removed(existing: &str, marker: &str) -> Result<Option<(String, String)>> {
+    let (begin, end) = markers(marker);
+    match (existing.find(&begin), existing.find(&end)) {
+        (Some(bs), Some(es)) if es > bs => {
+            let body = existing[bs + begin.len()..es].trim_matches('\n').to_string();
+            let region_end = es + end.len();
+            let mut out = String::with_capacity(existing.len());
+            out.push_str(&existing[..bs]);
+            // Swallow one trailing newline so removing a region does not leave a
+            // widening gap each time.
+            let tail = existing[region_end..].strip_prefix('\n').unwrap_or(&existing[region_end..]);
+            out.push_str(tail);
+            // …and the blank line `block_desired` inserted before it.
+            let trimmed = out.trim_end_matches('\n');
+            let keep_nl = out.len() - trimmed.len();
+            let mut out = trimmed.to_string();
+            if keep_nl > 0 && !out.is_empty() {
+                out.push('\n');
+            }
+            Ok(Some((out, body)))
+        }
+        (None, None) => Ok(None),
+        _ => bail!(
+            "malformed marker region for `{marker}` — fix or remove it by hand"
+        ),
+    }
+}
+
 pub fn block_state(body_src: &Path, target: &Path, marker: &str) -> Result<FileState> {
     let body = fs::read_to_string(body_src)
         .with_context(|| format!("reading block source {}", body_src.display()))?;

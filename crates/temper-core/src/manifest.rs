@@ -345,6 +345,18 @@ pub struct Machine {
     /// the date would skip the retirement silently.
     #[serde(default)]
     pub retire: Vec<String>,
+    /// Packages that must **not** be installed, as Brewfile-grammar tokens.
+    ///
+    /// The package half of `retire`. Not declaring something is not the same as
+    /// declaring you do not want it: `prune` cannot tell "I never wanted this"
+    /// from "I have not got round to declaring it", so an unwanted package is an
+    /// *extra* — silent until someone runs prune, and re-absorbable by a
+    /// `reconcile --csw` that takes the machine's word for it.
+    ///
+    /// A `retire_packages` entry makes it **drift**: reported every run, and
+    /// never offered as something to absorb.
+    #[serde(default)]
+    pub retire_packages: Vec<String>,
     /// Flatpak remotes THIS machine adds, as `"<name> <url>"`.
     #[serde(default)]
     pub flatpak_remotes: Vec<String>,
@@ -449,6 +461,18 @@ pub struct Bundle {
     /// the date would skip the retirement silently.
     #[serde(default)]
     pub retire: Vec<String>,
+    /// Packages that must **not** be installed, as Brewfile-grammar tokens.
+    ///
+    /// The package half of `retire`. Not declaring something is not the same as
+    /// declaring you do not want it: `prune` cannot tell "I never wanted this"
+    /// from "I have not got round to declaring it", so an unwanted package is an
+    /// *extra* — silent until someone runs prune, and re-absorbable by a
+    /// `reconcile --csw` that takes the machine's word for it.
+    ///
+    /// A `retire_packages` entry makes it **drift**: reported every run, and
+    /// never offered as something to absorb.
+    #[serde(default)]
+    pub retire_packages: Vec<String>,
     /// Flatpak remotes this bundle's apps come from, as `"<name> <url>"`.
     /// Group scope: a vendor remote belongs with the bundle that needs it, gated
     /// the same way, rather than fleet-wide on every machine.
@@ -1109,19 +1133,33 @@ mod bundle_skew_tests {
 /// them) plus its own. No fleet list — retiring something is always specific to
 /// what a group or a machine once had.
 pub fn effective_retire(home: &Path, machine: &Machine) -> Result<Vec<String>> {
+    collect_retired(home, machine, |b| &b.retire, |m| &m.retire)
+}
+
+/// The package half, same scopes and same rule.
+pub fn effective_retire_packages(home: &Path, machine: &Machine) -> Result<Vec<String>> {
+    collect_retired(home, machine, |b| &b.retire_packages, |m| &m.retire_packages)
+}
+
+fn collect_retired(
+    home: &Path,
+    machine: &Machine,
+    from_bundle: impl Fn(&Bundle) -> &Vec<String>,
+    from_machine: impl Fn(&Machine) -> &Vec<String>,
+) -> Result<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for app in &machine.apps {
         let b = load_bundle(home, app)?;
         if gated(&b.os, &b.role, machine) {
             continue;
         }
-        for p in &b.retire {
+        for p in from_bundle(&b) {
             if !out.contains(p) {
                 out.push(p.clone());
             }
         }
     }
-    for p in &machine.retire {
+    for p in from_machine(machine) {
         if !out.contains(p) {
             out.push(p.clone());
         }
@@ -1339,6 +1377,7 @@ mod tests {
             rpm_ostree: Vec::new(),
             flatpak_remotes: Vec::new(),
             retire: Vec::new(),
+            retire_packages: Vec::new(),
             ignore: Default::default(),
             dconf: vec![],
             git: None,
@@ -1445,6 +1484,7 @@ mod tests {
             rpm_ostree: Vec::new(),
             flatpak_remotes: Vec::new(),
             retire: Vec::new(),
+            retire_packages: Vec::new(),
             ignore: Default::default(),
             dconf: vec![],
             git: None,

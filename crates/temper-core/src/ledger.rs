@@ -24,10 +24,16 @@ use serde::{Deserialize, Serialize};
 /// One deployed path and the content temper left there.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Deployed {
-    /// blake3 of the bytes temper wrote — the guard that makes removal safe.
+    /// blake3 of what temper wrote — the whole file for `copy`/`sysfile`, the
+    /// region body for a `block`. The guard that makes removal safe.
     pub hash: String,
     /// Which primitive owns it, for the report.
     pub kind: String,
+    /// For a `block`, the marker naming its region. A block's residue is the
+    /// region, not the file: the file belongs to the user, so retiring one is an
+    /// edit and never a delete.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker: Option<String>,
 }
 
 /// path → what temper left there.
@@ -76,10 +82,42 @@ pub fn residue(machine: &str, declared: &[String]) -> Vec<(String, Deployed)> {
 /// not a licence.
 pub fn is_untouched(path: &str, rec: &Deployed) -> bool {
     let expanded = crate::manifest::expand_tilde(path);
-    match std::fs::read(Path::new(&expanded)) {
-        Ok(bytes) => blake3::hash(&bytes).to_hex().to_string() == rec.hash,
+    let Ok(bytes) = std::fs::read(Path::new(&expanded)) else {
         // Already gone: nothing to remove, and nothing to warn about.
-        Err(_) => false,
+        return false;
+    };
+    match &rec.marker {
+        // A block: compare the REGION, not the file. The rest of the file is the
+        // user's and will have changed for reasons that are none of our business.
+        Some(marker) => {
+            let text = String::from_utf8_lossy(&bytes);
+            match crate::primitives::block_removed(&text, marker) {
+                Ok(Some((_, body))) => blake3::hash(body.as_bytes()).to_hex().to_string() == rec.hash,
+                _ => false,
+            }
+        }
+        None => blake3::hash(&bytes).to_hex().to_string() == rec.hash,
+    }
+}
+
+/// Remove one piece of residue: a whole file, or a block's region.
+///
+/// Never a delete for a block — the file belongs to the user and only the
+/// marker-delimited region was ever temper's.
+pub fn remove(path: &str, rec: &Deployed) -> Result<()> {
+    let p = crate::manifest::expand_tilde(path);
+    match &rec.marker {
+        Some(marker) => {
+            let text = std::fs::read_to_string(&p)
+                .with_context(|| format!("reading {}", p.display()))?;
+            if let Some((without, _)) = crate::primitives::block_removed(&text, marker)? {
+                std::fs::write(&p, without)
+                    .with_context(|| format!("writing {}", p.display()))?;
+            }
+            Ok(())
+        }
+        None => std::fs::remove_file(&p)
+            .with_context(|| format!("removing {}", p.display())),
     }
 }
 
@@ -102,11 +140,11 @@ mod tests {
             let mut l = Ledger::new();
             l.insert(
                 "~/.config/kept".into(),
-                Deployed { hash: "h1".into(), kind: "copy".into() },
+                Deployed { hash: "h1".into(), kind: "copy".into(), marker: None },
             );
             l.insert(
                 "~/.config/dropped".into(),
-                Deployed { hash: "h2".into(), kind: "copy".into() },
+                Deployed { hash: "h2".into(), kind: "copy".into(), marker: None },
             );
             save("m", &l).unwrap();
             assert_eq!(load("m"), l);
@@ -123,6 +161,55 @@ mod tests {
         })
     }
 
+    /// A block's residue is its region, and removing it leaves the file.
+    ///
+    /// This is why `block` could not simply join `copy` in the ledger: the file
+    /// belongs to the user — a `.zshrc` — and only the marker-delimited region
+    /// was ever temper's. Recording the path and deleting it would have been the
+    /// single most destructive thing in the tool.
+    #[test]
+    fn removing_a_block_edits_the_file_rather_than_deleting_it() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("zshrc");
+        let body = "source ~/.image";
+        let text = format!(
+            "# mine before\n\n# >>> temper:img >>>\n{body}\n# <<< temper:img <<<\n# mine after\n"
+        );
+        std::fs::write(&f, &text).unwrap();
+        let rec = Deployed {
+            hash: blake3::hash(body.as_bytes()).to_hex().to_string(),
+            kind: "block".into(),
+            marker: Some("img".into()),
+        };
+        let p = f.to_string_lossy().to_string();
+        assert!(is_untouched(&p, &rec), "an unedited region is removable");
+
+        remove(&p, &rec).unwrap();
+        let after = std::fs::read_to_string(&f).expect("the file must still exist");
+        assert!(!after.contains("temper:img"), "the region should be gone");
+        assert!(after.contains("# mine before"), "the user's content must survive");
+        assert!(after.contains("# mine after"), "…on both sides of the region");
+    }
+
+    /// An edited region is reported, not removed — the file half of the guard
+    /// applies to the region half too.
+    #[test]
+    fn an_edited_block_region_is_not_untouched() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("zshrc");
+        std::fs::write(
+            &f,
+            "# >>> temper:img >>>\nthe user changed this\n# <<< temper:img <<<\n",
+        )
+        .unwrap();
+        let rec = Deployed {
+            hash: blake3::hash(b"source ~/.image").to_hex().to_string(),
+            kind: "block".into(),
+            marker: Some("img".into()),
+        };
+        assert!(!is_untouched(&f.to_string_lossy(), &rec));
+    }
+
     /// A file the user has edited since deployment is NOT removable.
     ///
     /// Without this the ledger becomes a licence to delete: temper would remove
@@ -136,6 +223,7 @@ mod tests {
         let rec = Deployed {
             hash: blake3::hash(b"original").to_hex().to_string(),
             kind: "copy".into(),
+            marker: None,
         };
         let p = f.to_string_lossy().to_string();
         assert!(is_untouched(&p, &rec));
