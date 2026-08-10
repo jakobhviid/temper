@@ -1919,7 +1919,8 @@ fn cmd_reconcile(
     // with "the machine", skipping the prompts; the final confirm still stands.
     let mut chosen_drops: Vec<String> = Vec::new();
     let mut chosen_adds: Vec<String> = Vec::new();
-    let mut chosen_ignores: Vec<String> = Vec::new(); // flatpak app ids
+    // (ignore list, value) — every manager can be silenced now, not just flatpak.
+    let mut chosen_ignores: Vec<(String, String)> = Vec::new();
     let mut chosen_trust_adds: Vec<String> = Vec::new();
     let mut chosen_trust_drops: Vec<String> = Vec::new();
     let mut chosen_tap_ignores: Vec<String> = Vec::new();
@@ -1975,9 +1976,10 @@ fn cmd_reconcile(
         if !plan.adds.is_empty() {
             println!("\n{}", ui::bold("Installed but not in the spec:"));
             for a in &plan.adds {
-                match prompt_add(&a.token, a.is_flatpak) {
+                match prompt_add(&a.token, true) {
                     AddChoice::Add => chosen_adds.push(a.token.clone()),
-                    AddChoice::Ignore => chosen_ignores.push(a.name.clone()),
+                    AddChoice::Ignore => chosen_ignores
+                        .push((a.ignore_key.to_string(), a.ignore_value.clone())),
                     AddChoice::Skip => {}
                 }
             }
@@ -2024,8 +2026,12 @@ fn cmd_reconcile(
         if !plan.rpm_adds.is_empty() {
             println!("\n{}", ui::bold("Layered rpms not in the spec:"));
             for pkg in &plan.rpm_adds {
-                if prompt_no(&format!("  add `{pkg}` for this machine?")) {
-                    chosen_rpm_adds.push(pkg.clone());
+                match prompt_add(pkg, true) {
+                    AddChoice::Add => chosen_rpm_adds.push(pkg.clone()),
+                    AddChoice::Ignore => {
+                        chosen_ignores.push(("rpm_ostree".to_string(), pkg.clone()))
+                    }
+                    AddChoice::Skip => {}
                 }
             }
         }
@@ -2075,8 +2081,11 @@ fn cmd_reconcile(
                 )
             );
             for uuid in &plan.gext_adds {
-                if prompt_no(&format!("  add `{uuid}`?")) {
-                    chosen_gext.push(uuid.clone());
+                match prompt_add(uuid, true) {
+                    AddChoice::Add => chosen_gext.push(uuid.clone()),
+                    AddChoice::Ignore => chosen_ignores
+                        .push(("gnome_extensions".to_string(), uuid.clone())),
+                    AddChoice::Skip => {}
                 }
             }
         }
@@ -2208,12 +2217,16 @@ fn cmd_reconcile(
                 ui::dim(&format!("{} {bf_label}", ui::g_arrow()))
             );
         }
-        for name in &chosen_ignores {
+        for (list, value) in &chosen_ignores {
             println!(
-                "  {} flatpak {}  {}",
+                "  {} {} {}  {}",
                 ui::yellow("~"),
-                name,
-                ui::dim(&format!("{} [ignore].flatpak in temper.toml", ui::g_arrow()))
+                list,
+                value,
+                ui::dim(&format!(
+                    "{} [machine.ignore].{list} in temper.toml",
+                    ui::g_arrow()
+                ))
             );
         }
         for tap in &chosen_trust_adds {
@@ -2380,8 +2393,8 @@ fn cmd_reconcile(
         let tt_path = home.join("temper.toml");
         let before_tt = std::fs::read_to_string(&tt_path)?;
         let mut tt = before_tt.clone();
-        for name in &chosen_ignores {
-            tt = reconcile::append_machine_ignore(&tt, &m.name, "flatpak", name)?;
+        for (list, value) in &chosen_ignores {
+            tt = reconcile::append_machine_ignore(&tt, &m.name, list, value)?;
         }
         for tap in &chosen_trust_adds {
             // Machine scope by default. `--include-trust` is the explicit,

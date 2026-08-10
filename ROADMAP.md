@@ -29,10 +29,7 @@ a *verified* gap, not a suspicion.
    cannot be installed and the converge degrades to a warning. Remotes are the
    flatpak analogue of `[brew].trust` — the same fleet-vs-machine scope question
    that earned trust a machine-scope list.
-2. **`[ignore]` is writable for two of its seven lists.** drift honours all seven;
-   only `flatpak` and `tap` can be written by a verb, while the drift status for a
-   GNOME extension extra tells the user to use `[ignore].gext`.
-3. **No deployment ledger, so the file primitives score zero on residue.** Remove
+2. **No deployment ledger, so the file primitives score zero on residue.** Remove
    a `copy` step and its file stays on every machine forever, with no extras
    direction to report it. See "Retirement" in `ARCHITECTURE.md` for the shape.
 

@@ -26,8 +26,16 @@ pub struct AddItem {
     pub name: String,
     /// The Brewfile line to append if accepted.
     pub token: String,
-    /// Flatpak extras additionally offer an "ignore" choice (→ `[ignore]`).
-    pub is_flatpak: bool,
+    /// The `[ignore]` list this extra belongs to, and the value that list must
+    /// hold to match it.
+    ///
+    /// Every manager gets the ignore choice now, not just flatpak. `[ignore]`
+    /// had seven lists and a verb could write two of them, while drift honoured
+    /// all seven and the status line for a GNOME extension told the user to edit
+    /// one by hand. The value matters as much as the key: `[ignore].mas` is
+    /// matched against the numeric id, not the app name shown in the prompt.
+    pub ignore_key: &'static str,
+    pub ignore_value: String,
 }
 
 /// One declared dconf snapshot's reconcile candidates, grouped into the
@@ -192,7 +200,9 @@ pub fn plan(
                     manager: m,
                     // `mas "App Name", id: 12345` — the Brewfile grammar mas needs.
                     token: format!("mas \"{app}\", id: {name}"),
-                    is_flatpak: false,
+                    ignore_key: m.as_str(),
+                    // The id, not the app name: that is what drift matches on.
+                    ignore_value: name.clone(),
                     name: app,
                 });
             }
@@ -200,7 +210,8 @@ pub fn plan(
                 adds.push(AddItem {
                     manager: m,
                     token: token_for(m, &name),
-                    is_flatpak: m == Manager::Flatpak,
+                    ignore_key: m.as_str(),
+                    ignore_value: name.clone(),
                     name,
                 });
             }
@@ -233,7 +244,8 @@ pub fn plan(
         adds.push(AddItem {
             manager: m,
             token: token_for(m, &full),
-            is_flatpak: false,
+            ignore_key: m.as_str(),
+            ignore_value: full.clone(),
             name: full,
         });
     }

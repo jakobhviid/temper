@@ -126,9 +126,10 @@ brew_trust = ["me/tap"]     # optional; taps THIS machine trusts, unioned with
                             #   is a group decision one machine never edits.
 
 [machine.ignore]            # optional; extras to silence on THIS machine only,
-flatpak = ["org.example"]   #   unioned per-manager with the fleet [ignore].
-                            #   Same shape as [ignore]; ignoring is a per-machine
-                            #   judgement far more often than a fleet one.
+flatpak = ["org.example"]   #   unioned per-manager with the fleet [ignore] and
+                            #   with any composed bundle's. Same shape as
+                            #   [ignore]; `reconcile` writes here when you answer
+                            #   `i` to an extra, for any manager.
 
 [machine.vars]              # optional; per-machine vars, merged OVER [vars]
 BREW_PREFIX = "/home/linuxbrew/.linuxbrew"   # e.g. override a Mac-valued global

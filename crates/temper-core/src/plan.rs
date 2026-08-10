@@ -1121,7 +1121,7 @@ pub fn run_drift(
             kind: "gnome-extension-extra",
             target: uuid,
             ok: false,
-            status: "extra — declare in a bundle or [ignore].gext".into(),
+            status: "extra".into(),
             detail: None,
         });
     }
