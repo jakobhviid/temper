@@ -127,7 +127,32 @@ fn normalize(m: Manager, lines: Vec<String>) -> Vec<String> {
 }
 
 pub fn probe(effective: &[Pkg]) -> Result<Installed> {
-    let managers: HashSet<Manager> = effective.iter().map(|p| p.manager).collect();
+    probe_scoped(effective, false)
+}
+
+/// `probe` for the SEED case: enumerate every manager whose tool is here, not
+/// just the ones already declared.
+///
+/// **vscode is deliberately excluded even when seeding.** The probe invariant is
+/// what keeps a VS Code Settings Sync setup the sole registrar of its extensions
+/// (SPEC says so), and `init` adopting them wholesale is exactly the ownership
+/// temper does not want. Everything else is fair game — discovering it is what
+/// `init` is for.
+pub fn probe_seeding() -> Result<Installed> {
+    probe_scoped(&[], true)
+}
+
+fn probe_scoped(effective: &[Pkg], seed: bool) -> Result<Installed> {
+    let mut managers: HashSet<Manager> = effective.iter().map(|p| p.manager).collect();
+    if seed {
+        managers.extend([
+            Manager::Brew,
+            Manager::Cask,
+            Manager::Tap,
+            Manager::Flatpak,
+            Manager::Mas,
+        ]);
+    }
     let mut inst = Installed::default();
 
     // `have()` answers "is the tool here", never "did it work". A tool that is
@@ -2156,6 +2181,27 @@ pub fn rpm_converge(effective: &[String], dry_run: bool, verbose: bool) -> Resul
 /// name (it round-trips as a `tap` line); a formula/cask keeps brew's short name
 /// and is tagged `Brew` for the caller to reclassify/qualify. `[ignore]` applied.
 pub fn brew_extras(effective: &[Pkg], ignore: &manifest::Ignore) -> Result<Vec<(Manager, String)>> {
+    brew_extras_inner(effective, ignore, false)
+}
+
+/// `brew_extras` for the SEED case, where the empty declared set is the point
+/// rather than a reason to stay quiet.
+///
+/// The probe invariant ("a manager is only probed if you declare at least one of
+/// its packages") is right for drift: it is what stops a spec that declares no
+/// packages from reporting the whole machine as extras. It is exactly wrong for
+/// `init`, whose entire job is to discover what is here — so `init` seeded
+/// **nothing**, on a host with 200 formulae, while the docs promised "full
+/// manager coverage".
+pub fn brew_extras_seeding(ignore: &manifest::Ignore) -> Result<Vec<(Manager, String)>> {
+    brew_extras_inner(&[], ignore, true)
+}
+
+fn brew_extras_inner(
+    effective: &[Pkg],
+    ignore: &manifest::Ignore,
+    seed: bool,
+) -> Result<Vec<(Manager, String)>> {
     if !have("brew") {
         return Ok(Vec::new());
     }
@@ -2169,7 +2215,7 @@ pub fn brew_extras(effective: &[Pkg], ignore: &manifest::Ignore) -> Result<Vec<(
         })
         .map(|p| format!("{}\n", p.raw))
         .collect();
-    if body.is_empty() {
+    if body.is_empty() && !seed {
         return Ok(Vec::new());
     }
     let tmp = std::env::temp_dir().join(format!("temper-Brewfile-drift-{}", std::process::id()));

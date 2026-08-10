@@ -332,11 +332,15 @@ fn machine_package_drops(machine: &Machine) -> Result<Vec<String>> {
 /// Compute the reconcile plan for a machine. Read-only — mutates nothing.
 /// `brew_trust` is the declared fleet-level `[brew].trust`, reconciled against
 /// what Homebrew actually trusts (both directions, mirroring packages).
+/// `seed` lifts the probe opt-in for discovery: `init` scaffolds an EMPTY
+/// machine and then reconciles it, so every "declare at least one first" gate
+/// answered "nothing to look at" and the seed absorbed nothing at all.
 pub fn plan(
     home: &Path,
     machine: &Machine,
     ignore: &manifest::Ignore,
     brew_trust: &[String],
+    seed: bool,
 ) -> Result<ReconcilePlan> {
     // No `brewfile` → nowhere to write an absorbed package, so the package half
     // is skipped rather than fatal: a desktop machine whose packages all come
@@ -364,7 +368,11 @@ pub fn plan(
     };
 
     let effective = packages::effective_set(home, machine)?;
-    let installed = providers::probe(&effective)?;
+    let installed = if seed {
+        providers::probe_seeding()?
+    } else {
+        providers::probe(&effective)?
+    };
 
     // ADD candidates. flatpak/vscode/mas use exact naive extras; brew-family
     // uses the dependency-aware cleanup so transitive deps aren't offered.
@@ -408,7 +416,11 @@ pub fn plan(
     // forever) — resolved in ONE batched `brew info` (per-extra calls made this
     // hang for tens of seconds); fall back to a classified short name if brew
     // can't resolve it.
-    let brew_extras = providers::brew_extras(&effective, ignore)?;
+    let brew_extras = if seed {
+        providers::brew_extras_seeding(ignore)?
+    } else {
+        providers::brew_extras(&effective, ignore)?
+    };
     let to_resolve: Vec<&str> = brew_extras
         .iter()
         .filter(|(kind, _)| *kind != Manager::Tap)

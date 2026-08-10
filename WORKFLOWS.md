@@ -40,9 +40,17 @@ temper init            # name inferred from hostname; --role to skip the ask
 `init` adds a `[[machine]]` block (creating `temper.toml` if the folder has
 none), wires up `brewfiles/<name>`, and then seeds it from the machine's live
 state — it is `reconcile --current-state-wins --include-trust` under the hood, so
-you get the full manager coverage, dependency-aware brew extras, `[ignore]`
+you get dependency-aware brew extras, `[ignore]`
 respected, canonical ordering, a preview, and an undo. It refuses to touch a
 machine that's already declared, pointing you at `reconcile` instead.
+
+Seeding is the one place the probe opt-in is lifted. Everywhere else a manager
+is only probed once you declare one of its packages, which is what stops a spec
+that declares nothing from reporting the whole machine; `init` is the verb whose
+job is to *find* what is here, so it enumerates every manager whose tool is
+present. **VS Code is the exception even here** — Settings Sync stays the sole
+registrar of your extensions, and adopting them wholesale is an ownership temper
+does not want.
 
 `init` and `setup` are different jobs: **`setup` = which folder do I use**
 (records a pointer), **`init` = put this machine in the folder**.

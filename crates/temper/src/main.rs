@@ -414,7 +414,7 @@ fn run(cli: Cli) -> Result<()> {
             current_state_wins,
             include_trust,
             yes,
-        }) => cmd_reconcile(machine, current_state_wins, include_trust, yes, json)?,
+        }) => cmd_reconcile(machine, current_state_wins, include_trust, yes, json, None)?,
         Some(Cmd::Restore {
             machine,
             yes,
@@ -1651,15 +1651,11 @@ fn cmd_init(name: Option<String>, role: Option<String>, yes: bool, json: bool) -
     let after = manifest::stamp_version(&after)?;
 
     let bf_path = home.join(&brewfile_rel);
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "home": home.display().to_string(), "machine": name, "os": os,
-                "role": role, "brewfile": brewfile_rel, "created_manifest": fresh
-            })
-        );
-    } else {
+    // Under --json the scaffold document is HELD until the seed has run, because
+    // the seed prints a document of its own and two of them on one stdout is not
+    // a document at all (Principle #6b). The scaffold facts are merged into the
+    // seed's object below.
+    if !json {
         println!(
             "\n{} {}",
             ui::bold("init"),
@@ -1704,7 +1700,17 @@ fn cmd_init(name: Option<String>, role: Option<String>, yes: bool, json: bool) -
     // The seed IS a reconcile: same planner, same writes, same journal, same
     // preview. init just answers every prompt with "the machine" and opts into
     // the fleet-scope tap-trust absorb, since establishing the spec is the point.
-    let seeded = cmd_reconcile(Some(name.clone()), true, true, yes, json);
+    let seeded = cmd_reconcile(
+        Some(name.clone()),
+        true,
+        true,
+        yes,
+        json,
+        Some(serde_json::json!({
+            "home": home.display().to_string(), "os": os,
+            "role": role, "brewfile": brewfile_rel, "created_manifest": fresh
+        })),
+    );
 
     // The scaffold is a folder write in its own right, and `reconcile` returns
     // early when there is nothing to absorb — so without this, `init` on an
@@ -1873,11 +1879,28 @@ fn cmd_reconcile(
     include_trust: bool,
     yes: bool,
     json: bool,
+    // Set when `init` has just scaffolded this machine: it carries the scaffold
+    // facts to merge into whichever document this prints, and it turns on seed
+    // mode in the planner. Two JSON documents on one stdout is not a document.
+    scaffold: Option<serde_json::Value>,
 ) -> Result<()> {
+    let seed = scaffold.is_some();
+    // One place that prints the reconcile document, so the scaffold half cannot
+    // be forgotten on one of the three exits.
+    let emit = |mut doc: serde_json::Value| {
+        if let (Some(o), Some(extra)) = (doc.as_object_mut(), scaffold.as_ref()) {
+            if let Some(e) = extra.as_object() {
+                for (k, v) in e {
+                    o.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        println!("{doc}");
+    };
     let home = find_home_pulling()?;
     let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
-    let plan = reconcile::plan(&home, &m, &manifest::effective_ignore(&home, &ft.ignore, &m)?, &manifest::effective_trust(&home, &ft.brew.trust, &m)?)?;
+    let plan = reconcile::plan(&home, &m, &manifest::effective_ignore(&home, &ft.ignore, &m)?, &manifest::effective_trust(&home, &ft.brew.trust, &m)?, seed)?;
 
     // Tap-trust is FLEET-scope (temper.toml, every machine) while everything
     // else here is machine-scope, so `--current-state-wins` leaves it alone
@@ -1929,14 +1952,11 @@ fn cmd_reconcile(
         // `--csw --yes` skips the JSON branch above, so this needs its own
         // guard: one unguarded line makes stdout unparseable (Principle #6b).
         if json {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "machine": m.name, "applied": false,
-                    "added": 0, "dropped": 0, "ignored": 0, "dconf_keys": 0,
-                    "fleet_trust_writes": fleet_trust_writes,
-                })
-            );
+            emit(serde_json::json!({
+                "machine": m.name, "applied": false,
+                "added": 0, "dropped": 0, "ignored": 0, "dconf_keys": 0,
+                "fleet_trust_writes": fleet_trust_writes,
+            }));
         } else {
             println!(
                 "reconcile {}: nothing for reconcile to absorb or drop.",
@@ -2273,14 +2293,11 @@ fn cmd_reconcile(
         && chosen_remote_drops.is_empty()
     {
         if json {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "machine": m.name, "applied": false,
-                    "added": 0, "dropped": 0, "ignored": 0, "dconf_keys": 0,
-                    "fleet_trust_writes": fleet_trust_writes,
-                })
-            );
+            emit(serde_json::json!({
+                "machine": m.name, "applied": false,
+                "added": 0, "dropped": 0, "ignored": 0, "dconf_keys": 0,
+                "fleet_trust_writes": fleet_trust_writes,
+            }));
         } else {
             println!("\nNothing selected — nothing changed.");
             report_fleet_trust();
@@ -2562,15 +2579,12 @@ fn cmd_reconcile(
     let ignored = chosen_ignores.len() + chosen_tap_ignores.len();
     if json {
         // Only reachable via --current-state-wins --yes (nothing prompted).
-        println!(
-            "{}",
-            serde_json::json!({
-                "machine": m.name, "applied": true,
-                "added": added, "dropped": dropped, "ignored": ignored,
-                "dconf_keys": keys,
-                "fleet_trust_writes": fleet_trust_writes,
-            })
-        );
+        emit(serde_json::json!({
+            "machine": m.name, "applied": true,
+            "added": added, "dropped": dropped, "ignored": ignored,
+            "dconf_keys": keys,
+            "fleet_trust_writes": fleet_trust_writes,
+        }));
         let gc = manifest::effective_git(&ft.git, &m.git);
         let msg = format!(
             "reconcile {}: +{} -{} ~{} dconf:{}",
