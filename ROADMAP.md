@@ -24,12 +24,13 @@ The feature matrix in `ARCHITECTURE.md` shows where each feature stands against
 the eleven-column interface. These are the open cells, worst first. Every one is
 a *verified* gap, not a suspicion.
 
-1. **`[brew-trust]` and `[ignore]` are fleet-only, and `reconcile` edits them.**
-   Scope says a machine may never change a group declaration, so the fix is a
-   machine-scope counterpart for each, not removing the prompt. Both also lack the
-   `os`/`role` gate a bundle has, so a declaration that is only meaningful on some
-   machines is permanently red on the rest. Schema change → sequence with the
-   folder-skew path (`load_bundle`) so a staggered fleet does not hard-error.
+1. **Fleet `[brew].trust` and `[ignore]` have no `os`/`role` gate.** The
+   machine-scope counterparts now exist (`[[machine]].brew_trust`,
+   `[machine.ignore]`), so a per-machine declaration has a home — but a *group*
+   declaration still cannot say which machines it describes, so one that is only
+   meaningful on some is permanently red on the rest. The natural fix is to let a
+   **bundle** carry them: a bundle is already the group construct and is already
+   os/role-gated, which beats bolting a third gate axis onto the fleet tables.
 2. **`packages::effective_set` never calls `manifest::gated`.** A bundle gated
    `os = "linux"` still contributes its `packages` — including `flatpak` lines —
    to a Mac that composes it, where they are permanently missing with a

@@ -173,7 +173,7 @@ pub struct BrewConfig {
 }
 
 /// Per-manager ignore lists (by the same short name drift matches on).
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Ignore {
     #[serde(default)]
@@ -230,6 +230,21 @@ pub struct Machine {
     /// Whole-desktop dconf snapshots this machine owns: `snapshot` captures each
     /// (filtered by `strip`) to its `file`; `restore` loads them back. The
     /// machine-scope GNOME/Ptyxis state RIS captured with gnome-backup/restore.
+    /// Taps THIS machine trusts, on top of the fleet `[brew].trust`.
+    ///
+    /// The machine-scope counterpart of a fleet list. Without it, `reconcile`
+    /// had nowhere to record a tap this box trusts and compensated by editing
+    /// the FLEET list from one machine — which changes every other machine
+    /// silently, and is the one thing scope forbids (Principle #12). Absorbing
+    /// and dropping both land here.
+    #[serde(default)]
+    pub brew_trust: Vec<String>,
+    /// Extras THIS machine should not be told about, on top of the fleet
+    /// `[ignore]`. Same reason: silencing something is a per-machine judgement
+    /// far more often than a fleet one, and the fleet list could not express
+    /// "on this box".
+    #[serde(default)]
+    pub ignore: Ignore,
     #[serde(default)]
     pub dconf: Vec<DconfSnapshot>,
     /// Per-machine git-convenience override (wholesale replaces the fleet
@@ -803,6 +818,45 @@ mod bundle_skew_tests {
     }
 }
 
+/// A machine's effective tap-trust: the fleet list plus its own, de-duplicated.
+///
+/// A union, not an override: the fleet list is a group decision this machine is
+/// a member of, so it cannot opt out of one here — that is a spec edit. What it
+/// can do is add.
+pub fn effective_trust(fleet: &[String], machine: &Machine) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in fleet.iter().chain(machine.brew_trust.iter()) {
+        if !out.iter().any(|x| x == t) {
+            out.push(t.clone());
+        }
+    }
+    out
+}
+
+/// A machine's effective ignore lists: the fleet lists plus its own, per
+/// manager. Union, for the same reason as `effective_trust`.
+pub fn effective_ignore(fleet: &Ignore, machine: &Machine) -> Ignore {
+    let join = |a: &[String], b: &[String]| {
+        let mut out: Vec<String> = a.to_vec();
+        for x in b {
+            if !out.iter().any(|y| y == x) {
+                out.push(x.clone());
+            }
+        }
+        out
+    };
+    let m = &machine.ignore;
+    Ignore {
+        brew: join(&fleet.brew, &m.brew),
+        cask: join(&fleet.cask, &m.cask),
+        flatpak: join(&fleet.flatpak, &m.flatpak),
+        mas: join(&fleet.mas, &m.mas),
+        vscode: join(&fleet.vscode, &m.vscode),
+        tap: join(&fleet.tap, &m.tap),
+        gnome_extensions: join(&fleet.gnome_extensions, &m.gnome_extensions),
+    }
+}
+
 /// A machine's effective git settings: a `[machine.git]` wholly overrides the
 /// fleet `[git]`; otherwise the fleet setting; otherwise defaults (remind on).
 pub fn effective_git(fleet: &Option<GitConfig>, machine: &Option<GitConfig>) -> GitConfig {
@@ -930,6 +984,8 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
+            brew_trust: Vec::new(),
+            ignore: Default::default(),
             dconf: vec![],
             git: None,
         }
@@ -1031,6 +1087,8 @@ mod tests {
             gnome_extensions: Vec::new(),
             brewfile: None,
             vars: Default::default(),
+            brew_trust: Vec::new(),
+            ignore: Default::default(),
             dconf: vec![],
             git: None,
         }

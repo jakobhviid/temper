@@ -114,6 +114,15 @@ gnome_extensions = ["tilingshell@ferrarodomenico.com"]  # optional; for THIS
                             #   `reconcile` absorbs an undeclared extension here, because
                             #   a bundle's list is shared by every machine composing it.
 brewfile = "brewfiles/chronos"   # optional; a Brewfile whose lines join the set
+brew_trust = ["me/tap"]     # optional; taps THIS machine trusts, unioned with
+                            #   [brew].trust. Machine scope, so `reconcile` both
+                            #   absorbs into and drops from it — the fleet list
+                            #   is a group decision one machine never edits.
+
+[machine.ignore]            # optional; extras to silence on THIS machine only,
+flatpak = ["org.example"]   #   unioned per-manager with the fleet [ignore].
+                            #   Same shape as [ignore]; ignoring is a per-machine
+                            #   judgement far more often than a fleet one.
 
 [machine.vars]              # optional; per-machine vars, merged OVER [vars]
 BREW_PREFIX = "/home/linuxbrew/.linuxbrew"   # e.g. override a Mac-valued global

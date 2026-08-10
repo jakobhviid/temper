@@ -1367,6 +1367,8 @@ mod gating_tests {
             gnome_extensions: Vec::new(),
             brewfile: None,
             vars: Default::default(),
+            brew_trust: Vec::new(),
+            ignore: Default::default(),
             dconf: vec![],
             git: None,
         }

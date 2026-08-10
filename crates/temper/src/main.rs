@@ -1085,7 +1085,7 @@ fn cmd_install(
         &home,
         &m,
         &vars,
-        &ft.brew.trust,
+        &manifest::effective_trust(&ft.brew.trust, &m),
         dry_run,
         packages_only,
         verbose,
@@ -1156,7 +1156,7 @@ fn cmd_update(json: bool, verbose: bool) -> Result<()> {
     let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
     let vars = manifest::effective_vars(&ft.vars, &m);
-    let r = plan::run_update(&home, &m, &vars, &ft.brew.trust, verbose)?;
+    let r = plan::run_update(&home, &m, &vars, &manifest::effective_trust(&ft.brew.trust, &m), verbose)?;
     if json {
         println!(
             "{}",
@@ -1196,7 +1196,7 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
     let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
     let vars = manifest::effective_vars(&ft.vars, &m);
-    let items = plan::run_drift(&home, &m, &vars, &ft.ignore, &ft.brew.trust)?;
+    let items = plan::run_drift(&home, &m, &vars, &manifest::effective_ignore(&ft.ignore, &m), &manifest::effective_trust(&ft.brew.trust, &m))?;
     let out_of_sync = items.iter().filter(|f| !f.ok).count();
 
     if json {
@@ -1412,7 +1412,7 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
     // fire once on every one of them (below), regardless of which path we take.
     let result = (|| -> Result<()> {
         // Compute the plan WITHOUT removing anything, so we can preview + confirm.
-        let prune_plan = plan::run_prune(&home, &m, &ft.ignore, &ft.brew.trust)?;
+        let prune_plan = plan::run_prune(&home, &m, &manifest::effective_ignore(&ft.ignore, &m), &manifest::effective_trust(&ft.brew.trust, &m))?;
 
         if json {
             // No tty to confirm on: JSON is a preview unless `--yes` explicitly opts
@@ -1699,7 +1699,7 @@ fn cmd_adopt(json: bool) -> Result<()> {
     let home = find_home_pulling()?;
     let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
-    let extras = plan::run_adopt(&home, &m, &ft.ignore)?;
+    let extras = plan::run_adopt(&home, &m, &manifest::effective_ignore(&ft.ignore, &m))?;
     if json {
         let arr: Vec<_> = extras
             .iter()
@@ -1749,7 +1749,7 @@ fn cmd_reconcile(
     let home = find_home_pulling()?;
     let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
-    let plan = reconcile::plan(&home, &m, &ft.ignore, &ft.brew.trust)?;
+    let plan = reconcile::plan(&home, &m, &manifest::effective_ignore(&ft.ignore, &m), &manifest::effective_trust(&ft.brew.trust, &m))?;
 
     // Tap-trust is FLEET-scope (temper.toml, every machine) while everything
     // else here is machine-scope, so `--current-state-wins` leaves it alone
@@ -1761,12 +1761,12 @@ fn cmd_reconcile(
     // acutely under `init`, where it has trusted nothing at all. Dropping on
     // that basis deletes a tap the rest of the fleet needs, so no single
     // machine's state ever removes one; that stays an interactive decision.
-    let skip_trust_adds = csw && !include_trust;
-    let skipped_trust_count = if csw {
-        plan.trust_drops.len() + if skip_trust_adds { plan.trust_adds.len() } else { 0 }
-    } else {
-        0
-    };
+    // Nothing is skipped any more. Both tap-trust directions now land in the
+    // machine's own `brew_trust`, which is exactly what `--csw` exists to
+    // absorb — the old skip existed because an absorb had nowhere to go but the
+    // FLEET list, and one machine must never write that unasked. `--include-trust`
+    // keeps its meaning as the explicit opt-in that ALSO records the tap fleet-wide.
+    let fleet_trust_writes = if include_trust { plan.trust_adds.len() } else { 0 };
     // Extensions are NOT tap-trust, and `--csw` takes both directions.
     //
     // Tap-trust drops are refused because `[brew].trust` is FLEET scope — one
@@ -1821,7 +1821,7 @@ fn cmd_reconcile(
                 // something it was never shown (Principle #8's `--json` clause).
                 "gext_adds": plan.gext_adds, "gext_drops": plan.gext_drops,
                 "package_drops": plan.package_drops,
-                "trust_skipped": skipped_trust_count,
+                "fleet_trust_writes": fleet_trust_writes,
                 "dconf": dconf_plans
             })
         );
@@ -1849,7 +1849,7 @@ fn cmd_reconcile(
                 serde_json::json!({
                     "machine": m.name, "applied": false,
                     "added": 0, "dropped": 0, "ignored": 0, "dconf_keys": 0,
-                    "trust_skipped": skipped_trust_count,
+                    "fleet_trust_writes": fleet_trust_writes,
                 })
             );
         } else {
@@ -1909,10 +1909,8 @@ fn cmd_reconcile(
         chosen_gext = plan.gext_adds.clone();
         chosen_gext_drops = plan.gext_drops.clone();
         chosen_package_drops = plan.package_drops.clone();
-        if include_trust {
-            // Adds only — see the note above on why a drop is never automatic.
-            chosen_trust_adds = plan.trust_adds.clone();
-        }
+        chosen_trust_adds = plan.trust_adds.clone();
+        chosen_trust_drops = plan.trust_drops.clone();
         for (i, dp) in plan.dconf.iter().enumerate() {
             let all: Vec<dconf::KeyDiff> = dp
                 .sections
@@ -2088,42 +2086,20 @@ fn cmd_reconcile(
         }
     }
 
-    // Never drop fleet-scope drift on the floor: say what --current-state-wins
-    // deliberately did NOT touch, and name both ways to deal with it. Fires on
-    // the nothing-selected path too — a machine whose ONLY drift is tap-trust
-    // must not report "nothing changed" and leave it at that.
-    let report_skipped_trust = || {
-        // Human-only: under --json stdout carries one document, and the same
-        // fact is reported there as `trust_skipped`.
-        if skipped_trust_count == 0 || json {
+    // A fleet write is never silent: `--include-trust` changes every machine in
+    // the fleet, so say so rather than folding it into the count.
+    let report_fleet_trust = || {
+        if fleet_trust_writes == 0 || json {
             return;
         }
         println!(
             "\n{} {}",
             ui::yellow(ui::g_warn()),
             ui::bold(&format!(
-                "{skipped_trust_count} tap-trust difference(s) NOT absorbed \
-                 (fleet-scope — affects every machine):"
+                "{fleet_trust_writes} tap(s) also recorded in the FLEET [brew].trust — \
+                 this changes every machine"
             ))
         );
-        if skip_trust_adds {
-            for tap in &plan.trust_adds {
-                println!("    {tap:<28} trusted here, not in [brew].trust");
-            }
-        }
-        for tap in &plan.trust_drops {
-            println!("    {tap:<28} declared, not trusted here — `install` will trust it");
-        }
-        println!(
-            "  {}",
-            ui::dim(&format!("{} temper reconcile                          decide each interactively", ui::g_arrow()))
-        );
-        if skip_trust_adds {
-            println!(
-                "  {}",
-                ui::dim(&format!("{} temper reconcile --csw --include-trust    record the taps this machine trusts", ui::g_arrow()))
-            );
-        }
     };
 
     if chosen_drops.is_empty()
@@ -2143,12 +2119,12 @@ fn cmd_reconcile(
                 serde_json::json!({
                     "machine": m.name, "applied": false,
                     "added": 0, "dropped": 0, "ignored": 0, "dconf_keys": 0,
-                    "trust_skipped": skipped_trust_count,
+                    "fleet_trust_writes": fleet_trust_writes,
                 })
             );
         } else {
             println!("\nNothing selected — nothing changed.");
-            report_skipped_trust();
+            report_fleet_trust();
         }
         return Ok(());
     }
@@ -2275,7 +2251,7 @@ fn cmd_reconcile(
 
     }
 
-    report_skipped_trust();
+    report_fleet_trust();
 
     // The per-item prompts WERE the review step, so `--current-state-wins` still
     // confirms once — otherwise a bulk write lands in the spec unreviewed.
@@ -2329,16 +2305,21 @@ fn cmd_reconcile(
         let before_tt = std::fs::read_to_string(&tt_path)?;
         let mut tt = before_tt.clone();
         for name in &chosen_ignores {
-            tt = reconcile::append_ignore(&tt, "flatpak", name)?;
+            tt = reconcile::append_machine_ignore(&tt, &m.name, "flatpak", name)?;
         }
         for tap in &chosen_trust_adds {
-            tt = reconcile::append_trust(&tt, tap)?;
+            // Machine scope by default. `--include-trust` is the explicit,
+            // reported opt-in that ALSO records it for the whole fleet.
+            tt = reconcile::append_machine_trust(&tt, &m.name, tap)?;
+            if include_trust {
+                tt = reconcile::append_trust(&tt, tap)?;
+            }
         }
         for tap in &chosen_trust_drops {
-            tt = reconcile::remove_trust(&tt, tap)?;
+            tt = reconcile::remove_machine_trust(&tt, &m.name, tap)?;
         }
         for tap in &chosen_tap_ignores {
-            tt = reconcile::append_ignore(&tt, "tap", tap)?;
+            tt = reconcile::append_machine_ignore(&tt, &m.name, "tap", tap)?;
         }
         for uuid in &chosen_gext {
             tt = reconcile::append_machine_extension(&tt, &m.name, uuid)?;
@@ -2373,7 +2354,7 @@ fn cmd_reconcile(
                 "machine": m.name, "applied": true,
                 "added": added, "dropped": dropped, "ignored": ignored,
                 "dconf_keys": keys,
-                "trust_skipped": skipped_trust_count,
+                "fleet_trust_writes": fleet_trust_writes,
             })
         );
         let gc = manifest::effective_git(&ft.git, &m.git);

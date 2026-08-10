@@ -267,8 +267,12 @@ pub fn plan(
                 trust_adds.push(tap.clone());
             }
         }
-        // Declared but not trusted → offer to drop from `[brew].trust`.
-        for tap in brew_trust {
+        // Declared but not trusted → offer to drop, but ONLY from this
+        // machine's own `brew_trust`. A tap the fleet declares is a group
+        // decision; un-declaring it is a spec edit, and then every machine's
+        // converge stops trusting it. Offering it here would let one box delete
+        // what the rest of the fleet needs — the incident AGENTS.md records.
+        for tap in &machine.brew_trust {
             if !trusted.iter().any(|t| t == tap) {
                 trust_drops.push(tap.clone());
             }
@@ -588,6 +592,118 @@ pub fn remove_machine_extension(temper_toml: &str, machine: &str, uuid: &str) ->
     Ok(doc.to_string())
 }
 
+/// The machine's own block in `temper.toml`, if it declares one.
+fn machine_table<'a>(
+    doc: &'a mut toml_edit::DocumentMut,
+    machine: &str,
+) -> Option<&'a mut toml_edit::Table> {
+    doc.as_table_mut()
+        .get_mut("machine")?
+        .as_array_of_tables_mut()?
+        .iter_mut()
+        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some(machine))
+}
+
+/// Append `value` to an array on the machine's own block, creating the array if
+/// needed. Idempotent, and comment/format preserving.
+fn append_machine_list(
+    temper_toml: &str,
+    machine: &str,
+    key: &str,
+    value: &str,
+) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = temper_toml
+        .parse()
+        .with_context(|| format!("parsing temper.toml for the {key} edit"))?;
+    let t = machine_table(&mut doc, machine)
+        .ok_or_else(|| anyhow!("temper.toml declares no machine named '{machine}'"))?;
+    let list = t
+        .entry(key)
+        .or_insert(toml_edit::Item::Value(toml_edit::Value::Array(
+            toml_edit::Array::new(),
+        )))
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("[[machine]].{key} is not an array"))?;
+    if !list.iter().any(|v| v.as_str() == Some(value)) {
+        list.push(value);
+    }
+    Ok(doc.to_string())
+}
+
+/// Remove `value` from an array on the machine's own block. A no-op if the
+/// machine, the array, or the entry is absent.
+fn remove_machine_list(
+    temper_toml: &str,
+    machine: &str,
+    key: &str,
+    value: &str,
+) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = temper_toml
+        .parse()
+        .with_context(|| format!("parsing temper.toml for the {key} edit"))?;
+    if let Some(t) = machine_table(&mut doc, machine) {
+        if let Some(list) = t.get_mut(key).and_then(|e| e.as_array_mut()) {
+            list.retain(|v| v.as_str() != Some(value));
+        }
+    }
+    Ok(doc.to_string())
+}
+
+/// Absorb a trusted tap into THIS machine's own `brew_trust`.
+///
+/// The fleet `[brew].trust` is a group decision; one machine adding to it
+/// changes every other machine's spec on the strength of what one box happens to
+/// trust. That is the incident AGENTS.md records, and it is why the default
+/// target is here. Writing the fleet list stays possible, but only as an
+/// explicit, reported opt-in (`--include-trust`).
+pub fn append_machine_trust(temper_toml: &str, machine: &str, tap: &str) -> Result<String> {
+    append_machine_list(temper_toml, machine, "brew_trust", tap)
+}
+
+/// Drop a tap from THIS machine's own `brew_trust`. Never touches the fleet
+/// list: a tap the group declares is not this machine's to un-declare.
+pub fn remove_machine_trust(temper_toml: &str, machine: &str, tap: &str) -> Result<String> {
+    remove_machine_list(temper_toml, machine, "brew_trust", tap)
+}
+
+/// Silence an extra for THIS machine only, under `[machine.ignore].<manager>`.
+///
+/// Ignoring is a judgement, and it is a per-machine one far more often than a
+/// fleet one — a flatpak preinstalled on one box's image is not preinstalled on
+/// a Mac. The fleet `[ignore]` still exists for genuine fleet baselines; it is
+/// just no longer what a single machine writes to.
+pub fn append_machine_ignore(
+    temper_toml: &str,
+    machine: &str,
+    manager: &str,
+    value: &str,
+) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = temper_toml
+        .parse()
+        .context("parsing temper.toml for the ignore edit")?;
+    let t = machine_table(&mut doc, machine)
+        .ok_or_else(|| anyhow!("temper.toml declares no machine named '{machine}'"))?;
+    let ign = t
+        .entry("ignore")
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| anyhow!("[machine.ignore] is not a table"))?;
+    // Implicit so it renders as `[machine.ignore]` rather than an empty stub
+    // when only one manager list is present.
+    ign.set_implicit(false);
+    let list = ign
+        .entry(manager)
+        .or_insert(toml_edit::Item::Value(toml_edit::Value::Array(
+            toml_edit::Array::new(),
+        )))
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("[machine.ignore].{manager} is not an array"))?;
+    if !list.iter().any(|v| v.as_str() == Some(value)) {
+        list.push(value);
+    }
+    Ok(doc.to_string())
+}
+
 /// Remove a token from a machine's own loose `packages` list, preserving
 /// comments + formatting. A no-op if the machine, the list, or the entry is
 /// absent. Machine-scoped for the same reason every absorb is.
@@ -669,6 +785,60 @@ mod tests {
         assert!(!dropped.contains("gone@x"));
         assert!(dropped.contains("keep@x"), "dropped a sibling it was not asked about");
         assert!(dropped.contains("# fleet"), "lost a comment");
+    }
+
+    /// A machine absorbs a tap into its OWN list, and the fleet list is
+    /// untouched.
+    ///
+    /// This is the scope rule at its sharpest. `[brew].trust` is a group
+    /// decision; one machine adding to it changes every other machine's spec on
+    /// the strength of what one box happens to trust, and AGENTS.md records the
+    /// incident where exactly that deleted a tap the rest of the fleet needed.
+    #[test]
+    fn absorbing_a_tap_writes_the_machine_not_the_fleet() {
+        let src = "[brew]\ntrust = [\"fleet/tap\"]\n\n[[machine]]\nname = \"atlas\"\nos = \"linux\"\n";
+        let out = append_machine_trust(src, "atlas", "mine/tap").unwrap();
+        let doc: toml_edit::DocumentMut = out.parse().unwrap();
+        // fleet list unchanged…
+        assert_eq!(doc["brew"]["trust"].as_array().unwrap().len(), 1);
+        // …and the tap landed on the machine.
+        assert_eq!(
+            doc["machine"][0]["brew_trust"][0].as_str(),
+            Some("mine/tap")
+        );
+        // Idempotent.
+        assert_eq!(append_machine_trust(&out, "atlas", "mine/tap").unwrap(), out);
+    }
+
+    /// Dropping a tap is machine-scoped too: a fleet-declared tap is not this
+    /// machine's to un-declare, so `remove_machine_trust` cannot reach it.
+    #[test]
+    fn dropping_a_tap_cannot_reach_the_fleet_list() {
+        let src = "[brew]\ntrust = [\"fleet/tap\"]\n\n[[machine]]\nname = \"atlas\"\nbrew_trust = [\"fleet/tap\", \"mine/tap\"]\n";
+        let out = remove_machine_trust(src, "atlas", "fleet/tap").unwrap();
+        let doc: toml_edit::DocumentMut = out.parse().unwrap();
+        // Gone from the machine, still declared by the fleet — so the machine
+        // keeps trusting it via the union, which is the correct outcome: opting
+        // out of a group decision is a spec edit, not a reconcile.
+        assert_eq!(doc["brew"]["trust"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["machine"][0]["brew_trust"].as_array().unwrap().len(), 1);
+    }
+
+    /// Ignoring is a per-machine judgement, and lands under `[machine.ignore]`.
+    #[test]
+    fn ignoring_an_extra_writes_the_machine_not_the_fleet() {
+        let src = "[ignore]\nflatpak = [\"org.fleet\"]\n\n[[machine]]\nname = \"atlas\"\n";
+        let out = append_machine_ignore(src, "atlas", "flatpak", "org.mine").unwrap();
+        let doc: toml_edit::DocumentMut = out.parse().unwrap();
+        assert_eq!(doc["ignore"]["flatpak"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            doc["machine"][0]["ignore"]["flatpak"][0].as_str(),
+            Some("org.mine")
+        );
+        assert_eq!(
+            append_machine_ignore(&out, "atlas", "flatpak", "org.mine").unwrap(),
+            out
+        );
     }
 
     /// The loose-list twin of the extension round-trip: a machine-scope package
