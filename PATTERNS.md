@@ -90,6 +90,48 @@ on **reality** (`when` probes), not on assumptions about the machine.
   fleet clean enough to delete this yet?", which is the question the dated note
   turns on.
 
+## Adding a provider (tool authors)
+
+A *provider* is a kind of state temper manages — `brew`, `flatpak`,
+`gnome-extensions`, `rpm-ostree`, `flatpak-remote`. Adding one is meant to be
+routine (Principle #1's third tier): you answer the eleven columns of the feature
+interface rather than inventing a verb set, and the existing tests catch most of
+what you forget.
+
+In order, because each step is checked by the one after it:
+
+1. **Declare it at both scopes.** A group list on `Bundle` (gated by its
+   `os`/`role`, which is how a declaration says which machines it describes) and
+   a machine list on `Machine`. A category that exists at one scope is
+   unfinished — "I want this on this box only" is ordinary.
+2. **Observe it three-valued.** Return `Option<Vec<_>>`, not `Vec<_>`: "the tool
+   answered and the answer is none" and "I could not ask" are different facts,
+   and every write path reads the second as the first if you let it.
+3. **Converge in one call.** Every provider CLI takes a list; a per-item loop
+   costs N process spawns and, for anything needing root, N password prompts.
+   Use `batch_then_isolate` so a failed batch still names which item failed.
+4. **Register the kinds** in `plan::KIND_ANSWERS`, both directions each. Keep the
+   `kind: "…"` string a **literal** — the completeness scrape reads source, so a
+   `format!`-built kind is invisible to it.
+5. **Wire the plans.** A `ReconcilePlan` field must reach the `--json` document,
+   the emptiness check *and* the selection check; a `PrunePlan` field must be
+   counted by `len()`. Both are enforced, and both have caught real omissions.
+6. **Add the `ProviderSpec` row** in `interface.rs`. Claiming `prune` means one
+   of your kinds names `temper prune`; claiming `reconcile` means you have a
+   machine scope for the absorb to land in. A declined column needs a written
+   reason — `Col::No("")` is how a gap becomes invisible again.
+7. **Journal what you installed** if the operation is reversible, and say so if
+   it is not. "This cannot be journaled" has been wrong every time it was
+   claimed; check before writing it down.
+8. **Update the matrix** in `ARCHITECTURE.md` and the schema in `SPEC.md`.
+
+What the tests will catch for you: an unregistered kind, a kind missing a
+direction, a verb your registry names that drift never offers, a plan field that
+misses an aggregation point, a prune list that is not counted, a provider
+claiming a capability with nothing behind it, and a provider missing from the
+matrix. What they cannot catch is scope — whether the thing you wrote to belongs
+to this machine — which is why that is question 3 in AGENTS.md rather than a test.
+
 ## Anti-patterns (reach for the primitive instead)
 
 - **Two owners for one key/array** — `setkey`/`append` a key or array a plugin,

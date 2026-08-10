@@ -319,6 +319,29 @@ mod tests {
         }
     }
 
+    /// Every provider appears in the ARCHITECTURE matrix.
+    ///
+    /// The matrix is how a reader learns where a feature stands, and a provider
+    /// missing from it reads as one that does not exist. Docs are compiled into
+    /// `--llm`, so a stale matrix does not merely read wrong — it misleads every
+    /// agent that builds a spec from it (AGENTS.md).
+    #[test]
+    fn every_provider_is_in_the_architecture_matrix() {
+        let doc = include_str!("../../../ARCHITECTURE.md");
+        let matrix = {
+            let start = doc.find("### Where each feature stands").expect("matrix section");
+            &doc[start..]
+        };
+        for p in PROVIDERS {
+            assert!(
+                matrix.contains(&format!("`{}`", p.name)),
+                "provider `{}` is not in the ARCHITECTURE feature matrix — a provider \
+                 missing from it reads as one that does not exist",
+                p.name
+            );
+        }
+    }
+
     /// A declined column carries a real reason. `No("")` is how a gap becomes
     /// invisible again.
     #[test]

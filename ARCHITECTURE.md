@@ -244,7 +244,7 @@ above.
 | `gnome-extensions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `rpm-ostree` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `dconf` | ✅ | ✅ | ✅ | ⚠ | ❌ | ✅ | ✅ | ⚠ | ✅ | ✅ | ❌ |
-| `copy` / `sysfile` / `block` | ✅ | n/a | ✅ | ✅ | ✅ | n/a | n/a | ❌ | ✅ | ✅ | ✅ |
+| `deployed-files` (`copy` / `sysfile` / `block`) | ✅ | n/a | ✅ | ✅ | ✅ | n/a | n/a | ❌ | ✅ | ✅ | ✅ |
 | `profile` | ✅ | ❌ | ✅ | ⚠ | ❌ | ❌ | ❌ | ❌ | ⚠ | ❌ | ❌ |
 
 **One command per type, not one per item.** Every provider's CLI takes a list —
