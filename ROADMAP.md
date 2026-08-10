@@ -24,16 +24,12 @@ The feature matrix in `ARCHITECTURE.md` shows where each feature stands against
 the eleven-column interface. These are the open cells, worst first. Every one is
 a *verified* gap, not a suspicion.
 
-1. **Only two providers journal their installs.** `gext` and `rpm-ostree` record
-   what they added, so `undo` removes it. brew, flatpak, mas and vscode do not —
-   the same pattern applies (the missing set is known before the converge, and
-   each provider's uninstall is its own install backwards), it is simply unwired.
-   An **upgrade** stays out of scope by design, and it only exists for brew and
-   flatpak — `update` upgrades those two and nothing else. temper never runs
-   `rpm-ostree upgrade`; on an atomic host the OS owns that and layered packages
-   ride the deployment.
-   Still open either way: AGENTS.md question 7 asks that non-revertibility be
-   visible in the plan preview, before the user confirms. No code answers that.
+1. **Non-revertibility is not shown before you confirm.** Installs are journaled
+   for brew, cask, flatpak, vscode, gext and rpm-ostree, so `undo` removes them.
+   What is still invisible is the *limit*: `mas` has no uninstall, `update`'s
+   brew/flatpak upgrade phase cannot be reverted, and `setkey(defaults)`/
+   `sysfile`/`exec` are deliberately unjournaled. AGENTS.md question 7 asks that
+   the plan preview say so before the user commits; no code answers it.
 2. **`flatpak` remotes are unmanaged.** There is no `flatpak remote-add` and no
    remote enumeration, so a declared app from a vendor remote or `flathub-beta`
    cannot be installed and the converge degrades to a warning. Remotes are the

@@ -120,6 +120,37 @@ fn uninstall_packages(provider: &str, packages: &[String]) -> bool {
             c.args(["uninstall", "--idempotent", "-y"]);
             c
         }
+        "flatpak" => {
+            let mut c = std::process::Command::new("flatpak");
+            // `--user`: temper only ever installs into the user scope, so that is
+            // the only scope an undo may remove from. A system app belongs to the
+            // image or to root.
+            c.args(["uninstall", "-y", "--noninteractive", "--user"]);
+            c
+        }
+        "brew" => {
+            let mut c = std::process::Command::new("brew");
+            c.args(["uninstall", "--formula"]);
+            c
+        }
+        "cask" => {
+            let mut c = std::process::Command::new("brew");
+            c.args(["uninstall", "--cask"]);
+            c
+        }
+        "vscode" => {
+            // One flag per extension, so this is handled below rather than by
+            // appending bare args.
+            let mut c = std::process::Command::new("code");
+            for p in packages {
+                c.arg("--uninstall-extension").arg(p);
+            }
+            return c
+                .stdout(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+        }
         _ => return false,
     };
     for p in packages {

@@ -1342,7 +1342,35 @@ pub fn run_install(
     // without ever journaling anything — packages were unrevertible because
     // nothing recorded them, not because reversing them is hard.
     let mut journal = Journal::begin();
+    // What the converge is about to add, captured BEFORE it runs. `converge`
+    // hands the whole declared set to brew/flatpak and lets them skip what is
+    // present, so the delta is only knowable from this side.
+    let to_add: Vec<(packages::Manager, String)> = if dry_run {
+        Vec::new()
+    } else {
+        let installed = providers::probe(&effective)?;
+        packages::missing(&effective, &installed)
+            .into_iter()
+            .map(|p| (p.manager, p.match_name()))
+            .collect()
+    };
     let packages = providers::converge(&effective, dry_run, verbose)?;
+    // Journal per provider, so undo dispatches to the right uninstall. Recorded
+    // after the converge and only for managers whose install is not also an
+    // upgrade path — see `Entry::PackagesInstalled`.
+    for (mgr, name) in [
+        (packages::Manager::Flatpak, "flatpak"),
+        (packages::Manager::Brew, "brew"),
+        (packages::Manager::Cask, "cask"),
+        (packages::Manager::Vscode, "vscode"),
+    ] {
+        let added: Vec<String> = to_add
+            .iter()
+            .filter(|(m, _)| *m == mgr)
+            .map(|(_, n)| n.clone())
+            .collect();
+        journal.record_packages(name, &added);
+    }
     let gext_installed = providers::gext_converge(
         &providers::effective_extensions(home, machine)?,
         dry_run,

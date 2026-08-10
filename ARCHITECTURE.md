@@ -236,9 +236,9 @@ above.
 
 | feature | 1 fleet | 2 machine | 3 obs | 4 inst | 5 prune | 6 r+ | 7 r− | 8 ign | 9 drift | 10 rev | 11 res |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `brew` / `cask` / `brew-tap` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
+| `brew` / `cask` / `brew-tap` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `brew-trust` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
-| `flatpak` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
+| `flatpak` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `mas` / `vscode` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
 | `gnome-extensions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `rpm-ostree` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
@@ -273,9 +273,10 @@ owns that, layered packages come along with the deployment, and temper only ever
 layers or un-layers. `gext` likewise only installs. So for those two the revert
 story is unconditional.
 
-brew, flatpak, mas and vscode still show ❌ for column 10 because they are not
-wired yet, not because they can't be. Per AGENTS.md question 7, whatever remains
-unrevertible belongs in the plan preview, before the user confirms.
+Only `mas` still shows ❌ for column 10: `mas` has no uninstall, so removing an
+App Store app means deleting the bundle, which is a different operation from
+every other provider's. Per AGENTS.md question 7, whatever remains unrevertible
+belongs in the plan preview, before the user confirms — no code answers that yet.
 - **col 4, `dconf`** — `restore` is excluded from `install`/`update`, which is a
   symptom of the recording model, not a property of the store (see below).
 - **col 4, `profile`** — its apply is a GUI dialog a human must approve, so it

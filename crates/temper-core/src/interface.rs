@@ -63,8 +63,9 @@ pub struct ProviderSpec {
 }
 
 const NOT_JOURNALED: &str =
-    "a package install is not journaled — `undo` does not cover it, and that is not \
-     yet surfaced before the user confirms (AGENTS.md question 7)";
+    "installs are not journaled for this provider yet — the pattern applies (the \
+     missing set is known before the converge, and uninstall is install backwards), \
+     it is simply unwired";
 const NO_RESIDUE: &str =
     "a package leaves no spec-owned residue: removing the declaration makes it an \
      extra, which prune answers";
@@ -84,7 +85,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         prune: Col::Yes,
         reconcile: Col::Yes,
         ignore: Col::Yes,
-        revertible: Col::No(NOT_JOURNALED),
+        revertible: Col::Yes,
         residue: Col::NA(NO_RESIDUE),
     },
     ProviderSpec {
@@ -110,7 +111,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         prune: Col::Yes,
         reconcile: Col::Yes,
         ignore: Col::Yes,
-        revertible: Col::No(NOT_JOURNALED),
+        revertible: Col::Yes,
         residue: Col::NA(NO_RESIDUE),
     },
     ProviderSpec {
