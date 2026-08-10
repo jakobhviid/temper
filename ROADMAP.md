@@ -29,10 +29,12 @@ a *verified* gap, not a suspicion.
    answers. A `block` inserts a region into a file someone else owns, so its
    residue is the region — removing it is an edit, not a delete, and recording
    the path would make prune capable of deleting a user's `.zshrc`.
-2. **No tombstone for state temper never deployed.** The ledger covers what
-   temper wrote. "This must NOT be installed" and "this file must be gone,
-   though temper never put it there" still need an explicit declaration —
-   `[[assert]] absent` reports them, nothing enacts them.
+2. **No anti-state for packages.** `retire` declares a *path* that must be gone
+   and `prune` enacts it. There is no equivalent for "this package must NOT be
+   installed" — a declaration that would make an unwanted package drift rather
+   than merely un-declared. Today the only way to express it is to not declare
+   it and rely on `prune`, which cannot distinguish "I never wanted this" from
+   "I have not got round to declaring it".
 
 **The provider trait is half built.** `interface.rs` records each provider's
 eleven answers as data and cross-checks them against the finding registry, so a
