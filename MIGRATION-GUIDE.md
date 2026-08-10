@@ -41,8 +41,8 @@ neither read the folder nor tell you why.
 temper drift --json > /tmp/before.json    # BEFORE editing the folder
 # … make the edits …
 temper drift --json > /tmp/after.json
-diff <(jq -S '[.findings[].kind]|sort|unique' /tmp/before.json) \
-     <(jq -S '[.findings[].kind]|sort|unique' /tmp/after.json)
+diff <(jq -S '[.items[].kind]|sort|unique' /tmp/before.json) \
+     <(jq -S '[.items[].kind]|sort|unique' /tmp/after.json)
 ```
 
 A migration is done when the *kinds* reported are the ones you expect and the
@@ -145,5 +145,7 @@ working. Update at your leisure, except the `--json` kinds.
 The `[brew].trust` **table** is unchanged: `trust` is already namespaced by
 `[brew]`, so it does not carry the collision the bare kind name did.
 
-**Not aliased:** `Finding.kind` values in `--json`. If you parse drift output,
-`rpm` → `rpm-ostree` and the `dconf-*` kinds are renamed fields, not aliases.
+**Not aliased:** the `Finding.kind` values above. If you parse `temper drift
+--json`, they are renamed fields rather than aliases — `.items[].kind`, and the
+`remediation` list beside it. The `dconf-*` kinds are **unchanged**; they were
+already named for the store.
