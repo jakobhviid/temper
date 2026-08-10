@@ -445,6 +445,37 @@ fn deployed_paths(home: &Path, machine: &Machine) -> Result<crate::ledger::Ledge
     Ok(out)
 }
 
+/// What a package-only converge does that `undo` cannot take back.
+///
+/// The package installs themselves are journaled. These three are not, and each
+/// is recorded as `revertible: No` in `interface.rs` — so reporting an empty
+/// list here contradicted the tool's own capability table.
+fn packages_only_unrevertible(
+    brew_trust: &[String],
+    home: &Path,
+    machine: &Machine,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if !brew_trust.is_empty() {
+        out.push("brew tap-trust — `brew trust` is not journaled".to_string());
+    }
+    if !crate::providers::effective_remotes(home, machine)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        out.push("flatpak remotes — `remote-add` is not journaled".to_string());
+    }
+    if !crate::providers::effective_extensions(home, machine)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        out.push(
+            "GNOME extension enable/disable — asserting the switch is not journaled".to_string(),
+        );
+    }
+    out
+}
+
 /// Why a step's effect cannot be reverted, if it cannot.
 ///
 /// `undo` covers file and key writes, and (since installs are journaled) package
@@ -1688,9 +1719,11 @@ pub fn run_install(
             steps_total: 0,
             reboot,
             skipped: Vec::new(),
-            // The package phase is journaled in full, so an install-missing has
-            // nothing it cannot take back.
-            unrevertible: Vec::new(),
+            // Package *installs* are journaled, but this phase does three other
+            // things that are not, and claiming an empty list said `undo` would
+            // cover them. `interface.rs` scores brew-trust and flatpak-remote
+            // `revertible: No` in as many words.
+            unrevertible: packages_only_unrevertible(brew_trust, home, machine),
         });
     }
 
@@ -1761,7 +1794,13 @@ pub fn run_install(
             )?;
             if matches!(did, Applied::Changed | Applied::Ran) {
                 if let Some(why) = unrevertible_reason(step) {
-                    unrevertible.push(format!("{} — {why}", label.trim()));
+                    let named = format!("{} — {why}", label.trim());
+                    // Also journaled, so the RUN exists even when nothing in it
+                    // is revertible — otherwise a converge whose only changes
+                    // were an `exec` and a `sysfile` wrote no run at all, and
+                    // the next bare `undo` reverted an older, unrelated one.
+                    journal.record_unrevertible(&named);
+                    unrevertible.push(named);
                 }
             }
             match did {
@@ -2389,7 +2428,9 @@ pub fn run_update(
         )?;
         if matches!(did, Applied::Changed | Applied::Ran) {
             if let Some(why) = unrevertible_reason(step) {
-                unrevertible.push(format!("{} — {why}", label.trim()));
+                let named = format!("{} — {why}", label.trim());
+                journal.record_unrevertible(&named);
+                unrevertible.push(named);
             }
         }
         match did {

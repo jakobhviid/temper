@@ -460,6 +460,11 @@ Every revert is guarded: if the target changed since, it's skipped, not
 clobbered. For a subtree the guard is the **strip-filtered** dump, so ordinary
 desktop churn in stripped keys doesn't quietly disqualify the undo.
 
+A run whose changes were *all* unrevertible is still recorded, and `undo` lands
+on it and says so. It has to: with nothing recorded there would be no run, and
+`temper undo` would reach past it to the previous one and revert that instead —
+which is the opposite of what you asked for.
+
 A run written by a *newer* temper than the one reverting keeps its
 still-understood entries revertible: an unrecognized op is skipped and counted,
 not treated as a corrupt journal.

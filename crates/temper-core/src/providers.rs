@@ -2162,14 +2162,23 @@ pub fn rpm_converge(effective: &[String], dry_run: bool, verbose: bool) -> Resul
         );
         return Ok(Vec::new());
     }
-    let mut cmd = Command::new("rpm-ostree");
-    cmd.args(["install", "--idempotent"]);
-    for p in &missing {
-        cmd.arg(p);
-    }
-    run_child(cmd, verbose, "rpm-ostree install", "layering rpms");
+    // `batch_then_isolate` so a single bad package name does not strand the
+    // rest, and — the part that was missing — so the return value is what
+    // actually landed. The exit status used to be discarded: a failed layering
+    // was journaled as installed (undo would then try to un-layer packages that
+    // were never there) and reported "reboot required (rpm-ostree layered a
+    // package)" for a deployment that was never staged.
+    let _ = verbose;
+    let landed = batch_then_isolate(&missing, "rpm-ostree install", |items| {
+        let mut cmd = Command::new("rpm-ostree");
+        cmd.args(["install", "--idempotent"]);
+        for p in items {
+            cmd.arg(p);
+        }
+        cmd
+    });
     // A non-empty set is also the reboot signal: layering stages a deployment.
-    Ok(missing)
+    Ok(landed)
 }
 
 // --- dependency-aware brew extras (read-only) ---------------------------------

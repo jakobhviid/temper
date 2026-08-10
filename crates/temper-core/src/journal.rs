@@ -97,6 +97,15 @@ enum Entry {
         provider: String,
         packages: Vec<String>,
     },
+    /// Something this run changed that `undo` cannot take back — an `exec`, a
+    /// `sysfile`, a `setkey(defaults)`, a tap-trust.
+    ///
+    /// Recorded so the RUN exists. A converge whose only changes were
+    /// unrevertible used to journal nothing at all, so no run directory was
+    /// written, and a later bare `temper undo` picked the newest run it *could*
+    /// see — some earlier, unrelated one — reverted that, and reported success.
+    /// The user asked to undo what just happened and got something else undone.
+    Unrevertible { what: String },
     /// An op written by a NEWER temper than the one reading. Undo skips and
     /// reports it rather than failing to parse the whole run — a downgrade
     /// loses the ability to revert that entry, not the ability to revert at all.
@@ -343,6 +352,14 @@ impl Journal {
         Ok(h)
     }
 
+    /// Record that this run changed something `undo` cannot revert, so the run
+    /// is still written and a later `undo` cannot silently walk past it.
+    pub fn record_unrevertible(&mut self, what: &str) {
+        self.entries.push(Entry::Unrevertible {
+            what: what.to_string(),
+        });
+    }
+
     /// Write the manifest atomically (presence = committed). No-op if empty.
     pub fn commit(self) -> Result<()> {
         if self.entries.is_empty() {
@@ -452,6 +469,13 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
                     "could not un-install",
                 );
             }
+            continue;
+        }
+        // A recorded-but-unrevertible change: say what it was and move on. This
+        // is the entry that makes the run visible at all.
+        if let Entry::Unrevertible { what } = entry {
+            skipped += 1;
+            cl.skipped(what, "cannot be reverted");
             continue;
         }
         // dconf key entries guard on the live value, not a file hash.
