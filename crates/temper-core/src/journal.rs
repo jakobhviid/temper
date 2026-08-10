@@ -429,6 +429,16 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
     for entry in rf.entries.iter().rev() {
         // Package entries revert by un-installing exactly what this run added.
         if let Entry::PackagesInstalled { provider, packages } = entry {
+            // A dry run touches nothing — the guard every other arm has, and the
+            // one arm that shells out to a real `uninstall`.
+            if dry_run {
+                reverted += packages.len();
+                cl.noted(&format!(
+                    "would un-install {provider}: {} package(s)",
+                    packages.len()
+                ));
+                continue;
+            }
             if uninstall_packages(provider, packages) {
                 reverted += packages.len();
                 cl.done(&format!("{provider}: {} package(s)", packages.len()));
