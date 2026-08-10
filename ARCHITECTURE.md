@@ -223,31 +223,20 @@ above.
 
 | feature | 1 fleet | 2 machine | 3 obs | 4 inst | 5 prune | 6 r+ | 7 r− | 8 ign | 9 drift | 10 rev | 11 res |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `brew` / `cask` / `brew-tap` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠ | ⚠ | ✅ | ❌ | n/a |
-| `brew-trust` | ✅ | ❌ | ✅ | ✅ | ✅ | ⚠ | ⚠ | ⚠ | ✅ | ❌ | n/a |
-| `flatpak` | ✅ | ✅ | ⚠ | ✅ | ⚠ | ✅ | ⚠ | ⚠ | ✅ | ❌ | n/a |
-| `mas` / `vscode` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠ | ⚠ | ✅ | ❌ | n/a |
-| `gnome-extensions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠ | ✅ | ❌ | n/a |
-| `rpm-ostree` | ✅ | ❌ | ⚠ | ✅ | ❌ | ❌ | ❌ | ❌ | ⚠ | ❌ | n/a |
+| `brew` / `cask` / `brew-tap` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
+| `brew-trust` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
+| `flatpak` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
+| `mas` / `vscode` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
+| `gnome-extensions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
+| `rpm-ostree` | ✅ | ✅ | ✅ | ✅ | ⚠ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
 | `dconf` | ✅ | ✅ | ✅ | ⚠ | ❌ | ✅ | ✅ | ⚠ | ✅ | ✅ | ❌ |
 | `copy` / `block` / `sysfile` | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ⚠ | ✅ | ❌ |
 | `profile` | ✅ | ❌ | ✅ | ⚠ | ❌ | ❌ | ❌ | ❌ | ⚠ | ❌ | ❌ |
 
 What the ⚠ marks mean, briefly:
 
-- **col 7, packages** — `reconcile` drops Brewfile lines, but a package declared
-  in `[[machine]].packages` is machine scope with no drop path.
-- **col 8, everywhere** — `[ignore]` is fleet-only, so silencing something on one
-  box silences it fleet-wide; and only `flatpak`/`tap` can be written by a verb
-  at all, though drift honours all seven lists.
-- **col 6/7, `brew-trust`** — implemented, but they edit a *fleet* file from one
-  machine, which the scope rule forbids. The fix is a machine-scope trust list,
-  not removing the verb.
-- **col 3/5, `flatpak`** — user vs system installs are not distinguished, so
-  `prune` can try to remove a system flatpak (polkit, which over SSH hangs).
-- **col 3/9, `rpm-ostree`** — `rpm -q` answers about the *booted* deployment, so
-  a layered package reads missing until reboot. The staged deployment's
-  `requested-packages` is the honest source.
+- **col 5, `rpm-ostree`** — no prune path: `rpm-ostree uninstall` stages a
+  deployment and needs a reboot, a different shape from every other prune.
 - **col 4, `dconf`** — `restore` is excluded from `install`/`update`, which is a
   symptom of the recording model, not a property of the store (see below).
 - **col 4, `profile`** — its apply is a GUI dialog a human must approve, so it

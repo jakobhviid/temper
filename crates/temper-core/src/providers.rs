@@ -63,6 +63,9 @@ pub fn probe(effective: &[Pkg]) -> Result<Installed> {
         }
     }
     if managers.contains(&Manager::Flatpak) && have("flatpak") {
+        // BOTH scopes count as installed, so a declared app installed
+        // system-wide is not reported missing. Which scope it is in only
+        // matters for *removal* — see `flatpak_user_apps`.
         inst.set(
             Manager::Flatpak,
             run_lines("flatpak", &["list", "--app", "--columns=application"])?,
@@ -782,14 +785,41 @@ pub fn prune_apply(effective: &[Pkg], extras: &[(Manager, String)]) -> Result<()
         }
     }
 
-    let flatpaks: Vec<&str> = extras
+    let mut flatpaks: Vec<&str> = extras
         .iter()
         .filter(|(m, _)| *m == Manager::Flatpak)
         .map(|(_, n)| n.as_str())
         .collect();
+    // Remove only what this user installed. A system flatpak is the image's or
+    // root's, needs polkit, and over SSH that hangs — so it is reported and
+    // left, never silently attempted (Principle #6: no silent skips).
+    if !flatpaks.is_empty() {
+        match flatpak_user_apps() {
+            Some(user) => {
+                let (mine, theirs): (Vec<&str>, Vec<&str>) =
+                    flatpaks.iter().partition(|f| user.iter().any(|u| u == *f));
+                if !theirs.is_empty() {
+                    eprintln!(
+                        "{} {} flatpak(s) are system-wide and were NOT removed: {}",
+                        crate::ui::yellow(crate::ui::g_warn()),
+                        theirs.len(),
+                        theirs.join(", ")
+                    );
+                }
+                flatpaks = mine;
+            }
+            None => {
+                eprintln!(
+                    "{} could not tell user from system flatpaks — none removed",
+                    crate::ui::yellow(crate::ui::g_warn())
+                );
+                flatpaks.clear();
+            }
+        }
+    }
     if !flatpaks.is_empty() && have("flatpak") {
         let mut cmd = Command::new("flatpak");
-        cmd.args(["uninstall", "-y", "--noninteractive"]);
+        cmd.args(["uninstall", "-y", "--noninteractive", "--user"]);
         for f in &flatpaks {
             cmd.arg(f);
         }
@@ -1092,6 +1122,38 @@ pub fn effective_rpm(home: &Path, machine: &Machine) -> Result<Vec<String>> {
         }
     }
     Ok(out)
+}
+
+/// Flatpak apps installed in the **user** scope, three-valued.
+///
+/// `flatpak list --app` merges user and system installs, which is right for
+/// "is it here?" and wrong for "may I remove it?". A system install belongs to
+/// the image or to root: on Bazzite and Silverblue the image preinstalls a set,
+/// and uninstalling one needs polkit — which over SSH prompts into a void or
+/// fails opaquely.
+///
+/// This is the same distinction `gext` draws deliberately and for the same
+/// reason: image-baked items are not something you failed to declare. `None`
+/// means the scope could not be enumerated, which is never "nothing is
+/// user-installed".
+pub fn flatpak_user_apps() -> Option<Vec<String>> {
+    if !have("flatpak") {
+        return None;
+    }
+    let out = Command::new("flatpak")
+        .args(["list", "--app", "--user", "--columns=application"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+    )
 }
 
 /// What this host can do about rpm-ostree layering, answered once.

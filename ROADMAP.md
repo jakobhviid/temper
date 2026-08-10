@@ -37,10 +37,11 @@ a *verified* gap, not a suspicion.
    is a different shape from every other prune — closer to `restore-dconf` than
    to `brew bundle cleanup`. Its `converge` cell says so rather than sitting
    blank.
-3. **`flatpak` does not model user vs system scope.** `prune` can therefore try to
-   remove a system flatpak, which needs polkit and over SSH hangs. `gext` draws
-   this distinction deliberately; flatpak has the same image-baked baseline
-   problem and papers over it with `[ignore]`.
+3. **`flatpak` remotes are unmanaged.** There is no `flatpak remote-add` and no
+   remote enumeration, so a declared app from a vendor remote or `flathub-beta`
+   cannot be installed and the converge degrades to a warning. Remotes are the
+   flatpak analogue of `[brew].trust` — the same fleet-vs-machine scope question
+   that earned trust a machine-scope list.
 4. **`[ignore]` is writable for two of its seven lists.** drift honours all seven;
    only `flatpak` and `tap` can be written by a verb, while the drift status for a
    GNOME extension extra tells the user to use `[ignore].gext`.
