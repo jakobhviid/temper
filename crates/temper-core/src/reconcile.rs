@@ -363,7 +363,10 @@ pub fn plan(
 /// story and `snapshot`'s job, not a wall of per-key prompts.
 fn dconf_plans(home: &Path, machine: &Machine) -> Result<Vec<DconfPlan>> {
     let mut out = Vec::new();
-    for snap in &machine.dconf {
+    // Extension settings reconcile per section exactly like a machine subtree —
+    // and because an extension's snapshot is rooted at its own subtree, each
+    // section IS one of its settings groups.
+    for snap in &crate::dconf::all_snapshots(home, machine) {
         // Same ownership filter drift uses: reconcile must never offer to absorb
         // a key a `setkey` step already declares.
         let owned = crate::dconf::setkey_owned(home, machine, snap);

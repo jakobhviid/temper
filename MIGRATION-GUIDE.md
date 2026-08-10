@@ -110,7 +110,7 @@ a hand-maintained `strip` list that silently rotted whenever you forgot an entry
 
 | what it is | where it goes now |
 |---|---|
-| `/org/gnome/shell/extensions/<uuid>/…` | the extension's own declaration — captured and replayed with it |
+| `/org/gnome/shell/extensions/<uuid>/…` | `settings = "…"` on the extension: `{ uuid = "x@y", settings = "assets/gnome/ext/x.dconf" }` |
 | a key you want **always set** (global shortcuts, 1Password) | a `setkey` step in a bundle |
 | a key you want **always absent** | the absence primitive, not a captured value |
 | genuinely machine-specific live state | a narrowly-rooted `[[machine.dconf]]`, still supported |

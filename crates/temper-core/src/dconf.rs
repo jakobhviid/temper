@@ -363,6 +363,21 @@ pub enum SnapshotState {
     Diffs(Vec<KeyDiff>),
 }
 
+/// Every subtree this machine captures: its own `[[machine.dconf]]` blocks plus
+/// one per declared extension that names a settings file.
+///
+/// Extension settings ride the same path as everything else deliberately. They
+/// are the bulk of what a desktop snapshot ever held — 95% of the keys, measured
+/// — and giving them a second implementation would mean a second place for the
+/// observability guard, the ownership filter and the undo journal to be forgotten.
+pub fn all_snapshots(home: &Path, machine: &Machine) -> Vec<DconfSnapshot> {
+    let mut out = machine.dconf.clone();
+    out.extend(
+        crate::providers::extension_snapshots(home, machine).unwrap_or_default(),
+    );
+    out
+}
+
 /// The snapshot-relative ids of keys a `setkey` step already owns.
 ///
 /// A dconf key has exactly one owner. `setkey` is the *policy* declaration —
@@ -511,7 +526,10 @@ fn dump_raw(path: &str) -> Result<String> {
 /// journaled so `undo` reverts them. Returns the written paths. No-op where
 /// `dconf` is absent — callers that should fail loudly check first.
 pub fn capture(home: &Path, machine: &Machine, journal: &mut Journal) -> Result<Vec<PathBuf>> {
-    if machine.dconf.is_empty() {
+    // A declared extension's settings are captured with the machine's own
+    // subtrees — same guards, same journaling, one implementation.
+    let snaps = all_snapshots(home, machine);
+    if snaps.is_empty() {
         return Ok(Vec::new());
     }
     // The write side needs the guard MORE than the read side, not less: capture
@@ -524,7 +542,7 @@ pub fn capture(home: &Path, machine: &Machine, journal: &mut Journal) -> Result<
     }
     let mut written = Vec::new();
     let mut excluded = 0usize;
-    for snap in &machine.dconf {
+    for snap in &snaps {
         // Never capture a key a `setkey` already declares: that is what turned a
         // snapshot into a second owner and made a prefs-UI tweak fight the
         // bundle on the next converge.
@@ -556,7 +574,8 @@ pub fn capture(home: &Path, machine: &Machine, journal: &mut Journal) -> Result<
 /// **unfiltered** state is stored before each load. `dry_run` reports the files
 /// it would load and touches nothing.
 pub fn restore(home: &Path, machine: &Machine, dry_run: bool) -> Result<Vec<PathBuf>> {
-    if machine.dconf.is_empty() {
+    let snaps = all_snapshots(home, machine);
+    if snaps.is_empty() {
         return Ok(Vec::new());
     }
     // A restore captures the machine's prior state first so `undo` can revert
@@ -571,9 +590,9 @@ pub fn restore(home: &Path, machine: &Machine, dry_run: bool) -> Result<Vec<Path
     // output to fight here (dconf load is silent), so the region is always
     // welcome — but a dry run has no effects to report, so it gets none
     // (Principle #6b: temper reports what happened, and nothing did).
-    let cl = (!dry_run).then(|| crate::ui::Checklist::new(machine.dconf.len(), "restoring", false));
+    let cl = (!dry_run).then(|| crate::ui::Checklist::new(snaps.len(), "restoring", false));
     let mut journal = Journal::begin();
-    for snap in &machine.dconf {
+    for snap in &snaps {
         if let Some(cl) = &cl {
             cl.start(&snap.path);
         }

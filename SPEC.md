@@ -115,6 +115,8 @@ packages = ["cask \"raycast\""]  # optional loose Brewfile-grammar tokens. Machi
 gnome_extensions = [                        # optional; for THIS machine, unioned
     "tilingshell@ferrarodomenico.com",      #   with the composed bundles' lists.
     { uuid = "CoverflowAltTab@palatis.blogspot.com", enabled = false },
+    { uuid = "tilingshell@ferrarodomenico.com",
+      settings = "assets/gnome/ext/tilingshell.dconf" },
 ]                                           # A bare uuid means installed AND
                                             #   enabled. The table form says
                                             #   otherwise: `enabled = false` is
@@ -123,6 +125,14 @@ gnome_extensions = [                        # optional; for THIS machine, unione
                                             #   to be said rather than living in a
                                             #   captured dconf key nothing linked
                                             #   to the declaration.
+                                            # `settings` captures the extension's
+                                            #   own subtree
+                                            #   (/org/gnome/shell/extensions/<uuid>/)
+                                            #   into that file — snapshot,
+                                            #   restore and drift treat it exactly
+                                            #   like a [[machine.dconf]] block, and
+                                            #   it inherits the scope of whatever
+                                            #   declared the extension.
 brewfile = "brewfiles/chronos"   # optional; a Brewfile whose lines join the set
 flatpak_remotes = ["vendor https://example.com/vendor.flatpakrepo"]
                             # optional; remotes THIS machine adds, as "<name> <url>".

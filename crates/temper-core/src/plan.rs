@@ -1279,7 +1279,9 @@ pub fn run_drift(
     // live dump, both filtered through the same `strip`. Grouped per snapshot so
     // a narrow subtree (`…/shell/extensions/`) reads as its own section.
     // Degraded, not failed, on a host without dconf (a Mac).
-    for snap in &machine.dconf {
+    let mut all_snaps: Vec<crate::manifest::DconfSnapshot> = machine.dconf.clone();
+    all_snaps.extend(providers::extension_snapshots(home, machine)?);
+    for snap in &all_snaps {
         let group = format!("dconf/{}", snap.name());
         let owned = crate::dconf::setkey_owned(home, machine, snap);
         match crate::dconf::snapshot_state_owned(home, snap, &owned)? {
@@ -1945,7 +1947,9 @@ pub fn commit_prune(home: &Path, machine: &Machine, plan: &PrunePlan) -> Result<
 /// Errors where `dconf` is absent rather than silently writing nothing.
 /// Journaled, so `undo` reverts it.
 pub fn run_snapshot(home: &Path, machine: &Machine) -> Result<Vec<std::path::PathBuf>> {
-    if machine.dconf.is_empty() {
+    // A machine that declares no subtrees of its own may still have extensions
+    // that declare settings.
+    if crate::dconf::all_snapshots(home, machine).is_empty() {
         return Ok(Vec::new());
     }
     if let crate::dconf::Store::Unreadable(why) = crate::dconf::observe() {

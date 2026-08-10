@@ -907,6 +907,22 @@ pub fn effective_extension_specs(
     Ok(out)
 }
 
+/// Every snapshot this machine's declared extensions bring with them.
+///
+/// Returned alongside `machine.dconf` everywhere a snapshot is captured,
+/// compared or restored, so an extension's settings get the same treatment the
+/// machine's own subtrees do — the same observability guard, the same ownership
+/// filter, the same journaling — without a second implementation.
+pub fn extension_snapshots(
+    home: &Path,
+    machine: &Machine,
+) -> Result<Vec<manifest::DconfSnapshot>> {
+    Ok(effective_extension_specs(home, machine)?
+        .iter()
+        .filter_map(|e| e.settings_snapshot())
+        .collect())
+}
+
 /// Just the uuids — what `install` and the extras diff work in.
 pub fn effective_extensions(home: &Path, machine: &Machine) -> Result<Vec<String>> {
     Ok(effective_extension_specs(home, machine)?
