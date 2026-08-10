@@ -696,6 +696,18 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         absorb: &[Answer::Verb("temper reconcile")],
     },
     KindSpec {
+        name: "gnome-extension-enable",
+        detects: Detects::Differs,
+        converge: &[Answer::Verb("temper install --packages-only")],
+        // Absorbing means writing `enabled = false` into the declaration that
+        // names the extension — an edit to whichever scope declared it, which is
+        // the fleet's file as often as this machine's.
+        absorb: &[Answer::Hand {
+            file: "the declaration that names it (a bundle, or [[machine]].gnome_extensions)",
+            why: "set `enabled` on the extension to match what you actually want",
+        }],
+    },
+    KindSpec {
         name: "gnome-extension-extra",
         detects: Detects::Extra,
         converge: &[Answer::Verb("temper prune")],
@@ -1173,6 +1185,25 @@ pub fn run_drift(
     // The extras direction, which every other manager already reported. Carries
     // its remedy in the status: there is no single command for it, because
     // `extensions` lives in a shared bundle that only a human should edit.
+    for (uuid, want) in
+        providers::gext_enable_drift(&providers::effective_extension_specs(home, machine)?)
+    {
+        findings.push(Finding {
+            app: "gnome-extensions".into(),
+            kind: "gnome-extension-enable",
+            target: uuid,
+            ok: false,
+            status: if want { "not enabled" } else { "enabled" }.into(),
+            detail: Some(
+                if want {
+                    "declared enabled — `install` switches it on"
+                } else {
+                    "declared disabled — `install` switches it off"
+                }
+                .into(),
+            ),
+        });
+    }
     for uuid in providers::gext_extras(&effective_ext, ignore) {
         findings.push(Finding {
             app: "gnome-extensions".into(),
@@ -1505,6 +1536,12 @@ pub fn run_install(
         verbose,
     )?;
     journal.record_packages("gnome-extensions", &gext_installed);
+    // Enable/disable AFTER installing: an extension cannot be switched on until
+    // it exists, so a fresh install would otherwise need a second converge.
+    providers::gext_enable_converge(
+        &providers::gext_enable_drift(&providers::effective_extension_specs(home, machine)?),
+        dry_run,
+    )?;
     let rpm_installed = providers::rpm_converge(
         &providers::effective_rpm(home, machine)?,
         dry_run,

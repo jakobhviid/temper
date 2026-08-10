@@ -172,6 +172,49 @@ pub struct BrewConfig {
     pub trust: Vec<String>,
 }
 
+/// A declared GNOME extension.
+///
+/// A bare uuid string is the common case and still parses, so no folder has to
+/// change. The table form exists because *installed* and *enabled* were two
+/// unlinked facts about one object: the uuid lived in `gnome_extensions` while
+/// whether it was switched on lived in a captured dconf key, and nothing related
+/// them. A uuid enabled in a snapshot but declared nowhere got switched on by
+/// `restore` and never installed by `install` — and GNOME fails soft, so the
+/// breakage was silent. One declaration now carries both.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum GnomeExtension {
+    Uuid(String),
+    Spec(GnomeExtensionSpec),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GnomeExtensionSpec {
+    pub uuid: String,
+    /// Whether it should be switched on. Defaults to true: declaring an
+    /// extension you do not want enabled is the unusual case, and
+    /// "not-enabled is not not-wanted" cuts both ways — an extension you keep
+    /// installed but off is a real state, and it has to be said out loud.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl GnomeExtension {
+    pub fn uuid(&self) -> &str {
+        match self {
+            GnomeExtension::Uuid(u) => u,
+            GnomeExtension::Spec(s) => &s.uuid,
+        }
+    }
+    pub fn enabled(&self) -> bool {
+        match self {
+            GnomeExtension::Uuid(_) => true,
+            GnomeExtension::Spec(s) => s.enabled,
+        }
+    }
+}
+
 /// Per-manager ignore lists (by the same short name drift matches on).
 #[derive(Debug, Default, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -224,7 +267,7 @@ pub struct Machine {
     /// or "uninstall it" — never "yes, on this machine".
     #[serde(default)]
     #[serde(alias = "extensions")]
-    pub gnome_extensions: Vec<String>,
+    pub gnome_extensions: Vec<GnomeExtension>,
     /// A Brewfile (relative to the temper-home) whose lines are added to this
     /// machine's package set — the clean way to migrate an existing Brewfile.
     #[serde(default)]
@@ -319,7 +362,7 @@ pub struct Bundle {
     /// GNOME extension UUIDs to install via `gext` (Linux desktop).
     #[serde(default)]
     #[serde(alias = "extensions")]
-    pub gnome_extensions: Vec<String>,
+    pub gnome_extensions: Vec<GnomeExtension>,
     /// rpm-ostree layered packages (Linux; can't be image-baked).
     #[serde(default)]
     #[serde(alias = "rpm")]
@@ -867,15 +910,43 @@ mod rename_alias_tests {
             "extensions = [\"a@x\"]\nrpm = [\"vpn\"]\n",
         )
         .expect("old bundle names must still parse");
-        assert_eq!(b.gnome_extensions, vec!["a@x".to_string()]);
+        assert_eq!(b.gnome_extensions[0].uuid(), "a@x");
         assert_eq!(b.rpm_ostree, vec!["vpn".to_string()]);
 
         let t: TemperToml = toml::from_str(
             "[[machine]]\nname = \"a\"\nos = \"linux\"\nextensions = [\"b@x\"]\n\n[ignore]\ngext = [\"c@x\"]\n",
         )
         .expect("old machine/ignore names must still parse");
-        assert_eq!(t.machine[0].gnome_extensions, vec!["b@x".to_string()]);
+        assert_eq!(t.machine[0].gnome_extensions[0].uuid(), "b@x");
         assert_eq!(t.ignore.gnome_extensions, vec!["c@x".to_string()]);
+    }
+
+    /// Both extension forms parse, and the bare uuid means "enabled".
+    ///
+    /// The table form exists because installed and enabled were two unlinked
+    /// facts. Defaulting a bare uuid to enabled keeps every existing folder
+    /// meaning exactly what it meant before.
+    #[test]
+    fn an_extension_is_a_uuid_or_a_spec() {
+        let b: Bundle = toml::from_str(
+            "gnome_extensions = [\"plain@x\", { uuid = \"off@x\", enabled = false }]\n",
+        )
+        .unwrap();
+        assert_eq!(b.gnome_extensions[0].uuid(), "plain@x");
+        assert!(b.gnome_extensions[0].enabled(), "a bare uuid means enabled");
+        assert_eq!(b.gnome_extensions[1].uuid(), "off@x");
+        assert!(!b.gnome_extensions[1].enabled());
+
+        // A spec that omits `enabled` still means enabled.
+        let b: Bundle =
+            toml::from_str("gnome_extensions = [{ uuid = \"a@x\" }]\n").unwrap();
+        assert!(b.gnome_extensions[0].enabled());
+
+        // And a typo in the table is still a parse error, not a silent default.
+        assert!(toml::from_str::<Bundle>(
+            "gnome_extensions = [{ uuid = \"a@x\", enabledd = true }]\n"
+        )
+        .is_err());
     }
 
     /// …and the new names parse too, obviously — but assert it, because an alias
@@ -886,7 +957,7 @@ mod rename_alias_tests {
             "gnome_extensions = [\"a@x\"]\nrpm_ostree = [\"vpn\"]\n",
         )
         .expect("new bundle names must parse");
-        assert_eq!(b.gnome_extensions, vec!["a@x".to_string()]);
+        assert_eq!(b.gnome_extensions[0].uuid(), "a@x");
         assert_eq!(b.rpm_ostree, vec!["vpn".to_string()]);
     }
 }

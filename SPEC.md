@@ -112,11 +112,17 @@ apps     = ["shell", "ssh"] # bundle names in apps/
 packages = ["cask \"raycast\""]  # optional loose Brewfile-grammar tokens. Machine
                             #   scope, so `reconcile` both absorbs into and drops
                             #   from this list.
-gnome_extensions = ["tilingshell@ferrarodomenico.com"]  # optional; for THIS
-                            #   machine, unioned with the composed bundles' lists. The
-                            #   machine-scoped counterpart of a bundle's `extensions` —
-                            #   `reconcile` absorbs an undeclared extension here, because
-                            #   a bundle's list is shared by every machine composing it.
+gnome_extensions = [                        # optional; for THIS machine, unioned
+    "tilingshell@ferrarodomenico.com",      #   with the composed bundles' lists.
+    { uuid = "CoverflowAltTab@palatis.blogspot.com", enabled = false },
+]                                           # A bare uuid means installed AND
+                                            #   enabled. The table form says
+                                            #   otherwise: `enabled = false` is
+                                            #   "keep it installed, switched off",
+                                            #   which is a real state and now has
+                                            #   to be said rather than living in a
+                                            #   captured dconf key nothing linked
+                                            #   to the declaration.
 brewfile = "brewfiles/chronos"   # optional; a Brewfile whose lines join the set
 flatpak_remotes = ["vendor https://example.com/vendor.flatpakrepo"]
                             # optional; remotes THIS machine adds, as "<name> <url>".

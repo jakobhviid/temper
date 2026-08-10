@@ -120,6 +120,16 @@ fn classify_brew(name: &str, installed: &Installed) -> Manager {
     }
 }
 
+/// The uuids in the machine's own extension list — the candidate set for a drop,
+/// which is machine scope only.
+fn machine_extension_uuids(machine: &Machine) -> Vec<String> {
+    machine
+        .gnome_extensions
+        .iter()
+        .map(|e| e.uuid().to_string())
+        .collect()
+}
+
 /// Remotes in the machine's own `flatpak_remotes` that are not configured.
 /// Machine scope only; a group's remote is not this box's to un-declare.
 fn machine_remote_drops(machine: &Machine) -> Vec<String> {
@@ -199,7 +209,7 @@ pub fn plan(
                 ignore,
             ),
             package_drops: machine_package_drops(machine)?,
-            gext_drops: providers::gext_machine_absent(&machine.gnome_extensions),
+            gext_drops: providers::gext_machine_absent(&machine_extension_uuids(machine)),
             remote_adds: providers::remotes_extras(&providers::effective_remotes(home, machine)?, ignore),
             remote_drops: machine_remote_drops(machine),
         rpm_adds: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
@@ -339,7 +349,7 @@ pub fn plan(
             ignore,
         ),
         package_drops: machine_package_drops(machine)?,
-        gext_drops: providers::gext_machine_absent(&machine.gnome_extensions),
+        gext_drops: providers::gext_machine_absent(&machine_extension_uuids(machine)),
         rpm_adds: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
         rpm_drops: providers::rpm_ostree_machine_absent(&machine.rpm_ostree),
         remote_adds: providers::remotes_extras(&providers::effective_remotes(home, machine)?, ignore),

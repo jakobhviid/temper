@@ -876,9 +876,19 @@ pub fn prune_apply(effective: &[Pkg], extras: &[(Manager, String)]) -> Result<()
 // --- gext: GNOME extensions (Linux desktop) -----------------------------------
 
 /// Union of a machine's composed apps' `extensions`, de-duplicated.
-pub fn effective_extensions(home: &Path, machine: &Machine) -> Result<Vec<String>> {
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
+/// Every extension this machine declares, fleet-then-machine, first declaration
+/// of a uuid winning. The **spec**, not just the uuid, because whether an
+/// extension should be switched on travels with the declaration that names it.
+pub fn effective_extension_specs(
+    home: &Path,
+    machine: &Machine,
+) -> Result<Vec<manifest::GnomeExtension>> {
+    let mut out: Vec<manifest::GnomeExtension> = Vec::new();
+    let push = |e: &manifest::GnomeExtension, out: &mut Vec<manifest::GnomeExtension>| {
+        if !out.iter().any(|x| x.uuid() == e.uuid()) {
+            out.push(e.clone());
+        }
+    };
     for app in &machine.apps {
         let bundle = manifest::load_bundle(home, app)?;
         // Bundle-level os/role gate: a server (or a Mac) never layers a
@@ -886,19 +896,23 @@ pub fn effective_extensions(home: &Path, machine: &Machine) -> Result<Vec<String
         if manifest::gated(&bundle.os, &bundle.role, machine) {
             continue;
         }
-        for uuid in bundle.gnome_extensions {
-            if seen.insert(uuid.clone()) {
-                out.push(uuid);
-            }
+        for e in &bundle.gnome_extensions {
+            push(e, &mut out);
         }
     }
     // The machine's own list, unioned last — same rule `packages` uses.
-    for uuid in &machine.gnome_extensions {
-        if seen.insert(uuid.clone()) {
-            out.push(uuid.clone());
-        }
+    for e in &machine.gnome_extensions {
+        push(e, &mut out);
     }
     Ok(out)
+}
+
+/// Just the uuids — what `install` and the extras diff work in.
+pub fn effective_extensions(home: &Path, machine: &Machine) -> Result<Vec<String>> {
+    Ok(effective_extension_specs(home, machine)?
+        .iter()
+        .map(|e| e.uuid().to_string())
+        .collect())
 }
 
 /// What this host can do about GNOME extensions — answered **once**, and
@@ -950,6 +964,68 @@ fn gext_list(args: &[&str]) -> Option<Vec<String>> {
             .filter(|l| !l.is_empty())
             .collect(),
     )
+}
+
+/// Extensions GNOME currently has switched **on**, three-valued.
+pub fn gext_enabled() -> Option<Vec<String>> {
+    gext_list(&["list", "--enabled"])
+}
+
+/// Declared extensions whose switched-on state does not match the declaration.
+///
+/// Returns `(uuid, should_be_enabled)`. Only *installed* extensions are
+/// considered: one that is missing is already reported as `gnome-extension`, and
+/// also calling it "not enabled" would be one fact wearing two hats.
+///
+/// This is the cell that closes the silent soft-failure. "Installed" and
+/// "enabled" used to be two unlinked facts — the uuid in `gnome_extensions`, the
+/// switch in a captured dconf key — so a uuid enabled in a snapshot but declared
+/// nowhere was switched on by `restore` and never installed by `install`. GNOME
+/// fails soft, so nothing said a word.
+pub fn gext_enable_drift(specs: &[manifest::GnomeExtension]) -> Vec<(String, bool)> {
+    if specs.is_empty() {
+        return Vec::new();
+    }
+    let (Some(installed), Some(enabled)) = (gext_list(&["list"]), gext_enabled()) else {
+        return Vec::new();
+    };
+    specs
+        .iter()
+        .filter(|e| installed.iter().any(|i| i == e.uuid()))
+        .filter(|e| enabled.iter().any(|x| x == e.uuid()) != e.enabled())
+        .map(|e| (e.uuid().to_string(), e.enabled()))
+        .collect()
+}
+
+/// Switch declared extensions on or off to match their declaration.
+///
+/// `gnome-extensions enable/disable` rather than writing `enabled-extensions`
+/// directly: the tool owns that key's semantics, and writing the list wholesale
+/// would drop the image-baked extensions temper never declared. A **union**, not
+/// a replacement — temper asserts its own declarations and leaves the rest alone.
+pub fn gext_enable_converge(drift: &[(String, bool)], dry_run: bool) -> Result<usize> {
+    if dry_run || drift.is_empty() || !gext_caps().observe {
+        return Ok(0);
+    }
+    let mut done = 0;
+    for (uuid, want) in drift {
+        let verb = if *want { "enable" } else { "disable" };
+        let ok = Command::new("gnome-extensions")
+            .args([verb, uuid])
+            .stdin(Stdio::null())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if ok {
+            done += 1;
+        } else {
+            eprintln!(
+                "{} gnome-extensions {verb} {uuid} failed — skipped",
+                crate::ui::yellow(crate::ui::g_warn())
+            );
+        }
+    }
+    Ok(done)
 }
 
 /// Extensions installed in the **user** scope (`~/.local/share/...`). System

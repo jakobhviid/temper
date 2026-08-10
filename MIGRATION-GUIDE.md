@@ -135,13 +135,25 @@ hand-maintained ownership list rots: add a `setkey` and forget the `strip`, and
 the snapshot silently becomes a second owner of that key — your prefs-UI tweak
 gets captured and then fights the bundle on the next converge.
 
-**The one that will surprise you.** `enabled-extensions` and
-`disabled-extensions` stop being captured. Whether an extension is enabled is now
-a field on the extension declaration, and those keys are computed from it. This
-is deliberate: they were previously a *second, unlinked* fact about the same
-extension, so a uuid enabled in a snapshot but declared nowhere was switched on
-by `restore` and never installed by `install` — and GNOME fails soft, so the
-breakage was silent.
+**The one that will surprise you: extensions you keep installed but switched
+off.** Whether an extension is enabled is now part of its declaration, and a bare
+uuid means *enabled*. So an extension you deliberately disabled will report
+`gnome-extension-enable` until you say so:
+
+```toml
+# before — the uuid says "I want this", the machine says "switched off",
+#          and nothing related the two
+gnome_extensions = ["CoverflowAltTab@palatis.blogspot.com"]
+
+# after — the declaration carries the answer
+gnome_extensions = [{ uuid = "CoverflowAltTab@palatis.blogspot.com", enabled = false }]
+```
+
+Expect one finding per extension in that state; on the fleet this was developed
+against there were two, both previously invisible. temper only ever asserts its
+own declarations — it enables and disables by uuid and never rewrites
+`enabled-extensions`, so image-baked extensions it does not declare are left
+exactly alone.
 
 ### 4.0.2b Two gates that used to fail open
 

@@ -382,12 +382,14 @@ Three consequences follow, and they are the reason for the split:
   declared in a bundle carries its settings at fleet scope; one declared on a
   machine carries them per machine. No new scope rule — the existing one, applied
   to a smaller unit.
-- **`enabled-extensions` stops being captured.** Whether an extension is enabled
-  is a field on its declaration, and the dconf key is *computed* from it.
-  Previously "installed" and "enabled" were two unlinked facts about one object,
-  so a uuid enabled in a snapshot but declared nowhere got switched on by
-  `restore` and never installed by `install` — and GNOME fails soft, so nothing
-  said so.
+- **Enabled is a field on the declaration**, not a separate captured fact. A bare
+  uuid means installed *and* enabled; `{ uuid = "…", enabled = false }` means
+  installed and switched off. temper asserts its own declarations with
+  `gnome-extensions enable/disable` — a **union**, never a rewrite of
+  `enabled-extensions`, which would drop the image-baked extensions temper does
+  not declare. Previously these were two unlinked facts, so a uuid enabled in a
+  snapshot but declared nowhere got switched on by `restore` and never installed
+  by `install`; GNOME fails soft, so nothing said so.
 - **`strip` goes back to one job.** Its ownership half is **derived**: temper
   already knows every dconf key the machine's bundles declare via `setkey`, so it
   excludes them from capture and from both sides of the drift comparison, and
