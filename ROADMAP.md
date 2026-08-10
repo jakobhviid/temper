@@ -5,7 +5,9 @@ against the ReinstallScripts recipes temper generalizes, what's deliberately
 **not** temper's job, and the migration-verification gap. Each item has why it's
 parked, the current mitigation, and enough of a sketch to act on cold.
 
-This is planning — it is **not** embedded in `--llm`. *Current behavior*,
+This file **is** embedded in `--llm`, because what is *not* built is as
+load-bearing for an agent authoring a folder as what is: without it, a feature
+scoring ⚠ in the ARCHITECTURE matrix reads as one that works. *Current behavior*,
 including the limitations that are simply how temper works today
 (non-journaled `exec`/`setkey(defaults)`/`sysfile`, `profile` being a
 manual install, `run = "ensure"` on a checkless `exec` being skipped), is
@@ -53,16 +55,6 @@ a *verified* gap, not a suspicion.
 7. **No deployment ledger, so the file primitives score zero on residue.** Remove
    a `copy` step and its file stays on every machine forever, with no extras
    direction to report it. See "Retirement" in `ARCHITECTURE.md` for the shape.
-8. **`configure set|unset` writes `temper.toml` without firing the repo hook**, so
-   a git-backed folder is left silently dirty by it.
-9. **`prune` inherits brew's cleanup defaults.** temper passes no type flags, so
-    which categories get cleaned depends on the user's
-    `HOMEBREW_BUNDLE_CLEANUP_NO_*` environment. Previewed-then-silently-skipped is
-    a silent cap (Principle #6); pass the explicit flags for what is being pruned.
-10. **Missing structural tests**: nothing asserts that every plan field reaches
-    the `--json` document, the emptiness check and the selection check; and
-    nothing asserts that a folder-writing verb fires `after_repo_change`. Both
-    classes have shipped defects.
 
 **Sequencing note.** Build the settings-backend seam only after a *second real
 consumer* exists. Flatpak overrides (`~/.local/share/flatpak/overrides/<app>`) is
