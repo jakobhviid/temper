@@ -55,7 +55,8 @@ flatpak = []
 mas     = []
 vscode  = []
 tap     = []
-gext    = []                # user-installed GNOME extension UUIDs not to flag
+gnome_extensions = []       # user-installed GNOME extension UUIDs not to flag
+                            #   (old name `gext` still parses)
 
 [ui]                        # optional; how temper draws its status markers
 icons = "unicode"           # "unicode" (default) | "nerd"
@@ -104,7 +105,9 @@ name     = "chronos"        # required; resolved against `hostname -s`
 os       = "mac"            # required; "mac" | "linux"
 role     = "desktop"        # optional; "desktop" | "server"
 apps     = ["shell", "ssh"] # bundle names in apps/
-packages = ["cask \"raycast\""]  # optional loose Brewfile-grammar tokens
+packages = ["cask \"raycast\""]  # optional loose Brewfile-grammar tokens. Machine
+                            #   scope, so `reconcile` both absorbs into and drops
+                            #   from this list.
 gnome_extensions = ["tilingshell@ferrarodomenico.com"]  # optional; for THIS
                             #   machine, unioned with the composed bundles' lists. The
                             #   machine-scoped counterpart of a bundle's `extensions` —
