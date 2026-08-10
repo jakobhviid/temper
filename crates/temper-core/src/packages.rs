@@ -185,11 +185,29 @@ pub fn effective_set(home: &Path, machine: &Machine) -> Result<Vec<Pkg>> {
 #[derive(Debug, Default)]
 pub struct Installed {
     pub by_manager: HashMap<Manager, HashSet<String>>,
+    /// Managers whose tool was present and **failed**. Distinct from absent
+    /// (never asked) and from present-and-empty (asked, answered none): only
+    /// this one means the machine's state is unknown, and a drop computed from
+    /// an unknown is a spec deletion.
+    pub unavailable: std::collections::BTreeSet<Manager>,
 }
 
 impl Installed {
     pub fn set(&mut self, m: Manager, names: impl IntoIterator<Item = String>) {
         self.by_manager.insert(m, names.into_iter().collect());
+    }
+
+    /// Record that this manager could not be read. Deliberately does **not**
+    /// insert into `by_manager`, so `probed()` stays false and every
+    /// missing/extras/drop computation treats it as no evidence at all.
+    pub fn unavailable(&mut self, m: Manager) {
+        self.unavailable.insert(m);
+    }
+
+    /// Managers that were asked and could not answer — what `drift` reports as
+    /// `unavailable` rather than passing over in silence (Principle #6).
+    pub fn unavailable_managers(&self) -> impl Iterator<Item = Manager> + '_ {
+        self.unavailable.iter().copied()
     }
 
     fn has(&self, m: Manager, name: &str) -> bool {

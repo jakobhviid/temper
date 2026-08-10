@@ -787,6 +787,16 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         converge: &[Answer::NA("there is nothing captured to push back out")],
         absorb: &[Answer::Verb("temper snapshot-dconf")],
     },
+    KindSpec {
+        name: "package-unavailable",
+        detects: Detects::Differs,
+        converge: &[Answer::NA(
+            "the package manager could not be read here, so nothing may act on it",
+        )],
+        absorb: &[Answer::NA(
+            "a drop computed from a manager that could not answer is a spec deletion",
+        )],
+    },
     // ---- Assertions are drift-only: they report a condition. --------------
     // `install` structurally cannot satisfy one, so the converge cell is NA and
     // the spec cell is the honest answer: change what you asserted.
@@ -1120,6 +1130,24 @@ pub fn run_drift(
     let effective = packages::effective_set(home, machine)?;
     if !effective.is_empty() {
         let installed = providers::probe(&effective)?;
+        // A manager that was asked and could not answer is reported, never
+        // passed over: its packages are silently absent from both directions
+        // below, and an unexplained silence there reads as "in sync".
+        for m in installed.unavailable_managers() {
+            findings.push(Finding {
+                app: "packages".into(),
+                kind: "package-unavailable",
+                target: m.as_str().to_string(),
+                // Status-only — degraded, not drift.
+                ok: true,
+                status: "unavailable".into(),
+                detail: Some(format!(
+                    "`{}` is installed but failed to list what it has — \
+                     drift and prune skip it rather than read the silence as empty",
+                    m.as_str()
+                )),
+            });
+        }
         for p in packages::missing(&effective, &installed) {
             findings.push(Finding {
                 app: "packages".into(),

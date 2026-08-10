@@ -248,6 +248,14 @@ it as `[brew].trust` (see `[brew].trust` above).
 > `[ignore].<manager>` as the escape hatch. (brew-family is the exception: any
 > declaration at all enables the dependency-aware brew extras computation.)
 >
+> **A manager that is present and *fails* reports `package-unavailable`**, and
+> both directions are skipped for it. A non-zero `brew list`, a `mas list` on a
+> Mac not signed into the App Store, a `code` that cannot start — each exits with
+> empty output, which is not the same fact as an empty machine. Neither `drift`
+> nor `prune` nor `reconcile` may act on it, because "declared but not
+> installed" and "I could not look" are the same shape and only one of them is
+> grounds for deleting a declaration.
+>
 > **`gnome_extensions` follows the same rule**, and reports both directions once
 > opted in. Only **user-scope** extensions count as extras: system ones ship with
 > the image, and drift reports image-baked items status-only, so a Bazzite box

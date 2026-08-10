@@ -27,21 +27,36 @@ fn have(cmd: &str) -> bool {
     which(cmd).is_some()
 }
 
-/// Run a command and return its non-empty output lines (trimmed). A non-zero
-/// exit yields an empty list rather than an error — probing is best-effort.
-fn run_lines(cmd: &str, args: &[&str]) -> Result<Vec<String>> {
+/// A command's non-empty output lines (trimmed), or `None` when it **failed**.
+///
+/// The distinction is the whole of Principle #12: "the tool answered and the
+/// answer is none" and "I could not ask" are different facts, and every write
+/// path reads the second as the first if you let it. A tap that will not tap, a
+/// Mac not signed into the App Store, `code` over ssh — each exits non-zero with
+/// an empty stdout, which as a bare `Vec` is indistinguishable from a machine
+/// with nothing installed.
+fn run_lines_opt(cmd: &str, args: &[&str]) -> Result<Option<Vec<String>>> {
     let out = Command::new(cmd)
         .args(args)
         .output()
         .with_context(|| format!("running {cmd} {args:?}"))?;
     if !out.status.success() {
-        return Ok(Vec::new());
+        return Ok(None);
     }
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect())
+    Ok(Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+    ))
+}
+
+/// `run_lines_opt` for the callers where a failure genuinely is "nothing to
+/// report": display names, and the version lists used to *measure* an upgrade.
+/// Never use this to decide what is installed.
+fn run_lines(cmd: &str, args: &[&str]) -> Result<Vec<String>> {
+    Ok(run_lines_opt(cmd, args)?.unwrap_or_default())
 }
 
 /// Run **one** command for a whole set of one type, falling back to per-item
@@ -97,42 +112,64 @@ where
 /// Snapshot what's installed, but only for managers that (a) appear in the
 /// effective set and (b) have their CLI present. Absent managers stay unprobed
 /// (so nothing is reported as missing/extra for them).
+/// Put a manager's raw listing into the shape `Pkg::match_name` produces, so a
+/// declared token and an installed one are comparable.
+fn normalize(m: Manager, lines: Vec<String>) -> Vec<String> {
+    match m {
+        // `mas list` rows look like: "497799835  Xcode (14.0)" → first token.
+        Manager::Mas => lines
+            .into_iter()
+            .filter_map(|l| l.split_whitespace().next().map(String::from))
+            .collect(),
+        Manager::Vscode => lines.into_iter().map(|s| s.to_lowercase()).collect(),
+        _ => lines,
+    }
+}
+
 pub fn probe(effective: &[Pkg]) -> Result<Installed> {
     let managers: HashSet<Manager> = effective.iter().map(|p| p.manager).collect();
     let mut inst = Installed::default();
 
+    // `have()` answers "is the tool here", never "did it work". A tool that is
+    // present and fails is the dangerous case: its empty stdout used to land as
+    // an empty installed-set, which `probed()` reports as a real answer, and
+    // every drop path then reads as "the machine has none of these, delete them
+    // from the spec".
+    let ask = |m: Manager, inst: &mut Installed, cmd: &str, args: &[&str]| -> Result<()> {
+        match run_lines_opt(cmd, args)? {
+            Some(lines) => inst.set(m, normalize(m, lines)),
+            None => inst.unavailable(m),
+        }
+        Ok(())
+    };
+
     if have("brew") {
         if managers.contains(&Manager::Brew) {
-            inst.set(Manager::Brew, run_lines("brew", &["list", "--formula"])?);
+            ask(Manager::Brew, &mut inst, "brew", &["list", "--formula"])?;
         }
         if managers.contains(&Manager::Cask) {
-            inst.set(Manager::Cask, run_lines("brew", &["list", "--cask"])?);
+            ask(Manager::Cask, &mut inst, "brew", &["list", "--cask"])?;
         }
         if managers.contains(&Manager::Tap) {
-            inst.set(Manager::Tap, run_lines("brew", &["tap"])?);
+            ask(Manager::Tap, &mut inst, "brew", &["tap"])?;
         }
     }
     if managers.contains(&Manager::Flatpak) && have("flatpak") {
         // BOTH scopes count as installed, so a declared app installed
         // system-wide is not reported missing. Which scope it is in only
         // matters for *removal* — see `flatpak_user_apps`.
-        inst.set(
+        ask(
             Manager::Flatpak,
-            run_lines("flatpak", &["list", "--app", "--columns=application"])?,
-        );
+            &mut inst,
+            "flatpak",
+            &["list", "--app", "--columns=application"],
+        )?;
     }
     if managers.contains(&Manager::Mas) && have("mas") {
-        // `mas list` rows look like: "497799835  Xcode (14.0)" → first token.
-        let ids = run_lines("mas", &["list"])?
-            .into_iter()
-            .filter_map(|l| l.split_whitespace().next().map(String::from));
-        inst.set(Manager::Mas, ids.collect::<Vec<_>>());
+        ask(Manager::Mas, &mut inst, "mas", &["list"])?;
     }
     if managers.contains(&Manager::Vscode) && have("code") {
-        let exts = run_lines("code", &["--list-extensions"])?
-            .into_iter()
-            .map(|s| s.to_lowercase());
-        inst.set(Manager::Vscode, exts.collect::<Vec<_>>());
+        ask(Manager::Vscode, &mut inst, "code", &["--list-extensions"])?;
     }
     Ok(inst)
 }
