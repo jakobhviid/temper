@@ -1827,6 +1827,69 @@ impl PrunePlan {
     pub fn len(&self) -> usize {
         self.items().len()
     }
+
+    /// The lists `items()` labels, in preview order. `residue_edited` is not one
+    /// of them: it is reported, never removed.
+    pub const LISTS: &'static [&'static str] = &[
+        "packages",
+        "untrust",
+        "extensions",
+        "rpm_ostree",
+        "flatpak_remotes",
+        "residue",
+        "retired",
+    ];
+
+    /// How one item reads in the preview. The catch-all arm is the point: a list
+    /// added to `items()` and forgotten here still prints itself, rather than
+    /// being counted, confirmed and deleted without ever being shown.
+    pub fn describe(list: &str, item: &str) -> String {
+        match list {
+            "packages" => item.to_string(),
+            "untrust" => format!("untrust {item}"),
+            "extensions" => format!("uninstall extension {item}"),
+            "rpm_ostree" => format!("un-layer rpm {item}"),
+            "flatpak_remotes" => format!("remove flatpak remote {item}"),
+            "residue" => format!("remove {item} (deployed by a step the spec dropped)"),
+            "retired" => format!("remove {item} (the spec retires this path)"),
+            other => format!("{other} {item}"),
+        }
+    }
+
+    /// The `--json` document. Derived one key per list for the same reason the
+    /// count is: hand-writing the object omitted `flatpak_remotes` and `retired`
+    /// while `commit_prune` removed both.
+    ///
+    /// `extras` keeps its name and its `{manager, name}` shape — it is the
+    /// published contract, and tidiness is not a reason to break a consumer.
+    pub fn to_json(&self, machine: &str, removed: bool) -> serde_json::Value {
+        let extras: Vec<_> = self
+            .packages
+            .iter()
+            .map(|(mgr, name)| serde_json::json!({ "manager": mgr.as_str(), "name": name }))
+            .collect();
+        let mut doc = serde_json::Map::new();
+        doc.insert("machine".into(), serde_json::json!(machine));
+        doc.insert("extras".into(), serde_json::json!(extras));
+        for list in Self::LISTS {
+            if *list == "packages" {
+                continue; // published as `extras`, above
+            }
+            let of: Vec<String> = self
+                .items()
+                .into_iter()
+                .filter(|(l, _)| l == list)
+                .map(|(_, i)| i)
+                .collect();
+            doc.insert((*list).into(), serde_json::json!(of));
+        }
+        doc.insert(
+            "residue_edited".into(),
+            serde_json::json!(self.residue_edited),
+        );
+        doc.insert("removed".into(), serde_json::json!(removed));
+        serde_json::Value::Object(doc)
+    }
 }
 
 /// Installed-but-undeclared packages, computed **once** for every verb that

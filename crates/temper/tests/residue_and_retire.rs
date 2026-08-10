@@ -216,3 +216,67 @@ fn the_retired_verb_reports_what_is_still_present() {
         "one still doing work, one already done"
     );
 }
+
+/// Everything `prune` counts, it also shows — and publishes.
+///
+/// The confirm reads "remove N item(s) **listed above**", so a list that is
+/// counted but not printed makes the prompt a lie about the most destructive
+/// thing in the tool. `retired` was exactly that: `items()` counted it, the
+/// preview never printed it, `--json` never carried it, and `commit_prune`
+/// deleted the file.
+#[test]
+fn prune_previews_every_item_it_counts() {
+    let e = Env::new();
+    let stray = e.target("stray.conf");
+    fs::write(&stray, "left over\n").unwrap();
+    fs::create_dir_all(e.h().join("assets")).unwrap();
+    fs::write(e.h().join("assets/x.conf"), "deployed by temper\n").unwrap();
+
+    // One retired path plus one piece of real residue, so the check is about the
+    // preview covering the plan rather than about a single list.
+    let spec = |retire: &str, steps: &str| {
+        fs::write(
+            e.h().join("temper.toml"),
+            format!(
+                "[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"a\"]\n{retire}",
+                os()
+            ),
+        )
+        .unwrap();
+        fs::create_dir_all(e.h().join("apps")).unwrap();
+        fs::write(e.h().join("apps/a.toml"), steps).unwrap();
+    };
+    spec("", "[[step]]\ncopy = \"assets/x.conf\"\nto = \"~/x.conf\"\n");
+    e.temper().arg("install").assert().success();
+    spec("retire = [\"~/stray.conf\"]\n", "");
+
+    let out = e.temper().args(["prune", "--json"]).output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let retired: Vec<&str> = v["retired"]
+        .as_array()
+        .expect("--json must carry `retired`")
+        .iter()
+        .map(|x| x.as_str().unwrap())
+        .collect();
+    assert_eq!(retired.len(), 1, "got {v}");
+    assert!(
+        v["flatpak_remotes"].is_array(),
+        "--json must carry every list prune acts on, got {v}"
+    );
+
+    // The human preview must print one line per counted item, and the count in
+    // the dry-run summary must match what was printed.
+    let out = e.temper().args(["prune", "--dry-run"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let listed = text.lines().filter(|l| l.trim_start().starts_with("- ")).count();
+    let counted: usize = text
+        .split_once(": ")
+        .and_then(|(_, t)| t.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no count in: {text}"));
+    assert_eq!(
+        listed, counted,
+        "prune counted {counted} item(s) and listed {listed}:\n{text}"
+    );
+    assert!(text.contains("stray.conf"), "the retired path was never shown:\n{text}");
+}

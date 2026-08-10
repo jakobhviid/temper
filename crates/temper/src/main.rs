@@ -1464,22 +1464,7 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
             if removed {
                 let _reboot = plan::commit_prune(&home, &m, &prune_plan)?;
             }
-            let arr: Vec<_> = prune_plan
-                .packages
-                .iter()
-                .map(|(mgr, name)| serde_json::json!({ "manager": mgr.as_str(), "name": name }))
-                .collect();
-            println!(
-                "{}",
-                serde_json::json!({
-                    "machine": m.name, "extras": arr, "untrust": prune_plan.untrust,
-                    "extensions": prune_plan.extensions,
-                    "rpm_ostree": prune_plan.rpm_ostree,
-                    "residue": prune_plan.residue,
-                    "residue_edited": prune_plan.residue_edited,
-                    "removed": removed
-                })
-            );
+            println!("{}", prune_plan.to_json(&m.name, removed));
             return Ok(());
         }
 
@@ -1503,17 +1488,16 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
                 _ => println!("  - {} {}", mgr.as_str(), name),
             }
         }
-        for tap in &prune_plan.untrust {
-            println!("  - untrust {tap}");
-        }
-        for uuid in &prune_plan.extensions {
-            println!("  - uninstall extension {uuid}");
-        }
-        for pkg in &prune_plan.rpm_ostree {
-            println!("  - un-layer rpm {pkg}");
-        }
-        for path in &prune_plan.residue {
-            println!("  - remove {path} (deployed by a step the spec dropped)");
+        // Everything that is not a package renders from `items()` — the same list
+        // the count and the confirm are derived from, so "remove N item(s) listed
+        // above" cannot list fewer than N again. (Packages keep their own loop
+        // above: only there does the preview need the `Manager` to turn a mas id
+        // into an app name.)
+        for (list, item) in prune_plan.items() {
+            if list == "packages" {
+                continue;
+            }
+            println!("  - {}", plan::PrunePlan::describe(list, &item));
         }
         if !prune_plan.residue_edited.is_empty() && !json {
             println!(
@@ -1542,7 +1526,8 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
         if !yes
             && !prompt_no(&format!(
                 "remove {} item(s) listed above? this uninstalls packages, GNOME extensions \
-                 and flatpaks, untrusts taps, and un-layers rpms (a reboot applies that last one)",
+                 and flatpaks, untrusts taps, removes flatpak remotes, DELETES the files \
+                 listed above, and un-layers rpms (a reboot applies that last one)",
                 prune_plan.len()
             ))
         {
