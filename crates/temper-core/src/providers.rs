@@ -44,6 +44,56 @@ fn run_lines(cmd: &str, args: &[&str]) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Run **one** command for a whole set of one type, falling back to per-item
+/// only if that fails.
+///
+/// Batching is the fast path: one process instead of N, and — for anything
+/// needing root — one password prompt instead of one per item, which is the
+/// difference between a converge you can walk away from and one you have to
+/// babysit. Every provider's CLI takes a list (`gext install UUID [UUID…]`,
+/// `mas install <id>…`, `rpm-ostree install <pkg>…`), so the loops were costing
+/// that for nothing.
+///
+/// What the loops *were* buying is the reason for the fallback: a batch that
+/// fails tells you nothing about which item failed, and one bad entry must not
+/// strand the rest (Principle #6 — a forgiving provider reports loudly and
+/// continues). So on failure each item is retried alone, which both isolates the
+/// damage and names it.
+///
+/// Returns the items that actually landed — which is what gets journaled, so a
+/// failed install never leaves an undo entry for something that was never there.
+fn batch_then_isolate<F>(items: &[String], label: &str, build: F) -> Vec<String>
+where
+    F: Fn(&[String]) -> Command,
+{
+    if items.is_empty() {
+        return Vec::new();
+    }
+    let ok = |mut c: Command| {
+        c.stdin(Stdio::null())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    };
+    if ok(build(items)) {
+        return items.to_vec();
+    }
+    // The batch failed: find out which ones, rather than reporting the whole set
+    // as lost or the whole set as fine.
+    let mut landed = Vec::new();
+    for item in items {
+        if ok(build(std::slice::from_ref(item))) {
+            landed.push(item.clone());
+        } else {
+            eprintln!(
+                "{} {label} failed for {item} — skipped",
+                crate::ui::yellow(crate::ui::g_warn())
+            );
+        }
+    }
+    landed
+}
+
 /// Snapshot what's installed, but only for managers that (a) appear in the
 /// effective set and (b) have their CLI present. Absent managers stay unprobed
 /// (so nothing is reported as missing/extra for them).
@@ -503,48 +553,34 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize
                 todo.len()
             );
         }
-        // One spinner for the whole App Store phase: these are installed strictly
-        // one at a time (mas has no batch mode), each is a full download, and a
-        // big one otherwise looks like a hang. The counter says how far in we are.
+        // One spinner for the whole App Store phase. These are full downloads, so
+        // a big one otherwise looks like a hang.
         let pb = (!verbose && !todo.is_empty())
-            .then(|| crate::ui::spinner_counted(todo.len() as u64, "App Store"));
-        for p in &todo {
-            let id = p.id.as_deref().unwrap_or(&p.name);
-            if let Some(pb) = &pb {
-                pb.set_message(format!("Installing {}", p.name));
-            }
+            .then(|| crate::ui::spinner_counted(1, "App Store"));
+        if let Some(pb) = &pb {
+            pb.set_message(format!("Installing {} app(s)", todo.len()));
+        }
+        // ONE `mas install` for the whole set. `mas install <id>…` is plural, and
+        // batching is what turns N password prompts into one — the difference
+        // between a converge you can walk away from and one you must babysit.
+        // (The previous loop was justified as "mas has no batch mode". It does.)
+        let ids: Vec<String> = todo
+            .iter()
+            .map(|p| p.id.clone().unwrap_or_else(|| p.name.clone()))
+            .collect();
+        batch_then_isolate(&ids, "mas install", |batch| {
             let mut cmd = Command::new("mas");
             // Quiet by default: mute mas's post-install "not indexed in Spotlight"
             // warnings. `--verbose` lets them through.
             if !verbose {
                 cmd.env("MAS_NO_AUTO_INDEX", "1");
             }
-            cmd.args(["install", id]);
-            // Captured on the quiet path so mas's own progress doesn't fight the
-            // spinner for the cursor; streamed under `--verbose`, as before.
-            let ok = if verbose {
-                cmd.status().map(|s| s.success()).unwrap_or(false)
-            } else {
-                cmd.output().map(|o| o.status.success()).unwrap_or(false)
-            };
-            if let Some(pb) = &pb {
-                pb.inc(1);
+            cmd.arg("install");
+            for id in batch {
+                cmd.arg(id);
             }
-            if !ok {
-                let warn = || {
-                    eprintln!(
-                        "! mas install {} (id {id}) failed — skipped (App Store sign-in, or an \
-                         Apple/iWork app mas can't install — get it from the App Store directly).",
-                        p.name
-                    )
-                };
-                // Inside `suspend`, so the warning doesn't land on the spinner's line.
-                match &pb {
-                    Some(pb) => pb.suspend(warn),
-                    None => warn(),
-                }
-            }
-        }
+            cmd
+        });
         if let Some(pb) = pb {
             pb.finish_and_clear();
         }
@@ -1021,19 +1057,24 @@ pub fn gext_uninstall(uuids: &[String]) -> Result<()> {
     if !gext_caps().converge {
         bail!("gext not found — cannot uninstall GNOME extensions on this host");
     }
-    let mut failed = Vec::new();
-    for uuid in uuids {
-        let ok = Command::new("gext")
-            .args(["uninstall", uuid])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !ok {
-            failed.push(uuid.clone());
+    let landed = batch_then_isolate(uuids, "gext uninstall", |batch| {
+        let mut c = Command::new("gext");
+        c.arg("uninstall");
+        for u in batch {
+            c.arg(u);
         }
-    }
-    if !failed.is_empty() {
-        bail!("could not uninstall: {}", failed.join(", "));
+        c
+    });
+    if landed.len() != uuids.len() {
+        let failed: Vec<&String> = uuids.iter().filter(|u| !landed.contains(u)).collect();
+        bail!(
+            "could not uninstall: {}",
+            failed
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
     Ok(())
 }
@@ -1063,38 +1104,19 @@ pub fn gext_converge(effective: &[String], dry_run: bool, verbose: bool) -> Resu
         }
         return Ok(Vec::new());
     }
-    let pb = (!verbose && !missing.is_empty())
-        .then(|| crate::ui::spinner_counted(missing.len() as u64, "GNOME extensions"));
-    // Only what actually landed is journaled: a failed install must not leave an
-    // undo entry that then tries to remove something that was never there.
-    let mut installed: Vec<String> = Vec::new();
-    for uuid in &missing {
-        if let Some(pb) = &pb {
-            pb.set_message(format!("Installing {uuid}"));
-        }
-        let mut cmd = Command::new("gext");
-        cmd.args(["install", uuid]);
-        let ok = if verbose {
-            cmd.status().map(|s| s.success()).unwrap_or(false)
-        } else {
-            cmd.stdin(Stdio::null())
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        };
-        if let Some(pb) = &pb {
-            pb.inc(1);
-        }
-        if ok {
-            installed.push(uuid.clone());
-        } else {
-            let warn = || eprintln!("{} gext install {uuid} failed — skipped", crate::ui::yellow(crate::ui::g_warn()));
-            match &pb {
-                Some(pb) => pb.suspend(warn),
-                None => warn(),
-            }
-        }
+    let pb = (!verbose)
+        .then(|| crate::ui::spinner_counted(1, "GNOME extensions"));
+    if let Some(pb) = &pb {
+        pb.set_message(format!("Installing {} extension(s)", missing.len()));
     }
+    let installed = batch_then_isolate(&missing, "gext install", |batch| {
+        let mut c = Command::new("gext");
+        c.arg("install");
+        for u in batch {
+            c.arg(u);
+        }
+        c
+    });
     if let Some(pb) = pb {
         pb.finish_and_clear();
     }
@@ -1337,6 +1359,41 @@ mod progress_tests {
     /// only — system extensions ship with the image, and drift reports
     /// image-baked items status-only rather than as something you failed to
     /// declare (this is what keeps a Bazzite box from listing seventeen).
+    /// A batch that works runs exactly once; a batch that fails isolates.
+    ///
+    /// Both halves matter. Batching is why a converge asks for one password
+    /// instead of one per app. Isolation is why a single bad entry does not
+    /// strand the rest, and why the run can name which entry it was — a batch
+    /// failure alone says nothing about that (Principle #6).
+    #[test]
+    fn a_batch_runs_once_and_isolates_only_on_failure() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let items: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+
+        // Happy path: one invocation, everything lands.
+        let calls = AtomicUsize::new(0);
+        let landed = batch_then_isolate(&items, "t", |batch| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(batch.len(), 3, "the happy path must not split the batch");
+            let mut c = Command::new("true");
+            c.arg(batch.len().to_string());
+            c
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(landed, items);
+
+        // Failure path: the batch is retried per item, and only the ones that
+        // succeed are returned — so a failed install never gets journaled.
+        let landed = batch_then_isolate(&items, "t", |batch| {
+            // Fails for the whole batch and for "b" alone; succeeds otherwise.
+            let fail = batch.len() > 1 || batch[0] == "b";
+            Command::new(if fail { "false" } else { "true" })
+        });
+        assert_eq!(landed, vec!["a".to_string(), "c".to_string()]);
+
+        assert!(batch_then_isolate(&[], "t", |_| Command::new("true")).is_empty());
+    }
+
     #[test]
     fn declared_minus_installed_is_sorted_and_deduped() {
         let installed = vec!["here@x".to_string()];

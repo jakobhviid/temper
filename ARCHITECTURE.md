@@ -246,6 +246,20 @@ above.
 | `copy` / `block` / `sysfile` | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ⚠ | ✅ | ❌ |
 | `profile` | ✅ | ❌ | ✅ | ⚠ | ❌ | ❌ | ❌ | ❌ | ⚠ | ❌ | ❌ |
 
+**One command per type, not one per item.** Every provider's CLI takes a list —
+`gext install UUID [UUID…]`, `mas install <id>…`, `rpm-ostree install <pkg>…`,
+`brew bundle`, `flatpak install` — so a converge issues one invocation per
+provider. That is not only faster than N process spawns: for anything needing
+root it is the difference between one password prompt and one per item, which is
+what decides whether a converge can be walked away from.
+
+The per-item loops that batching replaced were buying something real, though, and
+it is kept: a batch that fails says nothing about *which* item failed, and one
+bad entry must not strand the rest. So a failed batch is retried per item, which
+isolates the damage and names it (Principle #6). Only what actually lands is
+journaled, so a failed install never leaves an undo entry for something that was
+never there.
+
 **Install and uninstall are a pair, in every provider.** `brew install`/
 `uninstall`, `flatpak install`/`uninstall`, `gext install`/`uninstall`,
 `rpm-ostree install`/`uninstall` — column 5 is just column 4 backwards, and a
