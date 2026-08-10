@@ -1097,6 +1097,7 @@ fn cmd_install(
                 "machine": m.name, "packages": r.packages,
                 "changed": r.steps_changed, "total": r.steps_total,
                 "reboot": r.reboot, "dry_run": dry_run, "packages_only": packages_only,
+                "unrevertible": r.unrevertible,
                 "skipped": r.skipped
             })
         );
@@ -1110,6 +1111,16 @@ fn cmd_install(
             "install-missing {}: {verb} {} declared package(s), config skipped",
             m.name, r.packages
         );
+        if !r.unrevertible.is_empty() {
+            println!(
+                "  {} {} change(s) `temper undo` cannot revert:",
+                ui::yellow(ui::g_warn()),
+                r.unrevertible.len()
+            );
+            for u in &r.unrevertible {
+                println!("      {u}");
+            }
+        }
         if r.reboot {
             println!("  ! reboot required (rpm-ostree layered a package)");
         }
@@ -1139,6 +1150,16 @@ fn cmd_install(
             )
         };
         println!("install {}: {} package(s), {steps}", m.name, r.packages);
+        if !r.unrevertible.is_empty() {
+            println!(
+                "  {} {} change(s) `temper undo` cannot revert:",
+                ui::yellow(ui::g_warn()),
+                r.unrevertible.len()
+            );
+            for u in &r.unrevertible {
+                println!("      {u}");
+            }
+        }
         if r.reboot {
             println!("  ! reboot required (rpm-ostree layered a package)");
         }

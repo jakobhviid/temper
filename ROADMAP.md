@@ -24,21 +24,15 @@ The feature matrix in `ARCHITECTURE.md` shows where each feature stands against
 the eleven-column interface. These are the open cells, worst first. Every one is
 a *verified* gap, not a suspicion.
 
-1. **Non-revertibility is not shown before you confirm.** Installs are journaled
-   for every package provider, so `undo` removes what a converge added.
-   Every package provider journals now. What is still invisible is the *limit*:
-   `update`'s brew/flatpak upgrade phase cannot be reverted, and
-   `setkey(defaults)`/`sysfile`/`exec` are deliberately unjournaled. AGENTS.md question 7 asks that
-   the plan preview say so before the user commits; no code answers it.
-2. **`flatpak` remotes are unmanaged.** There is no `flatpak remote-add` and no
+1. **`flatpak` remotes are unmanaged.** There is no `flatpak remote-add` and no
    remote enumeration, so a declared app from a vendor remote or `flathub-beta`
    cannot be installed and the converge degrades to a warning. Remotes are the
    flatpak analogue of `[brew].trust` — the same fleet-vs-machine scope question
    that earned trust a machine-scope list.
-3. **`[ignore]` is writable for two of its seven lists.** drift honours all seven;
+2. **`[ignore]` is writable for two of its seven lists.** drift honours all seven;
    only `flatpak` and `tap` can be written by a verb, while the drift status for a
    GNOME extension extra tells the user to use `[ignore].gext`.
-4. **No deployment ledger, so the file primitives score zero on residue.** Remove
+3. **No deployment ledger, so the file primitives score zero on residue.** Remove
    a `copy` step and its file stays on every machine forever, with no extras
    direction to report it. See "Retirement" in `ARCHITECTURE.md` for the shape.
 

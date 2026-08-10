@@ -57,6 +57,19 @@ list only stops installed-but-undeclared packages (the OS-preinstalled flatpak
 baseline) from being flagged as extras by `drift`/`prune`, which is how the
 "everything is traceable" rule survives contact with a real OS baseline.
 
+**Converge in one call per manager, not one per item.** Every provider's CLI
+takes a list — `gext install UUID [UUID…]`, `mas install <id>…`,
+`rpm-ostree install <pkg>…` — so a per-item loop pays N process spawns for
+nothing, and for anything needing root it pays **N password prompts**, which is
+what decides whether a converge can be walked away from. "This tool has no batch
+mode" is a claim to check, not to assume; it was written in a comment about `mas`,
+which has taken a list all along.
+
+The forgiveness a loop buys is kept by *falling back* to one, not by starting
+there: a failed batch says nothing about which item failed, so it is retried per
+item, which contains the damage and names it (#6). The happy path costs one
+invocation; the unhappy path costs one extra attempt and buys precise reporting.
+
 That union — a machine's bundles plus its own list — is the scope model (#11) in
 its earliest, package-shaped form. What is *not* redundant with #11 is the
 dependency-closure half: `brew bundle cleanup` keeps a formula that is some other

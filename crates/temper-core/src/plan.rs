@@ -381,6 +381,31 @@ fn apply_one(
 /// probes nothing, so naming a step costs nothing before we know whether it will
 /// change anything. Kinds match `Finding::kind`, so the step phase and `drift`
 /// speak of the same step by the same name.
+/// Why a step's effect cannot be reverted, if it cannot.
+///
+/// `undo` covers file and key writes, and (since installs are journaled) package
+/// converges. What it does not cover is small and specific, and each case has a
+/// real reason rather than an inherited one. The point of naming them is
+/// AGENTS.md question 7: a run whose only changes were unrevertible currently
+/// reverts nothing while reporting success, and the user finds out afterwards.
+fn unrevertible_reason(step: &Step) -> Option<&'static str> {
+    if step.exec.is_some() {
+        return Some("an `exec` runs arbitrary code; temper cannot know what to undo");
+    }
+    if step.sysfile.is_some() {
+        return Some("`sysfile` writes root-owned state outside the journal");
+    }
+    if let Some(sk) = &step.setkey {
+        if sk.backend == "defaults" {
+            return Some("`defaults read` loses the value's type, so an undo could not rewrite it faithfully");
+        }
+    }
+    if step.profile.is_some() {
+        return Some("a profile is approved in System Settings; temper cannot remove it");
+    }
+    None
+}
+
 fn step_parts(step: &Step) -> (&'static str, String) {
     if let (Some(_), Some(to)) = (&step.copy, &step.to) {
         return ("copy", to.clone());
@@ -1284,6 +1309,10 @@ pub struct InstallReport {
     pub steps_total: usize,
     /// A layered rpm was added and the machine needs a reboot.
     pub reboot: bool,
+    /// Changes this run made that `undo` cannot revert, as `label — why`.
+    /// Empty is the normal case, and the point is that it is *said* either way
+    /// rather than discovered when the revert turns out to be a no-op.
+    pub unrevertible: Vec<String>,
     /// Steps skipped because their `when` probe failed (app not present) —
     /// announced loudly (Principle #6). Each entry is a probe description.
     pub skipped: Vec<String>,
@@ -1398,12 +1427,16 @@ pub fn run_install(
             steps_total: 0,
             reboot,
             skipped: Vec::new(),
+            // The package phase is journaled in full, so an install-missing has
+            // nothing it cannot take back.
+            unrevertible: Vec::new(),
         });
     }
 
     // Phase 2 — config steps (`resolved` was needed above, for the root ask).
     let (mut changed, mut total, mut ran) = (0usize, 0usize, 0usize);
     let mut skipped = Vec::new();
+    let mut unrevertible: Vec<String> = Vec::new();
     // Candidates are known before any of them runs, so the phase has an honest
     // denominator. A dry-run reports rather than applies — no live region for it.
     let planned: Vec<(String, &'static str)> = resolved
@@ -1457,6 +1490,11 @@ pub fn run_install(
                 verbose,
                 &cl,
             )?;
+            if matches!(did, Applied::Changed | Applied::Ran) {
+                if let Some(why) = unrevertible_reason(step) {
+                    unrevertible.push(format!("{} — {why}", label.trim()));
+                }
+            }
             match did {
                 Applied::Changed => {
                     changed += 1;
@@ -1487,6 +1525,7 @@ pub fn run_install(
         steps_total: total,
         reboot,
         skipped,
+        unrevertible,
     })
 }
 
@@ -1556,6 +1595,55 @@ fn package_extras(
             .collect();
     out.extend(providers::brew_extras(&effective, ignore)?);
     Ok(out)
+}
+
+#[cfg(test)]
+mod revertibility_tests {
+    use super::*;
+
+    fn step(src: &str) -> Step {
+        toml::from_str(src).unwrap()
+    }
+
+    /// What `undo` cannot take back is named, and everything else is silent.
+    ///
+    /// AGENTS.md question 7: a run whose only changes were unrevertible reverts
+    /// nothing while reporting success, and the user finds out when the revert
+    /// turns out to be a no-op. Each case here has a real reason, which matters
+    /// because the *blanket* version of this claim ("packages can't be
+    /// journaled") turned out to be false and kept six providers unwired.
+    #[test]
+    fn only_the_genuinely_unrevertible_is_named() {
+        for src in [
+            r#"exec = "setup.sh""#,
+            r#"sysfile = "assets/x.conf"
+to = "/etc/x.conf""#,
+            r#"setkey = { backend = "defaults", key = "com.apple.dock.tilesize", value = 48 }"#,
+            r#"profile = "assets/x.mobileconfig""#,
+        ] {
+            assert!(
+                unrevertible_reason(&step(src)).is_some(),
+                "expected an unrevertible reason for: {src}"
+            );
+        }
+
+        // Journaled, so `undo` covers them — and saying otherwise would be the
+        // same over-claim in the other direction.
+        for src in [
+            r#"copy = "assets/x"
+to = "~/.config/x""#,
+            r#"block = "assets/b"
+in = "~/.zshrc"
+marker = "temper""#,
+            r#"setkey = { backend = "dconf", key = "/org/gnome/x", value = true }"#,
+            r#"setkey = { backend = "json", file = "~/x.json", key = "a.b", value = 1 }"#,
+        ] {
+            assert!(
+                unrevertible_reason(&step(src)).is_none(),
+                "this IS revertible and must not be reported: {src}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1752,6 +1840,7 @@ pub fn run_update(
     let mut journal = Journal::begin();
     let (mut changed, mut total, mut ran) = (0usize, 0usize, 0usize);
     let mut skipped = Vec::new();
+    let mut unrevertible: Vec<String> = Vec::new();
     // `always` + `ensure` are what an update re-applies; `ensure` is filtered
     // again inside the loop (it needs a probe), so this is an upper bound — the
     // counter can finish short of its total, which beats a total that grows.
@@ -1801,6 +1890,11 @@ pub fn run_update(
             verbose,
             &cl,
         )?;
+        if matches!(did, Applied::Changed | Applied::Ran) {
+            if let Some(why) = unrevertible_reason(step) {
+                unrevertible.push(format!("{} — {why}", label.trim()));
+            }
+        }
         match did {
             Applied::Changed => {
                 changed += 1;
@@ -1823,6 +1917,7 @@ pub fn run_update(
         steps_total: total,
         reboot: false,
         skipped,
+            unrevertible,
     })
 }
 
