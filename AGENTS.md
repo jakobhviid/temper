@@ -48,6 +48,36 @@ bug — fix the doc. A quick self-check: could a fresh LLM author a correct fold
 from `temper --llm` alone? If your change would make it guess or fail, the doc
 isn't done.
 
+### "Documenting the diff" — the doc failure mode, named
+
+Updating a doc is not the same as narrating the update. The reflex is to *edit
+around* the stale sentence so it describes the transition: "drift **is** now
+checked", "this **no longer** needs root", "opened **instead of** being skipped",
+"a real answer, **now that** the check exists". Every word can be true and the doc
+still be wrong, because it is describing your commit instead of the software.
+
+Two reasons it costs real work. A reader can't tell a live constraint from a dead
+one, so the old state keeps steering them and they route around a problem that no
+longer exists — not hypothetical, it is how the dconf-float warning outlived its
+bug. And it ages into trivia: one release later, "used to compare doubles as text"
+is a fact about a version nobody runs.
+
+The tells are greppable, and worth grepping **your own diff** for before you
+commit: `now`, `now that`, `no longer`, `used to`, `actually`, `really`,
+`instead of <the old behaviour>`, emphatic italics (`*is*` checked — arguing with a
+claim the reader never saw), `(fixed in 3.1.1)`, `DONE`.
+
+The fix, in order:
+
+1. **Rewrite as if the new behaviour were the only one that ever existed.** Present
+   tense, no memory. Say *why* only where the why is non-obvious and durable.
+2. **Then ask whether the line still earns its place.** A sentence that only made
+   sense as a contrast with the old state should be *deleted*, not reworded — and
+   one the surrounding text now implies should go too. Prefer a shorter doc to a
+   curated stale one.
+3. **Put the before/after in the commit message.** That is the artefact built for
+   it, and git keeps it with a date and a diff.
+
 ## Releases & versioning — auto-incremented from commit type
 
 CI cuts a release on every push to `main`, and the version is **derived
