@@ -193,6 +193,10 @@ pub struct Ignore {
     /// (System/image-baked extensions are never extras, so they need no entry.)
     #[serde(default, alias = "gext")]
     pub gnome_extensions: Vec<String>,
+    /// rpm-ostree layered packages not to report as extras — a deliberate
+    /// hand-layer, or one the image provides.
+    #[serde(default)]
+    pub rpm_ostree: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -239,6 +243,9 @@ pub struct Machine {
     /// and dropping both land here.
     #[serde(default)]
     pub brew_trust: Vec<String>,
+    /// rpm-ostree packages THIS machine layers, on top of its bundles'.
+    #[serde(default)]
+    pub rpm_ostree: Vec<String>,
     /// Extras THIS machine should not be told about, on top of the fleet
     /// `[ignore]`. Same reason: silencing something is a per-machine judgement
     /// far more often than a fleet one, and the fleet list could not express
@@ -854,6 +861,7 @@ pub fn effective_ignore(fleet: &Ignore, machine: &Machine) -> Ignore {
         vscode: join(&fleet.vscode, &m.vscode),
         tap: join(&fleet.tap, &m.tap),
         gnome_extensions: join(&fleet.gnome_extensions, &m.gnome_extensions),
+        rpm_ostree: join(&fleet.rpm_ostree, &m.rpm_ostree),
     }
 }
 
@@ -995,6 +1003,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             brew_trust: Vec::new(),
+            rpm_ostree: Vec::new(),
             ignore: Default::default(),
             dconf: vec![],
             git: None,
@@ -1098,6 +1107,7 @@ mod tests {
             brewfile: None,
             vars: Default::default(),
             brew_trust: Vec::new(),
+            rpm_ostree: Vec::new(),
             ignore: Default::default(),
             dconf: vec![],
             git: None,

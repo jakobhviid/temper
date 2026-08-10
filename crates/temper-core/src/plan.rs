@@ -582,17 +582,23 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         absorb: &[Answer::Verb("temper reconcile")],
     },
     KindSpec {
+        name: "rpm-ostree-extra",
+        detects: Detects::Extra,
+        // No prune path yet: `rpm-ostree uninstall` is a deployment change with
+        // a reboot, which is a different shape from every other prune and is not
+        // built. Said here rather than left blank.
+        converge: &[Answer::Hand {
+            file: "the machine",
+            why: "`rpm-ostree uninstall` stages a new deployment and needs a reboot — \
+                  temper does not drive that yet",
+        }],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
         name: "rpm-ostree",
         detects: Detects::Missing,
         converge: &[Answer::Verb("temper install --packages-only")],
-        // The next extensions-shaped gap: `rpm` exists only on a Bundle, so
-        // there is no machine-scoped list for reconcile to write to. Stated,
-        // not silently omitted.
-        absorb: &[Answer::Hand {
-            file: HAND_BUNDLE,
-            why: "rpm is declared only in a shared bundle — no machine-scoped list \
-                  exists for reconcile to write",
-        }],
+        absorb: &[Answer::Verb("temper reconcile")],
     },
     KindSpec {
         name: "brew-trust",
@@ -1101,7 +1107,18 @@ pub fn run_drift(
             detail: None,
         });
     }
-    for pkg in providers::rpm_missing(&providers::effective_rpm(home, machine)?) {
+    let effective_rpm = providers::effective_rpm(home, machine)?;
+    for pkg in providers::rpm_ostree_extras(&effective_rpm, ignore) {
+        findings.push(Finding {
+            app: "rpm-ostree".into(),
+            kind: "rpm-ostree-extra",
+            target: pkg,
+            ok: false,
+            status: "extra".into(),
+            detail: None,
+        });
+    }
+    for pkg in providers::rpm_missing(&effective_rpm) {
         findings.push(Finding {
             app: "rpm-ostree".into(),
             kind: "rpm-ostree",

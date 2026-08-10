@@ -1084,12 +1084,138 @@ pub fn effective_rpm(home: &Path, machine: &Machine) -> Result<Vec<String>> {
             }
         }
     }
+    // The machine's own list, unioned last — the same rule `packages` and
+    // `gnome_extensions` use, and what gives rpm-ostree a spec column at all.
+    for pkg in &machine.rpm_ostree {
+        if seen.insert(pkg.clone()) {
+            out.push(pkg.clone());
+        }
+    }
     Ok(out)
+}
+
+/// What this host can do about rpm-ostree layering, answered once.
+///
+/// `rpm` and `rpm-ostree` are different facts: a plain Fedora or RHEL box has
+/// `rpm` and no ostree, and layering there is not a thing temper can do. Gating
+/// the whole category on `have("rpm-ostree")` made it *vanish* on such a host
+/// rather than report that it does not apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RpmOstreeCaps {
+    /// Can enumerate what is layered and what is staged.
+    pub observe: bool,
+    /// Can layer and unlayer.
+    pub converge: bool,
+}
+
+pub fn rpm_ostree_caps() -> RpmOstreeCaps {
+    let atomic = have("rpm-ostree");
+    RpmOstreeCaps {
+        observe: atomic,
+        converge: atomic,
+    }
+}
+
+/// The packages `rpm-ostree` has been *asked* to layer, across the booted
+/// deployment and any staged one — `requested-packages` from
+/// `rpm-ostree status --json`.
+///
+/// This is the source of truth `rpm -q` is not. `rpm -q` answers about the
+/// **booted** deployment, so between layering a package and rebooting, a
+/// correctly-layered package reads as `missing` — permanently red on an atomic
+/// box in exactly the window where the user has already done the work. Reading
+/// the staged deployment closes that, and the same field gives the extras
+/// direction for free: layered-but-undeclared was never a design impossibility,
+/// just an unread field.
+///
+/// `None` means the store could not be read (Principle #12) — never an empty
+/// set, which every write path would take as "nothing is layered".
+pub fn rpm_ostree_requested() -> Option<Vec<String>> {
+    if !rpm_ostree_caps().observe {
+        return None;
+    }
+    let out = Command::new("rpm-ostree")
+        .args(["status", "--json"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let mut pkgs: Vec<String> = Vec::new();
+    for dep in v.get("deployments")?.as_array()? {
+        if let Some(list) = dep.get("requested-packages").and_then(|r| r.as_array()) {
+            for p in list.iter().filter_map(|p| p.as_str()) {
+                if !pkgs.iter().any(|x| x == p) {
+                    pkgs.push(p.to_string());
+                }
+            }
+        }
+    }
+    pkgs.sort();
+    Some(pkgs)
+}
+
+/// Packages in THIS machine's own `rpm_ostree` list that are not layered — the
+/// undeclare cell. Machine scope only; a bundle's list is shared.
+///
+/// Requires the store to be readable, for the reason every drop does: on a host
+/// that cannot enumerate, "declared but absent" and "I cannot tell" are the same
+/// observation, and only one of them may be acted on.
+pub fn rpm_ostree_machine_absent(machine_own: &[String]) -> Vec<String> {
+    if machine_own.is_empty() {
+        return Vec::new();
+    }
+    let Some(requested) = rpm_ostree_requested() else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = machine_own
+        .iter()
+        .filter(|p| !requested.iter().any(|r| r == *p))
+        .cloned()
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Layered rpms no bundle or machine declares — the extras direction.
+///
+/// Gated on the machine declaring at least one, like every other manager
+/// (SPEC's probe invariant): without it, a box with hand-layered packages and a
+/// spec that ignores layering entirely would report all of them.
+pub fn rpm_ostree_extras(effective: &[String], ignore: &manifest::Ignore) -> Vec<String> {
+    if effective.is_empty() {
+        return Vec::new();
+    }
+    let Some(requested) = rpm_ostree_requested() else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = requested
+        .into_iter()
+        .filter(|p| !effective.contains(p) && !ignore.rpm_ostree.contains(p))
+        .collect();
+    out.sort();
+    out
 }
 
 /// Declared rpms not installed (`rpm -q`). Empty where rpm isn't present.
 pub fn rpm_missing(effective: &[String]) -> Vec<String> {
-    if effective.is_empty() || !have("rpm") {
+    if effective.is_empty() {
+        return Vec::new();
+    }
+    // On an atomic host, "requested" is the answer: it covers the staged
+    // deployment, so a package layered but not yet rebooted into is NOT
+    // missing. `rpm -q` alone reported it missing until reboot, which is a
+    // permanent red in the window where the user has already acted.
+    if let Some(requested) = rpm_ostree_requested() {
+        return effective
+            .iter()
+            .filter(|p| !requested.iter().any(|r| r == *p))
+            .cloned()
+            .collect();
+    }
+    if !have("rpm") {
         return Vec::new();
     }
     effective
@@ -1368,6 +1494,7 @@ mod gating_tests {
             brewfile: None,
             vars: Default::default(),
             brew_trust: Vec::new(),
+            rpm_ostree: Vec::new(),
             ignore: Default::default(),
             dconf: vec![],
             git: None,
@@ -1411,7 +1538,15 @@ mod gating_tests {
 /// chatty and slow, so it gets the spinner rather than the terminal.
 pub fn rpm_converge(effective: &[String], dry_run: bool, verbose: bool) -> Result<bool> {
     let missing = rpm_missing(effective);
-    if dry_run || missing.is_empty() || !have("rpm-ostree") {
+    if dry_run || missing.is_empty() {
+        return Ok(false);
+    }
+    if !rpm_ostree_caps().converge {
+        eprintln!(
+            "{} rpm-ostree not found — {} declared rpm(s) cannot be layered on this host",
+            crate::ui::yellow(crate::ui::g_warn()),
+            missing.len()
+        );
         return Ok(false);
     }
     let mut cmd = Command::new("rpm-ostree");

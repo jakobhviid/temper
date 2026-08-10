@@ -1821,6 +1821,7 @@ fn cmd_reconcile(
                 // something it was never shown (Principle #8's `--json` clause).
                 "gext_adds": plan.gext_adds, "gext_drops": plan.gext_drops,
                 "package_drops": plan.package_drops,
+                "rpm_adds": plan.rpm_adds, "rpm_drops": plan.rpm_drops,
                 "fleet_trust_writes": fleet_trust_writes,
                 "dconf": dconf_plans
             })
@@ -1839,6 +1840,8 @@ fn cmd_reconcile(
         && plan.gext_adds.is_empty()
         && plan.gext_drops.is_empty()
         && plan.package_drops.is_empty()
+        && plan.rpm_adds.is_empty()
+        && plan.rpm_drops.is_empty()
         && plan.dconf.is_empty()
     {
         // `--csw --yes` skips the JSON branch above, so this needs its own
@@ -1895,6 +1898,8 @@ fn cmd_reconcile(
     let mut chosen_gext: Vec<String> = Vec::new();
     let mut chosen_gext_drops: Vec<String> = Vec::new();
     let mut chosen_package_drops: Vec<String> = Vec::new();
+    let mut chosen_rpm_adds: Vec<String> = Vec::new();
+    let mut chosen_rpm_drops: Vec<String> = Vec::new();
 
     if csw {
         // Machine-scope only. `[ignore]` routing is a judgement, not a state, so
@@ -1909,6 +1914,8 @@ fn cmd_reconcile(
         chosen_gext = plan.gext_adds.clone();
         chosen_gext_drops = plan.gext_drops.clone();
         chosen_package_drops = plan.package_drops.clone();
+        chosen_rpm_adds = plan.rpm_adds.clone();
+        chosen_rpm_drops = plan.rpm_drops.clone();
         chosen_trust_adds = plan.trust_adds.clone();
         chosen_trust_drops = plan.trust_drops.clone();
         for (i, dp) in plan.dconf.iter().enumerate() {
@@ -1970,6 +1977,26 @@ fn cmd_reconcile(
                     AddChoice::Add => chosen_trust_adds.push(tap.clone()),
                     AddChoice::Ignore => chosen_tap_ignores.push(tap.clone()),
                     AddChoice::Skip => {}
+                }
+            }
+        }
+
+        if !plan.rpm_drops.is_empty() {
+            println!(
+                "\n{}",
+                ui::bold("Declared in this machine's `rpm_ostree` but not layered:")
+            );
+            for pkg in &plan.rpm_drops {
+                if !prompt_yes(&format!("  keep `{pkg}` in [[machine]].rpm_ostree?")) {
+                    chosen_rpm_drops.push(pkg.clone());
+                }
+            }
+        }
+        if !plan.rpm_adds.is_empty() {
+            println!("\n{}", ui::bold("Layered rpms not in the spec:"));
+            for pkg in &plan.rpm_adds {
+                if prompt_no(&format!("  add `{pkg}` for this machine?")) {
+                    chosen_rpm_adds.push(pkg.clone());
                 }
             }
         }
@@ -2112,6 +2139,8 @@ fn cmd_reconcile(
         && chosen_gext.is_empty()
         && chosen_gext_drops.is_empty()
         && chosen_package_drops.is_empty()
+        && chosen_rpm_adds.is_empty()
+        && chosen_rpm_drops.is_empty()
     {
         if json {
             println!(
@@ -2188,6 +2217,22 @@ fn cmd_reconcile(
                 ui::green("+"),
                 uuid,
                 ui::dim(&format!("{} [[machine]].extensions in temper.toml", ui::g_arrow()))
+            );
+        }
+        for pkg in &chosen_rpm_adds {
+            println!(
+                "  {} rpm-ostree {}  {}",
+                ui::green("+"),
+                pkg,
+                ui::dim(&format!("{} [[machine]].rpm_ostree in temper.toml", ui::g_arrow()))
+            );
+        }
+        for pkg in &chosen_rpm_drops {
+            println!(
+                "  {} rpm-ostree {}  {}",
+                ui::red("-"),
+                pkg,
+                ui::dim(&format!("{} [[machine]].rpm_ostree in temper.toml", ui::g_arrow()))
             );
         }
         for token in &chosen_package_drops {
@@ -2299,7 +2344,9 @@ fn cmd_reconcile(
         || !chosen_tap_ignores.is_empty()
         || !chosen_gext.is_empty()
         || !chosen_gext_drops.is_empty()
-        || !chosen_package_drops.is_empty();
+        || !chosen_package_drops.is_empty()
+        || !chosen_rpm_adds.is_empty()
+        || !chosen_rpm_drops.is_empty();
     if tt_edits {
         let tt_path = home.join("temper.toml");
         let before_tt = std::fs::read_to_string(&tt_path)?;
@@ -2330,6 +2377,12 @@ fn cmd_reconcile(
         for token in &chosen_package_drops {
             tt = reconcile::remove_machine_package(&tt, &m.name, token)?;
         }
+        for pkg in &chosen_rpm_adds {
+            tt = reconcile::append_machine_rpm(&tt, &m.name, pkg)?;
+        }
+        for pkg in &chosen_rpm_drops {
+            tt = reconcile::remove_machine_rpm(&tt, &m.name, pkg)?;
+        }
         // Stamp the temper that wrote this file, so a skew is later distinguishable
         // from a genuine parse error (monotonic — never lowers a newer stamp).
         tt = manifest::stamp_version(&tt)?;
@@ -2340,11 +2393,13 @@ fn cmd_reconcile(
     }
     jrnl.commit()?;
     let keys: usize = chosen_dconf.iter().map(|(_, p)| p.len()).sum();
-    let added = chosen_adds.len() + chosen_trust_adds.len() + chosen_gext.len();
+    let added =
+        chosen_adds.len() + chosen_trust_adds.len() + chosen_gext.len() + chosen_rpm_adds.len();
     let dropped = chosen_drops.len()
         + chosen_trust_drops.len()
         + chosen_gext_drops.len()
-        + chosen_package_drops.len();
+        + chosen_package_drops.len()
+        + chosen_rpm_drops.len();
     let ignored = chosen_ignores.len() + chosen_tap_ignores.len();
     if json {
         // Only reachable via --current-state-wins --yes (nothing prompted).

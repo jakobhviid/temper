@@ -57,6 +57,7 @@ vscode  = []
 tap     = []
 gnome_extensions = []       # user-installed GNOME extension UUIDs not to flag
                             #   (old name `gext` still parses)
+rpm_ostree = []             # layered rpms not to flag as extras
 
 [ui]                        # optional; how temper draws its status markers
 icons = "unicode"           # "unicode" (default) | "nerd"
@@ -114,6 +115,9 @@ gnome_extensions = ["tilingshell@ferrarodomenico.com"]  # optional; for THIS
                             #   `reconcile` absorbs an undeclared extension here, because
                             #   a bundle's list is shared by every machine composing it.
 brewfile = "brewfiles/chronos"   # optional; a Brewfile whose lines join the set
+rpm_ostree = ["proton-vpn"] # optional; rpms THIS machine layers, unioned with its
+                            #   bundles' lists. Machine scope, so reconcile absorbs
+                            #   and drops here.
 brew_trust = ["me/tap"]     # optional; taps THIS machine trusts, unioned with
                             #   [brew].trust. Machine scope, so `reconcile` both
                             #   absorbs into and drops from it — the fleet list

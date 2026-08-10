@@ -73,6 +73,11 @@ pub struct ReconcilePlan {
     /// have had this since the beginning via `drops`; the loose list is equally
     /// machine scope and had no way to remove an entry at all.
     pub package_drops: Vec<String>,
+    /// Layered rpms no bundle or machine declares — absorb into THIS machine's
+    /// own `rpm_ostree` list.
+    pub rpm_adds: Vec<String>,
+    /// Entries in THIS machine's own `rpm_ostree` list that are not layered.
+    pub rpm_drops: Vec<String>,
     /// Extensions in THIS machine's own `extensions` list that aren't installed
     /// — candidates to drop. The other half of `gext_adds`, without which
     /// reconcile could only ever grow the list: absorb an extension, uninstall
@@ -161,6 +166,8 @@ pub fn plan(
             ),
             package_drops: machine_package_drops(machine)?,
             gext_drops: providers::gext_machine_absent(&machine.gnome_extensions),
+            rpm_adds: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
+            rpm_drops: providers::rpm_ostree_machine_absent(&machine.rpm_ostree),
             dconf: dconf_plans(home, machine)?,
         });
     };
@@ -293,6 +300,8 @@ pub fn plan(
         ),
         package_drops: machine_package_drops(machine)?,
         gext_drops: providers::gext_machine_absent(&machine.gnome_extensions),
+        rpm_adds: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
+        rpm_drops: providers::rpm_ostree_machine_absent(&machine.rpm_ostree),
         dconf: dconf_plans(home, machine)?,
     })
 }
@@ -664,6 +673,16 @@ pub fn append_machine_trust(temper_toml: &str, machine: &str, tap: &str) -> Resu
 /// list: a tap the group declares is not this machine's to un-declare.
 pub fn remove_machine_trust(temper_toml: &str, machine: &str, tap: &str) -> Result<String> {
     remove_machine_list(temper_toml, machine, "brew_trust", tap)
+}
+
+/// Absorb a layered rpm into THIS machine's own `rpm_ostree` list.
+pub fn append_machine_rpm(temper_toml: &str, machine: &str, pkg: &str) -> Result<String> {
+    append_machine_list(temper_toml, machine, "rpm_ostree", pkg)
+}
+
+/// Drop a package from THIS machine's own `rpm_ostree` list.
+pub fn remove_machine_rpm(temper_toml: &str, machine: &str, pkg: &str) -> Result<String> {
+    remove_machine_list(temper_toml, machine, "rpm_ostree", pkg)
 }
 
 /// Silence an extra for THIS machine only, under `[machine.ignore].<manager>`.

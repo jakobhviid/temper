@@ -96,6 +96,7 @@ mod tests {
             brewfile: None,
             vars: Default::default(),
             brew_trust: Vec::new(),
+            rpm_ostree: Vec::new(),
             ignore: Default::default(),
             dconf: vec![],
             git: None,

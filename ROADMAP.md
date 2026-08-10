@@ -31,11 +31,12 @@ a *verified* gap, not a suspicion.
    meaningful on some is permanently red on the rest. The natural fix is to let a
    **bundle** carry them: a bundle is already the group construct and is already
    os/role-gated, which beats bolting a third gate axis onto the fleet tables.
-2. **`rpm-ostree` scores 3 of 11.** No machine-scope list, no extras direction, no
-   ignore list, and `rpm -q` answers about the *booted* deployment — so a layered
-   package reads missing until reboot. `rpm-ostree status --json` exposes both the
-   staged deployment and `requested-packages`, which turns the extras direction
-   from "impossible" into "an unread field".
+2. **`rpm-ostree` has no prune path.** Machine scope, the extras direction,
+   staged-deployment awareness and an ignore list all exist now; removal does
+   not. `rpm-ostree uninstall` stages a new deployment and needs a reboot, which
+   is a different shape from every other prune — closer to `restore-dconf` than
+   to `brew bundle cleanup`. Its `converge` cell says so rather than sitting
+   blank.
 3. **`flatpak` does not model user vs system scope.** `prune` can therefore try to
    remove a system flatpak, which needs polkit and over SSH hangs. `gext` draws
    this distinction deliberately; flatpak has the same image-baked baseline
