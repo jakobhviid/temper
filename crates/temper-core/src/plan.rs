@@ -1250,7 +1250,8 @@ pub fn run_drift(
     // Degraded, not failed, on a host without dconf (a Mac).
     for snap in &machine.dconf {
         let group = format!("dconf/{}", snap.name());
-        match crate::dconf::snapshot_state(home, snap)? {
+        let owned = crate::dconf::setkey_owned(home, machine, snap);
+        match crate::dconf::snapshot_state_owned(home, snap, &owned)? {
             // Reported, not dropped. A declared snapshot that cannot be
             // evaluated used to vanish from the report entirely, so a Mac — or
             // a Linux box with no session — showed no sign that a whole

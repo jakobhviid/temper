@@ -388,10 +388,13 @@ Three consequences follow, and they are the reason for the split:
   so a uuid enabled in a snapshot but declared nowhere got switched on by
   `restore` and never installed by `install` — and GNOME fails soft, so nothing
   said so.
-- **`strip` goes back to one job.** Its ownership half disappears — not derived,
-  *gone*, because nothing else captures that keyspace. What remains is a noise
-  filter (`monitors/`, `last-selected`) for keys that would corrupt a
-  capture→restore round trip.
+- **`strip` goes back to one job.** Its ownership half is **derived**: temper
+  already knows every dconf key the machine's bundles declare via `setkey`, so it
+  excludes them from capture and from both sides of the drift comparison, and
+  reports how many it left out. What remains in `strip` is a noise filter
+  (`monitors/`, `last-selected`) for keys that would corrupt a capture→restore
+  round trip. Ownership is matched **exactly** — a `setkey` on `a/b` does not
+  take `a/bc` with it — because ownership is not a pattern.
 
 An extension owns **only its own subtree**. Anything it touches outside that is
 shared keyspace — two extensions can both want

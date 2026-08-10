@@ -354,7 +354,11 @@ pub fn plan(
 fn dconf_plans(home: &Path, machine: &Machine) -> Result<Vec<DconfPlan>> {
     let mut out = Vec::new();
     for snap in &machine.dconf {
-        if let crate::dconf::SnapshotState::Diffs(diffs) = crate::dconf::snapshot_state(home, snap)?
+        // Same ownership filter drift uses: reconcile must never offer to absorb
+        // a key a `setkey` step already declares.
+        let owned = crate::dconf::setkey_owned(home, machine, snap);
+        if let crate::dconf::SnapshotState::Diffs(diffs) =
+            crate::dconf::snapshot_state_owned(home, snap, &owned)?
         {
             if diffs.is_empty() {
                 continue;

@@ -115,9 +115,25 @@ a hand-maintained `strip` list that silently rotted whenever you forgot an entry
 | a key you want **always absent** | the absence primitive, not a captured value |
 | genuinely machine-specific live state | a narrowly-rooted `[[machine.dconf]]`, still supported |
 
-`strip` loses its ownership job entirely — not derived, *gone*, because nothing
-else captures that keyspace any more. Keep only genuine noise (`monitors/`,
-`last-selected`).
+**`strip` loses its ownership job — you can delete those entries now.** temper
+derives them: any dconf key a `setkey` step declares is excluded from capture and
+from drift automatically, and a capture reports how many it left out. Keep only
+genuine noise (`monitors/`, `last-selected`).
+
+```toml
+# before — the second half restates what apps/gnome.toml already declares
+strip = ["monitors/", "last-selected",
+         "blur-my-shell/applications/", "quick-settings-audio-panel/"]
+
+# after — noise only
+strip = ["monitors/", "last-selected"]
+```
+
+Leaving them in is harmless (a stripped key is simply filtered twice), which is
+why this is a cleanup rather than a required edit. The reason to do it is that a
+hand-maintained ownership list rots: add a `setkey` and forget the `strip`, and
+the snapshot silently becomes a second owner of that key — your prefs-UI tweak
+gets captured and then fights the bundle on the next converge.
 
 **The one that will surprise you.** `enabled-extensions` and
 `disabled-extensions` stop being captured. Whether an extension is enabled is now

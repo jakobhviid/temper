@@ -146,7 +146,11 @@ BREW_PREFIX = "/home/linuxbrew/.linuxbrew"   # e.g. override a Mac-valued global
                             #   MECHANISM it actually reads.
 path  = "/org/gnome/shell/"                 # subtree to dump/load (trailing /)
 file  = "assets/gnome/shell.chronos.dconf"  # snapshot writes here; restore reads
-strip = ["monitors/", "last-selected"]      # drop these key substrings — applied to
+strip = ["monitors/", "last-selected"]      # NOISE only: key substrings that would
+                                            #   corrupt a capture/restore round-trip.
+                                            #   You do NOT list keys a `setkey` step
+                                            #   owns — temper derives those and never
+                                            #   captures them. Applied to
                                             #   BOTH sides of a drift compare, so a
                                             #   stripped key never reads as drift
 label = "shell"                             # optional; name used in drift/reconcile

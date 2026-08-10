@@ -45,6 +45,18 @@ pub fn key_id(section: &str, key: &str) -> String {
 /// path contains one of the `strip` substrings, and any section left empty by
 /// that filtering. Pure — the testable heart of a filtered capture.
 pub fn strip_dump(dump: &str, strip: &[String]) -> String {
+    // `strip` is substring matching by design: `monitors/` should catch every
+    // per-monitor key without naming each one.
+    filter_dump(dump, |id| strip.iter().any(|p| id.contains(p.as_str())))
+}
+
+/// Drop keys by **exact** id. Ownership is not a pattern: a `setkey` owns
+/// `a/b`, and must not take `a/bc` with it.
+pub fn drop_exact(dump: &str, ids: &[String]) -> String {
+    filter_dump(dump, |id| ids.iter().any(|p| p == id))
+}
+
+fn filter_dump(dump: &str, drop: impl Fn(&str) -> bool) -> String {
     let mut out = String::new();
     let mut header = String::new();
     let mut section = String::new();
@@ -74,7 +86,7 @@ pub fn strip_dump(dump: &str, strip: &[String]) -> String {
         } else if let Some((k, _)) = line.split_once('=') {
             let key = k.trim();
             let id = key_id(&section, key);
-            if !strip.iter().any(|p| id.contains(p.as_str())) {
+            if !drop(&id) {
                 kept.push(line.to_string());
             }
         } else {
@@ -351,6 +363,46 @@ pub enum SnapshotState {
     Diffs(Vec<KeyDiff>),
 }
 
+/// The snapshot-relative ids of keys a `setkey` step already owns.
+///
+/// A dconf key has exactly one owner. `setkey` is the *policy* declaration —
+/// fleet-capable, gated, drift-checked, re-applied every converge — and a
+/// snapshot is the machine's *recording* of everything else. When both cover the
+/// same key the snapshot becomes a second owner: your prefs-UI tweak gets
+/// captured, then fights the bundle on the next converge, and which one wins
+/// depends on the order you happened to run things in.
+///
+/// That boundary used to be maintained by hand, as `strip` entries mirroring the
+/// setkey steps — which silently rots the moment you add a `setkey` and forget
+/// the `strip`. temper already knows every dconf key the machine's bundles
+/// declare, so it derives the boundary instead of asking you to restate it.
+///
+/// `strip` keeps its other, unrelated job: dropping keys that are noise
+/// (`monitors/`, `last-selected`) rather than keys that belong to someone else.
+pub fn setkey_owned(home: &Path, machine: &Machine, snap: &DconfSnapshot) -> Vec<String> {
+    let Ok(resolved) = crate::plan::resolve(home, machine) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (_, step) in &resolved.steps {
+        let Some(sk) = &step.setkey else { continue };
+        if sk.backend != "dconf" {
+            continue;
+        }
+        // Only keys inside THIS snapshot's subtree, expressed the way the dump
+        // does: relative to the snapshot root.
+        if let Some(rel) = sk.key.strip_prefix(&snap.path) {
+            let rel = rel.trim_matches('/');
+            if !rel.is_empty() {
+                out.push(rel.to_string());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Whether the dconf store can actually be read on this host, and if not, why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Store {
@@ -403,6 +455,17 @@ pub fn observe() -> Store {
 /// Compare one declared snapshot against live dconf, filtering **both** sides
 /// through its `strip` list so a stripped key never reads as drift.
 pub fn snapshot_state(home: &Path, snap: &DconfSnapshot) -> Result<SnapshotState> {
+    snapshot_state_owned(home, snap, &[])
+}
+
+/// `snapshot_state`, with keys another declaration owns excluded from both
+/// sides — so an owned key never reads as drift here, exactly as a stripped one
+/// never does.
+pub fn snapshot_state_owned(
+    home: &Path,
+    snap: &DconfSnapshot,
+    owned: &[String],
+) -> Result<SnapshotState> {
     if let Store::Unreadable(why) = observe() {
         return Ok(SnapshotState::Unobservable(why));
     }
@@ -417,12 +480,15 @@ pub fn snapshot_state(home: &Path, snap: &DconfSnapshot) -> Result<SnapshotState
     if !out.status.success() {
         bail!("dconf dump {} failed", snap.path);
     }
-    let live = strip_dump(&String::from_utf8_lossy(&out.stdout), &snap.strip);
+    // Both sides get the same two filters, so neither a stripped key nor an
+    // owned one can read as drift.
+    let filtered = |text: &str| drop_exact(&strip_dump(text, &snap.strip), owned);
+    let live = filtered(&String::from_utf8_lossy(&out.stdout));
     // The file was written filtered, but re-filter it: a `strip` entry added
-    // after the last capture would otherwise show its stale keys as drift.
-    let file = strip_dump(
+    // after the last capture would otherwise show its stale keys as drift, and
+    // a key that has since become a `setkey` would read as an extra.
+    let file = filtered(
         &fs::read_to_string(&src).with_context(|| format!("reading {}", src.display()))?,
-        &snap.strip,
     );
     Ok(SnapshotState::Diffs(diff_dumps(&file, &live)))
 }
@@ -457,8 +523,14 @@ pub fn capture(home: &Path, machine: &Machine, journal: &mut Journal) -> Result<
         bail!("cannot capture dconf: {why}");
     }
     let mut written = Vec::new();
+    let mut excluded = 0usize;
     for snap in &machine.dconf {
-        let filtered = strip_dump(&dump_raw(&snap.path)?, &snap.strip);
+        // Never capture a key a `setkey` already declares: that is what turned a
+        // snapshot into a second owner and made a prefs-UI tweak fight the
+        // bundle on the next converge.
+        let owned = setkey_owned(home, machine, snap);
+        excluded += owned.len();
+        let filtered = drop_exact(&strip_dump(&dump_raw(&snap.path)?, &snap.strip), &owned);
         let dest = home.join(&snap.file);
         if let Some(p) = dest.parent() {
             fs::create_dir_all(p).with_context(|| format!("creating {}", p.display()))?;
@@ -467,6 +539,12 @@ pub fn capture(home: &Path, machine: &Machine, journal: &mut Journal) -> Result<
         fs::write(&dest, &filtered).with_context(|| format!("writing {}", dest.display()))?;
         journal.record_write(&dest, before.as_deref(), filtered.as_bytes())?;
         written.push(dest);
+    }
+    if excluded > 0 {
+        eprintln!(
+            "{} {excluded} key(s) not captured — already declared by a `setkey` step",
+            crate::ui::dim("note:")
+        );
     }
     Ok(written)
 }
@@ -544,6 +622,47 @@ pub fn restore(home: &Path, machine: &Machine, dry_run: bool) -> Result<Vec<Path
 
 #[cfg(test)]
 mod tests {
+    /// A key a `setkey` step declares is never captured, never reported as
+    /// drift, and never offered for absorb.
+    ///
+    /// This is the boundary that used to be maintained by hand, as `strip`
+    /// entries mirroring the setkey steps. Forget one and the snapshot quietly
+    /// becomes a second owner of that key: your prefs-UI tweak gets captured,
+    /// then fights the bundle on the next converge, and which wins depends on
+    /// the order you ran things in.
+    #[test]
+    fn an_owned_key_is_excluded_from_both_sides() {
+        let dump = "[extensions/blur-my-shell/applications]\nblur=true\nsigma=27\n\n[keybindings]\nx='a'\n";
+        let owned = vec!["extensions/blur-my-shell/applications/blur".to_string()];
+
+        let out = drop_exact(dump, &owned);
+        assert!(!out.contains("blur=true"), "an owned key must not be captured");
+        assert!(out.contains("sigma=27"), "a sibling is not owned and must survive");
+        assert!(out.contains("x='a'"), "an unrelated section must survive");
+
+        // Exactness matters: ownership is not a prefix match.
+        let near = vec!["extensions/blur-my-shell/applications/blu".to_string()];
+        assert!(
+            drop_exact(dump, &near).contains("blur=true"),
+            "ownership must be exact — `a/blu` does not own `a/blur`"
+        );
+
+        // Filtering both sides is what keeps an owned key from reading as drift:
+        // present live, absent from the file, and still no diff.
+        let file = drop_exact(dump, &owned);
+        let live = drop_exact(dump, &owned);
+        assert!(diff_dumps(&file, &live).is_empty());
+    }
+
+    /// `strip` keeps its own, unrelated job: substring noise filtering.
+    #[test]
+    fn strip_is_still_a_substring_filter() {
+        let dump = "[shell]\nmonitors/left=1\nfavorite-apps=['a']\n";
+        let out = strip_dump(dump, &["monitors/".to_string()]);
+        assert!(!out.contains("monitors/left"));
+        assert!(out.contains("favorite-apps"));
+    }
+
     use super::*;
 
     #[test]
