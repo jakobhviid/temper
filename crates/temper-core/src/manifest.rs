@@ -191,8 +191,8 @@ pub struct Ignore {
     /// GNOME extension UUIDs installed in the user scope that should not be
     /// reported as extras — a deliberate hand-install you don't want tracked.
     /// (System/image-baked extensions are never extras, so they need no entry.)
-    #[serde(default)]
-    pub gext: Vec<String>,
+    #[serde(default, alias = "gext")]
+    pub gnome_extensions: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -216,7 +216,8 @@ pub struct Machine {
     /// to write one and an undeclared extension's only answers were "ignore it"
     /// or "uninstall it" — never "yes, on this machine".
     #[serde(default)]
-    pub extensions: Vec<String>,
+    #[serde(alias = "extensions")]
+    pub gnome_extensions: Vec<String>,
     /// A Brewfile (relative to the temper-home) whose lines are added to this
     /// machine's package set — the clean way to migrate an existing Brewfile.
     #[serde(default)]
@@ -289,10 +290,12 @@ pub struct Bundle {
     pub packages_linux: Vec<String>,
     /// GNOME extension UUIDs to install via `gext` (Linux desktop).
     #[serde(default)]
-    pub extensions: Vec<String>,
+    #[serde(alias = "extensions")]
+    pub gnome_extensions: Vec<String>,
     /// rpm-ostree layered packages (Linux; can't be image-baked).
     #[serde(default)]
-    pub rpm: Vec<String>,
+    #[serde(alias = "rpm")]
+    pub rpm_ostree: Vec<String>,
     #[serde(default)]
     pub step: Vec<Step>,
     /// Drift-only assertions (no converge action).
@@ -715,6 +718,47 @@ pub fn load_bundle(home: &Path, name: &str) -> Result<Bundle> {
 }
 
 #[cfg(test)]
+mod rename_alias_tests {
+    use super::*;
+
+    /// A folder written against the old names keeps parsing.
+    ///
+    /// Names got specific (Principle #13) — `extensions` collided with the VS
+    /// Code extensions temper also manages, and `rpm` claimed a slot a future
+    /// `apt`/`dnf` deserves. Every struct here is `deny_unknown_fields`, so
+    /// without the aliases the rename would be a hard parse error on every
+    /// existing folder rather than a rename.
+    #[test]
+    fn the_old_field_names_still_parse() {
+        let b: Bundle = toml::from_str(
+            "extensions = [\"a@x\"]\nrpm = [\"vpn\"]\n",
+        )
+        .expect("old bundle names must still parse");
+        assert_eq!(b.gnome_extensions, vec!["a@x".to_string()]);
+        assert_eq!(b.rpm_ostree, vec!["vpn".to_string()]);
+
+        let t: TemperToml = toml::from_str(
+            "[[machine]]\nname = \"a\"\nos = \"linux\"\nextensions = [\"b@x\"]\n\n[ignore]\ngext = [\"c@x\"]\n",
+        )
+        .expect("old machine/ignore names must still parse");
+        assert_eq!(t.machine[0].gnome_extensions, vec!["b@x".to_string()]);
+        assert_eq!(t.ignore.gnome_extensions, vec!["c@x".to_string()]);
+    }
+
+    /// …and the new names parse too, obviously — but assert it, because an alias
+    /// typo would leave only the OLD name working and nothing would notice.
+    #[test]
+    fn the_new_field_names_parse() {
+        let b: Bundle = toml::from_str(
+            "gnome_extensions = [\"a@x\"]\nrpm_ostree = [\"vpn\"]\n",
+        )
+        .expect("new bundle names must parse");
+        assert_eq!(b.gnome_extensions, vec!["a@x".to_string()]);
+        assert_eq!(b.rpm_ostree, vec!["vpn".to_string()]);
+    }
+}
+
+#[cfg(test)]
 mod bundle_skew_tests {
     use super::*;
 
@@ -880,7 +924,7 @@ mod tests {
             role: None,
             apps: vec![],
             packages: vec![],
-            extensions: Vec::new(),
+            gnome_extensions: Vec::new(),
             brewfile: None,
             vars: vars
                 .iter()
@@ -984,7 +1028,7 @@ mod tests {
             role: role.map(String::from),
             apps: vec![],
             packages: vec![],
-            extensions: Vec::new(),
+            gnome_extensions: Vec::new(),
             brewfile: None,
             vars: Default::default(),
             dconf: vec![],

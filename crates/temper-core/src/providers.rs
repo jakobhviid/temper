@@ -820,14 +820,14 @@ pub fn effective_extensions(home: &Path, machine: &Machine) -> Result<Vec<String
         if manifest::gated(&bundle.os, &bundle.role, machine) {
             continue;
         }
-        for uuid in bundle.extensions {
+        for uuid in bundle.gnome_extensions {
             if seen.insert(uuid.clone()) {
                 out.push(uuid);
             }
         }
     }
     // The machine's own list, unioned last — same rule `packages` uses.
-    for uuid in &machine.extensions {
+    for uuid in &machine.gnome_extensions {
         if seen.insert(uuid.clone()) {
             out.push(uuid.clone());
         }
@@ -911,7 +911,7 @@ pub fn gext_extras(effective: &[String], ignore: &manifest::Ignore) -> Vec<Strin
     let Some(installed_user) = gext_installed_user() else {
         return Vec::new();
     };
-    gext_extras_from(&installed_user, effective, &ignore.gext)
+    gext_extras_from(&installed_user, effective, &ignore.gnome_extensions)
 }
 
 /// The set logic behind `gext_extras`, split from the shell-out so it is
@@ -1078,7 +1078,7 @@ pub fn effective_rpm(home: &Path, machine: &Machine) -> Result<Vec<String>> {
         if manifest::gated(&bundle.os, &bundle.role, machine) {
             continue;
         }
-        for pkg in bundle.rpm {
+        for pkg in bundle.rpm_ostree {
             if seen.insert(pkg.clone()) {
                 out.push(pkg);
             }
@@ -1364,7 +1364,7 @@ mod gating_tests {
             role: Some(role.into()),
             apps: apps.iter().map(|s| s.to_string()).collect(),
             packages: vec![],
-            extensions: Vec::new(),
+            gnome_extensions: Vec::new(),
             brewfile: None,
             vars: Default::default(),
             dconf: vec![],

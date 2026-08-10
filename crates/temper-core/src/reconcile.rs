@@ -160,7 +160,7 @@ pub fn plan(
                 ignore,
             ),
             package_drops: machine_package_drops(machine)?,
-            gext_drops: providers::gext_machine_absent(&machine.extensions),
+            gext_drops: providers::gext_machine_absent(&machine.gnome_extensions),
             dconf: dconf_plans(home, machine)?,
         });
     };
@@ -288,7 +288,7 @@ pub fn plan(
             ignore,
         ),
         package_drops: machine_package_drops(machine)?,
-        gext_drops: providers::gext_machine_absent(&machine.extensions),
+        gext_drops: providers::gext_machine_absent(&machine.gnome_extensions),
         dconf: dconf_plans(home, machine)?,
     })
 }

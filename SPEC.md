@@ -105,7 +105,7 @@ os       = "mac"            # required; "mac" | "linux"
 role     = "desktop"        # optional; "desktop" | "server"
 apps     = ["shell", "ssh"] # bundle names in apps/
 packages = ["cask \"raycast\""]  # optional loose Brewfile-grammar tokens
-extensions = ["tilingshell@ferrarodomenico.com"]  # optional; GNOME extensions for THIS
+gnome_extensions = ["tilingshell@ferrarodomenico.com"]  # optional; for THIS
                             #   machine, unioned with the composed bundles' lists. The
                             #   machine-scoped counterpart of a bundle's `extensions` —
                             #   `reconcile` absorbs an undeclared extension here, because
@@ -217,7 +217,7 @@ role           = "desktop"           #   `extensions`/`rpm` ONLY unless the mach
 packages       = ["brew \"jq\""]     # Brewfile-grammar tokens (all-OS)
 packages_mac   = []                  # mac-only
 packages_linux = []                  # linux-only
-extensions     = ["ext@uuid"]        # GNOME extensions (gext; Linux) — os/role-gated
+gnome_extensions = ["ext@uuid"]      # GNOME extensions (Linux) — os/role-gated
 rpm            = ["proton-vpn-gnome-desktop"]  # rpm-ostree layered (Linux) — os/role-gated
 
 [[step]]   # ordered; each step sets EXACTLY ONE primitive
