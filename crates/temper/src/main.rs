@@ -140,12 +140,12 @@ enum Cmd {
     /// Capture the machine's dconf subtree(s) into the folder.
     ///
     /// Each declared `[[machine.dconf]]` is dumped through its `strip` filter to
-    /// its file. Spec←machine and wholesale — the mirror of `restore-gnome`, and
+    /// its file. Spec←machine and wholesale — the mirror of `restore-dconf`, and
     /// the blunt sibling of a per-key `reconcile`. Journaled.
     ///
     /// **dconf only.** Packages and app config are not part of it: those are
     /// `reconcile` and hand-authored recipes respectively.
-    #[command(name = "snapshot-gnome", alias = "snapshot")]
+    #[command(name = "snapshot-dconf", aliases = ["snapshot-gnome", "snapshot"])]
     Snapshot {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
@@ -192,13 +192,13 @@ enum Cmd {
     },
     /// Load dconf snapshot(s) back into live dconf (confirm-gated).
     ///
-    /// spec→machine, the mirror of `snapshot-gnome`. Clobbers live desktop
+    /// spec→machine, the mirror of `snapshot-dconf`. Clobbers live desktop
     /// tweaks, so it is never part of `update`. Use after a reinstall, or to
     /// reset the desktop to the captured state.
     ///
     /// **dconf only.** It restores nothing else — packages come back with
     /// `install`.
-    #[command(name = "restore-gnome", alias = "restore")]
+    #[command(name = "restore-dconf", aliases = ["restore-gnome", "restore"])]
     Restore {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
@@ -1658,7 +1658,7 @@ fn cmd_snapshot(machine: Option<String>, json: bool) -> Result<()> {
             );
         } else {
             println!(
-                "snapshot-gnome {}: no `[[machine.dconf]]` declared for this machine.",
+                "snapshot-dconf {}: no `[[machine.dconf]]` declared for this machine.",
                 m.name
             );
         }
@@ -1674,7 +1674,7 @@ fn cmd_snapshot(machine: Option<String>, json: bool) -> Result<()> {
         );
     } else {
         println!(
-            "{} snapshot-gnome {}: captured {} subtree(s).",
+            "{} snapshot-dconf {}: captured {} subtree(s).",
             ui::green(ui::g_ok()),
             m.name,
             paths.len()
@@ -1690,7 +1690,7 @@ fn cmd_snapshot(machine: Option<String>, json: bool) -> Result<()> {
         }
     }
     let gc = manifest::effective_git(&ft.git, &m.git);
-    let msg = format!("snapshot-gnome {}: {} dconf subtree(s)", m.name, paths.len());
+    let msg = format!("snapshot-dconf {}: {} dconf subtree(s)", m.name, paths.len());
     after_repo_change(&home, &gc, &msg);
     Ok(())
 }

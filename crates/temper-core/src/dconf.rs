@@ -379,7 +379,7 @@ fn user_db() -> Option<std::path::PathBuf> {
 /// including a KDE or COSMIC one; and on a host where this user has no dconf
 /// database, `dconf dump` exits **0 printing nothing**. Both cases used to
 /// arrive at the read path as "the subtree is empty", which every write path
-/// then treats as "delete everything the spec captured" — `snapshot-gnome`
+/// then treats as "delete everything the spec captured" — `snapshot-dconf`
 /// overwrites the file with zero bytes, `reconcile --csw` absorbs every key as
 /// a drop, and `after_repo_change` commits the result.
 ///

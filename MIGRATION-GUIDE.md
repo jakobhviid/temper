@@ -134,10 +134,16 @@ working. Update at your leisure, except the `--json` kinds.
 
 | was | is | why |
 |---|---|---|
-| `rpm` | `rpm-ostree` | it is ostree layering specifically — a future `dnf`/`apt` is a different type, not a variant |
-| `[brew].trust` | `[brew-trust]` | flatpak remotes and apt keys are also "trust" |
-| `extensions` | `gnome-extensions` | collided with VS Code extensions, which temper also manages |
-| `snapshot-gnome` / `restore-gnome` | `snapshot-dconf` / `restore-dconf` | the mechanism is the store, not the desktop; dconf is present under KDE too |
+| schema field `rpm` | `rpm_ostree` | it is ostree layering specifically — a future `dnf`/`apt` is a different type, not a variant |
+| schema field `extensions` | `gnome_extensions` | collided with VS Code extensions, which temper also manages |
+| `[ignore].gext` | `[ignore].gnome_extensions` | same collision, and `gext` named a tool the probe never runs |
+| verb `snapshot-gnome` / `restore-gnome` | `snapshot-dconf` / `restore-dconf` | the mechanism is the store, not the desktop; dconf is present under KDE too |
+| kind `rpm` | `rpm-ostree` | as above |
+| kind `trust` / `trust-extra` | `brew-trust` / `brew-trust-extra` | flatpak remotes and apt keys are also "trust" |
+| kind `extension` / `extension-extra` | `gnome-extension` / `gnome-extension-extra` | as above |
+
+The `[brew].trust` **table** is unchanged: `trust` is already namespaced by
+`[brew]`, so it does not carry the collision the bare kind name did.
 
 **Not aliased:** `Finding.kind` values in `--json`. If you parse drift output,
 `rpm` → `rpm-ostree` and the `dconf-*` kinds are renamed fields, not aliases.

@@ -39,11 +39,18 @@ fn home_with_snapshot(home: &Path) {
     .unwrap();
 }
 
-/// The dconf verbs are named for the DESKTOP (`snapshot-gnome`), not the
-/// mechanism, because a future KDE/macOS equivalent won't be dconf at all. The
-/// old bare names stay working as hidden aliases — they are everyday muscle
-/// memory, and renaming a verb should never be the thing that breaks someone's
-/// afternoon.
+/// The dconf verbs are named for the MECHANISM (`snapshot-dconf`), not the
+/// desktop.
+///
+/// They were once named for the desktop, on the reasoning that a KDE or macOS
+/// equivalent would not be dconf. That had it backwards: dconf is the GSettings
+/// backend and is present under KDE too, so `snapshot-gnome` was describing the
+/// desktop it was *usually* run on rather than the store it actually reads. A
+/// second backend becomes `snapshot-kconfig` — a sibling, not a desktop variant.
+///
+/// Both older spellings stay working as aliases. `snapshot`/`restore` are
+/// everyday muscle memory and `snapshot-gnome`/`restore-gnome` are in scripts;
+/// renaming a verb should never be the thing that breaks someone's afternoon.
 #[test]
 fn the_old_bare_verb_names_still_work() {
     let home = TempDir::new().unwrap();
@@ -51,13 +58,16 @@ fn the_old_bare_verb_names_still_work() {
     let state = TempDir::new().unwrap();
     home_with_snapshot(home.path());
 
-    for (old, new) in [("snapshot", "snapshot-gnome"), ("restore", "restore-gnome")] {
+    for name in [
+        "snapshot",
+        "snapshot-gnome",
+        "snapshot-dconf",
+        "restore",
+        "restore-gnome",
+        "restore-dconf",
+    ] {
         temper(home.path(), fake_home.path(), state.path())
-            .args([old, "--help"])
-            .assert()
-            .success();
-        temper(home.path(), fake_home.path(), state.path())
-            .args([new, "--help"])
+            .args([name, "--help"])
             .assert()
             .success();
     }
@@ -67,8 +77,8 @@ fn the_old_bare_verb_names_still_work() {
         .assert()
         .success();
     let help = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    assert!(help.contains("snapshot-gnome"), "{help}");
-    assert!(help.contains("restore-gnome"), "{help}");
+    assert!(help.contains("snapshot-dconf"), "{help}");
+    assert!(help.contains("restore-dconf"), "{help}");
     // `reconcile` is untouched — it is not a dconf verb.
     assert!(help.contains("reconcile"), "{help}");
 }

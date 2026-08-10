@@ -481,7 +481,7 @@ pub struct KindSpec {
     ///
     /// A slice, not a single answer, because a direction can legitimately have
     /// more than one verb — a drifted desktop key is absorbed per-key by
-    /// `reconcile` or wholesale by `snapshot-gnome`. What must never be empty is
+    /// `reconcile` or wholesale by `snapshot-dconf`. What must never be empty is
     /// the *direction*; that is the omission this registry exists to make
     /// impossible.
     pub absorb: &'static [Answer],
@@ -582,7 +582,7 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         absorb: &[Answer::Verb("temper reconcile")],
     },
     KindSpec {
-        name: "rpm",
+        name: "rpm-ostree",
         detects: Detects::Missing,
         converge: &[Answer::Verb("temper install --packages-only")],
         // The next extensions-shaped gap: `rpm` exists only on a Bundle, so
@@ -595,26 +595,26 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         }],
     },
     KindSpec {
-        name: "trust",
+        name: "brew-trust",
         detects: Detects::Missing,
         converge: &[Answer::Verb("temper install --packages-only")],
         absorb: &[Answer::Verb("temper reconcile")],
     },
     KindSpec {
-        name: "trust-extra",
+        name: "brew-trust-extra",
         detects: Detects::Extra,
         converge: &[Answer::Verb("temper prune")],
         absorb: &[Answer::Verb("temper reconcile")],
     },
     // ---- GNOME extensions: all four cells. --------------------------------
     KindSpec {
-        name: "extension",
+        name: "gnome-extension",
         detects: Detects::Missing,
         converge: &[Answer::Verb("temper install --packages-only")],
         absorb: &[Answer::Verb("temper reconcile")],
     },
     KindSpec {
-        name: "extension-extra",
+        name: "gnome-extension-extra",
         detects: Detects::Extra,
         converge: &[Answer::Verb("temper prune")],
         absorb: &[Answer::Verb("temper reconcile")],
@@ -623,11 +623,11 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
     KindSpec {
         name: "dconf-key",
         detects: Detects::Differs,
-        converge: &[Answer::Verb("temper restore-gnome")],
+        converge: &[Answer::Verb("temper restore-dconf")],
         // Two real answers: per-key, or capture the whole subtree.
         absorb: &[
             Answer::Verb("temper reconcile"),
-            Answer::Verb("temper snapshot-gnome"),
+            Answer::Verb("temper snapshot-dconf"),
         ],
     },
     KindSpec {
@@ -638,7 +638,7 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         )],
         absorb: &[
             Answer::Verb("temper reconcile"),
-            Answer::Verb("temper snapshot-gnome"),
+            Answer::Verb("temper snapshot-dconf"),
         ],
     },
     KindSpec {
@@ -651,7 +651,7 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         name: "dconf-uncaptured",
         detects: Detects::Missing,
         converge: &[Answer::NA("there is nothing captured to push back out")],
-        absorb: &[Answer::Verb("temper snapshot-gnome")],
+        absorb: &[Answer::Verb("temper snapshot-dconf")],
     },
     // ---- Assertions are drift-only: they report a condition. --------------
     // `install` structurally cannot satisfy one, so the converge cell is NA and
@@ -813,10 +813,10 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
 
     let drifted = |kinds: &[&str]| items.iter().any(|f| !f.ok && kinds.contains(&f.kind));
     let extra_pkg = drifted(&["package-extra"]);
-    let trust_extra = drifted(&["trust-extra"]);
+    let trust_extra = drifted(&["brew-trust-extra"]);
     let dconf_capture = drifted(&["dconf-key", "dconf-extra", "dconf-uncaptured"]);
-    let pkg_capture = drifted(&["package", "package-extra", "trust", "trust-extra"]);
-    let ext_capture = drifted(&["extension", "extension-extra"]);
+    let pkg_capture = drifted(&["package", "package-extra", "brew-trust", "brew-trust-extra"]);
+    let ext_capture = drifted(&["gnome-extension", "gnome-extension-extra"]);
 
     let mut out = Vec::new();
     let push = |out: &mut Vec<Remediation>, label: &str, command: &str| {
@@ -834,7 +834,7 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
         );
     }
     if converges("temper prune") {
-        let label = match (extra_pkg, trust_extra, drifted(&["extension-extra"])) {
+        let label = match (extra_pkg, trust_extra, drifted(&["gnome-extension-extra"])) {
             (_, _, true) if extra_pkg || trust_extra => {
                 "uninstall packages / GNOME extensions and untrust taps not in the spec (asks first)"
             }
@@ -845,11 +845,11 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
         };
         push(&mut out, label, "temper prune");
     }
-    if converges("temper restore-gnome") {
+    if converges("temper restore-dconf") {
         push(
             &mut out,
             "reload the desktop snapshot, clobbering live tweaks (asks first)",
-            "temper restore-gnome",
+            "temper restore-dconf",
         );
     }
     // Spec ← machine (absorb the machine's state into the spec). Fires only for
@@ -871,11 +871,11 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
         );
         push(&mut out, &label, "temper reconcile");
     }
-    if absorbs("temper snapshot-gnome") {
+    if absorbs("temper snapshot-dconf") {
         push(
             &mut out,
             "capture the whole desktop subtree into the spec instead",
-            "temper snapshot-gnome",
+            "temper snapshot-dconf",
         );
     }
     // A failed assertion has no command: it reports a condition you resolve
@@ -1051,8 +1051,8 @@ pub fn run_drift(
         for tap in brew_trust {
             if !trusted.iter().any(|t| t == tap) {
                 findings.push(Finding {
-                    app: "trust".into(),
-                    kind: "trust",
+                    app: "brew-trust".into(),
+                    kind: "brew-trust",
                     target: format!("tap {tap}"),
                     ok: false,
                     status: "untrusted".into(),
@@ -1065,8 +1065,8 @@ pub fn run_drift(
         for tap in &trusted {
             if !brew_trust.iter().any(|t| t == tap) && !ignore.tap.iter().any(|t| t == tap) {
                 findings.push(Finding {
-                    app: "trust".into(),
-                    kind: "trust-extra",
+                    app: "brew-trust".into(),
+                    kind: "brew-trust-extra",
                     target: format!("tap {tap}"),
                     ok: false,
                     status: "trusted-extra".into(),
@@ -1080,8 +1080,8 @@ pub fn run_drift(
     let effective_ext = providers::effective_extensions(home, machine)?;
     for uuid in providers::gext_missing(&effective_ext) {
         findings.push(Finding {
-            app: "extensions".into(),
-            kind: "extension",
+            app: "gnome-extensions".into(),
+            kind: "gnome-extension",
             target: uuid,
             ok: false,
             status: "missing".into(),
@@ -1093,8 +1093,8 @@ pub fn run_drift(
     // `extensions` lives in a shared bundle that only a human should edit.
     for uuid in providers::gext_extras(&effective_ext, ignore) {
         findings.push(Finding {
-            app: "extensions".into(),
-            kind: "extension-extra",
+            app: "gnome-extensions".into(),
+            kind: "gnome-extension-extra",
             target: uuid,
             ok: false,
             status: "extra — declare in a bundle or [ignore].gext".into(),
@@ -1103,8 +1103,8 @@ pub fn run_drift(
     }
     for pkg in providers::rpm_missing(&providers::effective_rpm(home, machine)?) {
         findings.push(Finding {
-            app: "rpm".into(),
-            kind: "rpm",
+            app: "rpm-ostree".into(),
+            kind: "rpm-ostree",
             target: pkg,
             ok: false,
             status: "missing".into(),
@@ -1937,9 +1937,9 @@ mod remediation_tests {
             .iter()
             .map(|r| r.command.clone())
             .collect();
-        assert!(cmds.contains(&"temper restore-gnome".to_string())); // spec → machine
+        assert!(cmds.contains(&"temper restore-dconf".to_string())); // spec → machine
         assert!(cmds.contains(&"temper reconcile".to_string())); // spec ← machine, per key
-        assert!(cmds.contains(&"temper snapshot-gnome".to_string())); // spec ← machine, wholesale
+        assert!(cmds.contains(&"temper snapshot-dconf".to_string())); // spec ← machine, wholesale
                                                                 // dconf drift is not config drift — `install` never reloads a snapshot.
         assert!(!cmds.contains(&"temper install".to_string()));
     }
@@ -1953,7 +1953,7 @@ mod remediation_tests {
             .iter()
             .map(|r| r.command.clone())
             .collect();
-        assert!(!cmds.contains(&"temper restore-gnome".to_string()));
+        assert!(!cmds.contains(&"temper restore-dconf".to_string()));
         assert!(cmds.contains(&"temper reconcile".to_string()));
     }
 
