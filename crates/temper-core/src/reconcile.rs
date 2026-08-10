@@ -103,6 +103,151 @@ pub struct ReconcilePlan {
     pub dconf: Vec<DconfPlan>,
 }
 
+/// One candidate in a plan, tagged with what it is and where accepting it
+/// writes.
+///
+/// The plans are a field per kind, and each new provider used to mean touching
+/// every place that aggregates over them — the `--json` document, the "is there
+/// anything to do" check, the "did you pick anything" check, the counts. That is
+/// about ten sites related by nothing but attention, and three providers in a
+/// row shipped with one or two of them missed.
+///
+/// Deriving those four from a single list makes adding a provider a matter of
+/// extending `items()` and nothing else. The typed fields stay as the source of
+/// truth for the *prompt* flow, which is genuinely per-kind: what to ask about a
+/// tap is not what to ask about a desktop key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanItem {
+    /// Which list it came from — also the `--json` key it appears under.
+    pub list: &'static str,
+    /// Adding to the spec, or removing from it.
+    pub adding: bool,
+    pub target: String,
+}
+
+impl ReconcilePlan {
+    /// Every candidate this plan carries. The one place that enumerates them.
+    pub fn items(&self) -> Vec<PlanItem> {
+        let mut out = Vec::new();
+        let mut push = |list: &'static str, adding: bool, target: String| {
+            out.push(PlanItem { list, adding, target })
+        };
+        for a in &self.adds {
+            push("adds", true, a.token.clone());
+        }
+        for d in &self.drops {
+            push("drops", false, d.clone());
+        }
+        for t in &self.trust_adds {
+            push("trust_adds", true, t.clone());
+        }
+        for t in &self.trust_drops {
+            push("trust_drops", false, t.clone());
+        }
+        for g in &self.gext_adds {
+            push("gext_adds", true, g.clone());
+        }
+        for g in &self.gext_drops {
+            push("gext_drops", false, g.clone());
+        }
+        for p in &self.package_drops {
+            push("package_drops", false, p.clone());
+        }
+        for r in &self.remote_adds {
+            push("remote_adds", true, r.clone());
+        }
+        for r in &self.remote_drops {
+            push("remote_drops", false, r.clone());
+        }
+        for r in &self.rpm_adds {
+            push("rpm_adds", true, r.clone());
+        }
+        for r in &self.rpm_drops {
+            push("rpm_drops", false, r.clone());
+        }
+        for d in &self.dconf {
+            for (section, keys) in &d.sections {
+                for k in keys {
+                    push(
+                        "dconf",
+                        k.live.is_some(),
+                        format!("{}/{}", d.name, crate::dconf::key_id(section, &k.key)),
+                    );
+                }
+            }
+        }
+        out
+    }
+
+    /// Nothing to absorb or drop. Derived, so a new list cannot be forgotten
+    /// here — which is how an undeclared GNOME extension once made the whole
+    /// feature unreachable behind a "nothing to do" message.
+    pub fn is_empty(&self) -> bool {
+        self.items().is_empty()
+    }
+
+    /// Every candidate list a plan can carry, so an empty one still appears in
+    /// `--json` as `[]` rather than vanishing — a consumer should not have to
+    /// tell "no candidates" from "this temper does not have that list".
+    pub const LISTS: &'static [&'static str] = &[
+        "adds",
+        "drops",
+        "trust_adds",
+        "trust_drops",
+        "gext_adds",
+        "gext_drops",
+        "package_drops",
+        "remote_adds",
+        "remote_drops",
+        "rpm_adds",
+        "rpm_drops",
+    ];
+
+    /// The `--json` plan document, derived from `items()`.
+    ///
+    /// Derived, but deliberately the **same shape** as before: one key per list.
+    /// Nesting them under a `lists` object would have been tidier and would have
+    /// broken every consumer for no reason a consumer benefits from. `dconf`
+    /// keeps its richer per-snapshot form, because a key-level diff is not a
+    /// string.
+    pub fn to_json(&self, machine: &str) -> serde_json::Value {
+        let mut doc = serde_json::json!({
+            "machine": machine,
+            "brewfile": self.brewfile_rel,
+        });
+        for name in Self::LISTS {
+            doc[*name] = serde_json::json!([]);
+        }
+        for i in self.items() {
+            if let Some(arr) = doc.get_mut(i.list).and_then(|v| v.as_array_mut()) {
+                arr.push(serde_json::json!(i.target));
+            }
+        }
+        doc["dconf"] = serde_json::json!(self
+            .dconf
+            .iter()
+            .map(|d| {
+                let keys: Vec<_> = d
+                    .sections
+                    .iter()
+                    .flat_map(|(s, ds)| {
+                        ds.iter().map(move |k| {
+                            serde_json::json!({
+                                "section": s, "key": k.key,
+                                "id": k.id(), "status": k.status(),
+                                "change": crate::dconf::describe(k),
+                            })
+                        })
+                    })
+                    .collect();
+                serde_json::json!({ "name": d.name, "file": d.file_rel, "keys": keys })
+            })
+            .collect::<Vec<_>>());
+        doc["total"] = serde_json::json!(self.items().len());
+        doc
+    }
+}
+
 /// The Brewfile token (line) for a `(manager, name)` pair.
 pub fn token_for(manager: Manager, name: &str) -> String {
     format!("{} \"{}\"", manager.as_str(), name)
@@ -873,6 +1018,74 @@ mod tests {
         assert!(!dropped.contains("gone@x"));
         assert!(dropped.contains("keep@x"), "dropped a sibling it was not asked about");
         assert!(dropped.contains("# fleet"), "lost a comment");
+    }
+
+    /// Every list `items()` can emit appears in `LISTS`, so it reaches `--json`.
+    ///
+    /// The two are the same knowledge in two places, which is the shape that has
+    /// gone wrong repeatedly here — so it is checked rather than trusted. A list
+    /// in `items()` but not `LISTS` would be counted by the emptiness check and
+    /// invisible in the document, which is the worse of the two failures: the
+    /// run does something a `--json` consumer was never shown.
+    #[test]
+    fn every_emitted_list_is_a_declared_list() {
+        // A plan with one candidate in every field, so `items()` emits each tag.
+        let plan = ReconcilePlan {
+            brewfile_rel: Some("brewfiles/t".into()),
+            adds: vec![AddItem {
+                manager: Manager::Brew,
+                name: "jq".into(),
+                token: "brew \"jq\"".into(),
+                ignore_key: "brew",
+                ignore_value: "jq".into(),
+            }],
+            drops: vec!["brew \"gone\"".into()],
+            trust_adds: vec!["a/b".into()],
+            trust_drops: vec!["c/d".into()],
+            gext_adds: vec!["e@x".into()],
+            gext_drops: vec!["f@x".into()],
+            package_drops: vec!["brew \"loose\"".into()],
+            remote_adds: vec!["r".into()],
+            remote_drops: vec!["s https://x".into()],
+            rpm_adds: vec!["vpn".into()],
+            rpm_drops: vec!["old".into()],
+            dconf: Vec::new(),
+        };
+        for i in plan.items() {
+            assert!(
+                ReconcilePlan::LISTS.contains(&i.list),
+                "items() emits `{}`, which LISTS does not declare — it would be \
+                 counted but never appear in --json",
+                i.list
+            );
+        }
+        // …and the document really carries them all.
+        let doc = plan.to_json("t");
+        for name in ReconcilePlan::LISTS {
+            assert_eq!(
+                doc[*name].as_array().map(|a| a.len()),
+                Some(1),
+                "`{name}` did not reach the --json document"
+            );
+        }
+        assert_eq!(doc["total"], 11);
+        assert!(!plan.is_empty());
+        assert!(ReconcilePlan {
+            brewfile_rel: None,
+            adds: vec![],
+            drops: vec![],
+            trust_adds: vec![],
+            trust_drops: vec![],
+            gext_adds: vec![],
+            gext_drops: vec![],
+            package_drops: vec![],
+            remote_adds: vec![],
+            remote_drops: vec![],
+            rpm_adds: vec![],
+            rpm_drops: vec![],
+            dconf: vec![],
+        }
+        .is_empty());
     }
 
     /// A machine absorbs a tap into its OWN list, and the fleet list is

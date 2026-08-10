@@ -1888,67 +1888,18 @@ fn cmd_reconcile(
     // to drop by construction.
 
     if json && !(csw && yes) {
-        let adds: Vec<_> = plan
-            .adds
-            .iter()
-            .map(|a| serde_json::json!({ "manager": a.manager.as_str(), "name": a.name, "token": a.token }))
-            .collect();
-        let dconf_plans: Vec<_> = plan
-            .dconf
-            .iter()
-            .map(|d| {
-                let keys: Vec<_> = d
-                    .sections
-                    .iter()
-                    .flat_map(|(s, ds)| {
-                        ds.iter().map(move |k| {
-                            serde_json::json!({
-                                "section": s, "key": k.key, "id": k.id(),
-                                "status": k.status(), "change": dconf::describe(k),
-                            })
-                        })
-                    })
-                    .collect();
-                serde_json::json!({ "name": d.name, "file": d.file_rel, "keys": keys })
-            })
-            .collect();
-        println!(
-            "{}",
-            serde_json::json!({
-                "machine": m.name, "brewfile": plan.brewfile_rel,
-                "adds": adds, "drops": plan.drops,
-                "trust_adds": plan.trust_adds, "trust_drops": plan.trust_drops,
-                // Every candidate the plan carries reaches this document, or a
-                // `--json` consumer previews a reconcile that then changes
-                // something it was never shown (Principle #8's `--json` clause).
-                "gext_adds": plan.gext_adds, "gext_drops": plan.gext_drops,
-                "package_drops": plan.package_drops,
-                "rpm_adds": plan.rpm_adds, "rpm_drops": plan.rpm_drops,
-                "remote_adds": plan.remote_adds, "remote_drops": plan.remote_drops,
-                "fleet_trust_writes": fleet_trust_writes,
-                "dconf": dconf_plans
-            })
-        );
+        // Derived from the plan's own item list, so a new candidate list reaches
+        // this document by existing rather than by being remembered here.
+        let mut doc = plan.to_json(&m.name);
+        doc["fleet_trust_writes"] = serde_json::json!(fleet_trust_writes);
+        println!("{doc}");
         return Ok(());
     }
 
-    // Every candidate the plan can carry is tested here. A field left out makes
-    // its feature UNREACHABLE whenever it is the only drift present — which is
-    // what happened to `gext_adds`: reconcile reported "nothing to absorb" and
-    // returned, while `drift` listed the extensions in the same breath.
-    if plan.adds.is_empty()
-        && plan.drops.is_empty()
-        && plan.trust_adds.is_empty()
-        && plan.trust_drops.is_empty()
-        && plan.gext_adds.is_empty()
-        && plan.gext_drops.is_empty()
-        && plan.package_drops.is_empty()
-        && plan.rpm_adds.is_empty()
-        && plan.rpm_drops.is_empty()
-        && plan.remote_adds.is_empty()
-        && plan.remote_drops.is_empty()
-        && plan.dconf.is_empty()
-    {
+    // Derived from `items()`, so a list added later cannot be forgotten here.
+    // It was forgotten once, and the feature it belonged to became unreachable
+    // behind a message saying there was nothing to do.
+    if plan.is_empty() {
         // `--csw --yes` skips the JSON branch above, so this needs its own
         // guard: one unguarded line makes stdout unparseable (Principle #6b).
         if json {

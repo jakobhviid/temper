@@ -1780,27 +1780,44 @@ pub struct PrunePlan {
 }
 
 impl PrunePlan {
-    pub fn is_empty(&self) -> bool {
-        self.packages.is_empty()
-            && self.untrust.is_empty()
-            && self.extensions.is_empty()
-            && self.rpm_ostree.is_empty()
-            && self.flatpak_remotes.is_empty()
-            && self.residue.is_empty()
-            && self.retired.is_empty()
+    /// Everything this prune would act on. `residue_edited` is deliberately
+    /// absent: it is reported, never removed, so counting it would claim work
+    /// that does not happen.
+    pub fn items(&self) -> Vec<(&'static str, String)> {
+        let mut out: Vec<(&'static str, String)> = Vec::new();
+        for (m, n) in &self.packages {
+            out.push(("packages", format!("{} {n}", m.as_str())));
+        }
+        for t in &self.untrust {
+            out.push(("untrust", t.clone()));
+        }
+        for e in &self.extensions {
+            out.push(("extensions", e.clone()));
+        }
+        for r in &self.rpm_ostree {
+            out.push(("rpm_ostree", r.clone()));
+        }
+        for r in &self.flatpak_remotes {
+            out.push(("flatpak_remotes", r.clone()));
+        }
+        for r in &self.residue {
+            out.push(("residue", r.clone()));
+        }
+        for r in &self.retired {
+            out.push(("retired", r.clone()));
+        }
+        out
     }
-    /// Every item the plan would remove. Each variant that `commit_prune` acts
-    /// on is counted: a count that omits one is a silent cap (Principle #6) —
-    /// this once asked "remove 0 item(s)?" and then uninstalled three
-    /// extensions.
+
+    pub fn is_empty(&self) -> bool {
+        self.items().is_empty()
+    }
+
+    /// Every item this prune acts on. Derived, because a count that omits a
+    /// variant is a silent cap (Principle #6) — this once asked "remove 0
+    /// item(s)?" and then uninstalled three GNOME extensions.
     pub fn len(&self) -> usize {
-        self.packages.len()
-            + self.untrust.len()
-            + self.extensions.len()
-            + self.rpm_ostree.len()
-            + self.flatpak_remotes.len()
-            + self.residue.len()
-            + self.retired.len()
+        self.items().len()
     }
 }
 
