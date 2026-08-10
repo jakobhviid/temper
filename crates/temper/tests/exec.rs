@@ -210,3 +210,61 @@ fn a_slow_exec_says_what_it_is_waiting_on() {
         // Quiet-on-success still holds for the script's own output.
         .stdout(predicates::str::contains("chatter").not());
 }
+
+/// AGENTS.md question 7: a run whose changes cannot be reverted has to say so
+/// **before** you commit to it, not in the report afterwards. `--dry-run` is the
+/// preview, so the limit belongs there — and it belongs there only for steps
+/// that would actually change something, since warning about a converged
+/// `sysfile` warns about work that is not going to happen.
+#[test]
+fn a_dry_run_names_what_undo_could_not_revert() {
+    let home = TempDir::new().unwrap();
+    let fake_home = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    let h = home.path();
+
+    fs::create_dir_all(h.join("apps")).unwrap();
+    fs::create_dir_all(h.join("assets")).unwrap();
+    fs::write(h.join("assets/x.sh"), "true\n").unwrap();
+    fs::write(h.join("assets/x.conf"), "owned by temper\n").unwrap();
+    fs::write(
+        h.join("temper.toml"),
+        format!("[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
+    )
+    .unwrap();
+    // One unrevertible step (`exec`) and one journaled one (`copy`), both of
+    // which would change something on this untouched machine.
+    fs::write(
+        h.join("apps/demo.toml"),
+        "[[step]]\nexec = \"assets/x.sh\"\nrun = \"always\"\n\n\
+         [[step]]\ncopy = \"assets/x.conf\"\nto = \"~/x.conf\"\n",
+    )
+    .unwrap();
+
+    let out = temper(h, fake_home.path(), state.path())
+        .args(["install", "--dry-run", "--json"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let un = v["unrevertible"].as_array().expect("unrevertible in --json");
+    assert_eq!(
+        un.len(),
+        1,
+        "the exec should be named and the copy should not: {un:?}"
+    );
+    assert!(
+        un[0].as_str().unwrap().contains("assets/x.sh"),
+        "the reason must name the step, got {:?}",
+        un[0]
+    );
+    // The dry run wrote nothing, so the forecast has to read like one.
+    temper(h, fake_home.path(), state.path())
+        .args(["install", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("would not be able to revert"));
+    assert!(
+        !fake_home.path().join("x.conf").exists(),
+        "a dry run must not deploy anything"
+    );
+}

@@ -1047,6 +1047,17 @@ fn cmd_eq_import(json: bool) -> Result<()> {
     Ok(())
 }
 
+/// How to phrase `undo`'s limits. A dry run is a forecast, so the same list has
+/// to read as one — "cannot revert" on a run that has not happened yet invites
+/// the reader to go looking for changes nothing made.
+fn undo_cannot(dry_run: bool) -> &'static str {
+    if dry_run {
+        "would not be able to revert"
+    } else {
+        "cannot revert"
+    }
+}
+
 fn cmd_install(
     machine: Option<String>,
     dry_run: bool,
@@ -1116,13 +1127,14 @@ fn cmd_install(
         } else {
             "converged"
         };
+        let cannot = undo_cannot(dry_run);
         println!(
             "install-missing {}: {verb} {} declared package(s), config skipped",
             m.name, r.packages
         );
         if !r.unrevertible.is_empty() {
             println!(
-                "  {} {} change(s) `temper undo` cannot revert:",
+                "  {} {} change(s) `temper undo` {cannot}:",
                 ui::yellow(ui::g_warn()),
                 r.unrevertible.len()
             );
@@ -1134,6 +1146,7 @@ fn cmd_install(
             println!("  ! reboot required (rpm-ostree layered a package)");
         }
     } else {
+        let cannot = undo_cannot(dry_run);
         // "applied 11 of 44" read as "applied 11, left 33 alone" — the opposite of
         // what happened: all 44 were applied and 11 of them changed something. Both
         // numbers are worth having, so state each as what it is. A dry run applies
@@ -1161,7 +1174,7 @@ fn cmd_install(
         println!("install {}: {} package(s), {steps}", m.name, r.packages);
         if !r.unrevertible.is_empty() {
             println!(
-                "  {} {} change(s) `temper undo` cannot revert:",
+                "  {} {} change(s) `temper undo` {cannot}:",
                 ui::yellow(ui::g_warn()),
                 r.unrevertible.len()
             );

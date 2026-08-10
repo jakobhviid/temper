@@ -300,16 +300,18 @@ brew/flatpak **upgrade** phase of `update` (reverting one means pinning a prior
 version whose bottle or commit may be gone), and the deliberately-unjournaled
 `setkey(defaults)` (`defaults read` loses the value's type), `sysfile` and `exec`.
 
-Per AGENTS.md question 7 those limits belong in the plan preview, before the user
-confirms — no code answers that yet.
+Those limits are named in the **plan**, not the report. `install --dry-run` lists
+every step it would change that `undo` could not revert, each with its reason, so
+the answer arrives while the run is still a forecast (AGENTS.md question 7). Only
+steps that would actually change something are listed: an in-sync `sysfile` costs
+nothing and is not a limit anyone has to weigh.
+
 - **col 4, `dconf`** — `restore` is excluded from `install`/`update`, which is a
   symptom of the recording model, not a property of the store (see below).
 - **col 4, `profile`** — its apply is a GUI dialog a human must approve, so it
   cannot converge unattended or headless.
 - **col 9, files/profile** — one direction only: there is no extras direction,
   because of col 11.
-- **col 10, packages** — the journal covers file and key writes; a package
-  install is not revertible, and that is not currently said before you confirm.
 - **`block` residue is the region, not the file.** The file belongs to the user —
   a `.zshrc` — so retiring a block is an *edit*: the marker-delimited region is
   removed and the file stays. The ledger records `(file, marker)` and hashes the

@@ -443,6 +443,11 @@ Reverts file writes (`copy`/`block`/`setkey` json/toml/ini), `setkey(dconf)`
 values, and a whole-subtree `restore-gnome` (undo resets the subtree and reloads your
 prior dump — a bare reload would leave behind every key the restore introduced).
 `setkey(defaults)`, `sysfile`, and `exec` aren't journaled — undo skips them.
+You find that out **before** the run rather than after: `temper install
+--dry-run` lists each step it would change that `undo` could not revert, with the
+reason (`assets/setup.sh — an \`exec\` runs arbitrary code; temper cannot know
+what to undo`), so "can I take this back?" is answered while the run is still a
+forecast.
 Every revert is guarded: if the target changed since, it's skipped, not
 clobbered. For a subtree the guard is the **strip-filtered** dump, so ordinary
 desktop churn in stripped keys doesn't quietly disqualify the undo.

@@ -1691,6 +1691,14 @@ pub fn run_install(
             if step_would_change(home, machine, step, vars)? {
                 changed += 1;
                 cl.noted(&format!("would apply {label}"));
+                // AGENTS.md question 7: what `undo` cannot revert has to be
+                // said while the run is still a forecast. Collected only for
+                // steps that would actually change something — listing a
+                // converged `sysfile` as unrevertible warns about work that
+                // is not going to happen.
+                if let Some(why) = unrevertible_reason(step) {
+                    unrevertible.push(format!("{} — {why}", label.trim()));
+                }
             }
         } else {
             let started = std::time::Instant::now();
