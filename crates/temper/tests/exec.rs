@@ -158,7 +158,10 @@ fn exec_output_is_quiet_unless_verbose_or_failing() {
         .stdout(predicates::str::contains("NOTHING_TO_UPDATE"));
 
     // A failing exec replays its captured output even when quiet, so the error
-    // is debuggable, and the run fails loudly.
+    // is debuggable, and the run fails loudly — on **stderr**. A failing
+    // script's stdout is diagnostic output about the failure, not temper's
+    // answer to the command, and putting it on stdout meant a failing `install
+    // --json` emitted a script's chatter where the document belonged.
     fs::write(
         h.join("scripts/chatty.sh"),
         "echo BOOM_DETAIL\nexit 3\n",
@@ -168,7 +171,8 @@ fn exec_output_is_quiet_unless_verbose_or_failing() {
         .arg("install")
         .assert()
         .failure()
-        .stdout(predicates::str::contains("BOOM_DETAIL"));
+        .stderr(predicates::str::contains("BOOM_DETAIL"))
+        .stdout(predicates::str::contains("BOOM_DETAIL").not());
 }
 
 /// A captured script that runs long must say which step the run is waiting on.

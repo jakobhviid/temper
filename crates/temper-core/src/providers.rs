@@ -431,7 +431,13 @@ fn run_with_spinner(mut cmd: Command, what: &str, initial: &str) -> Result<(bool
 /// Returns whether the child succeeded.
 fn run_child(mut cmd: Command, verbose: bool, what: &str, initial: &str) -> bool {
     if verbose {
-        // The user asked to see it — stream live, exactly as before.
+        // The user asked to see it — stream live. But `--verbose` and `--json`
+        // are both global, so under JSON a streamed child would write its output
+        // into the document (Principle #6b). Send it to stderr instead: still
+        // live, still complete, and stdout stays the machine-readable channel.
+        if crate::ui::json_mode() {
+            cmd.stdout(stderr_stdio());
+        }
         return cmd.status().map(|s| s.success()).unwrap_or(false);
     }
     match run_with_spinner(cmd, what, initial) {
@@ -448,6 +454,19 @@ fn run_child(mut cmd: Command, verbose: bool, what: &str, initial: &str) -> bool
             false
         }
     }
+}
+
+/// A `Stdio` pointing at this process's stderr, so a streamed child can be seen
+/// without being mistaken for temper's stdout.
+fn stderr_stdio() -> Stdio {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsFd;
+        if let Ok(fd) = std::io::stderr().as_fd().try_clone_to_owned() {
+            return Stdio::from(fd);
+        }
+    }
+    Stdio::null()
 }
 
 /// The casks in `effective` that Homebrew will need **root** for — those with a
@@ -698,6 +717,9 @@ pub fn untrust_taps(taps: &[String]) -> Result<()> {
     for t in taps {
         cmd.arg(t);
     }
+    if crate::ui::json_mode() {
+        cmd.stdout(stderr_stdio());
+    }
     if !cmd.status().map(|s| s.success()).unwrap_or(false) {
         eprintln!(
             "{} brew untrust failed — {} tap(s) may still be trusted",
@@ -911,11 +933,15 @@ pub fn prune_apply(
                 flags.push(flag);
             }
         }
+        // Streamed on purpose: prune is destructive, confirmed, and the user
+        // is watching it happen. Under `--json` that stream would land in the
+        // document, so it goes to stderr instead.
         let status = Command::new("brew")
             .args(["bundle", "cleanup", "--force"])
             .args(&flags)
             .arg("--file")
             .arg(&tmp)
+            .stdout(if crate::ui::json_mode() { stderr_stdio() } else { Stdio::inherit() })
             .status()
             .context("running brew bundle cleanup")?;
         let _ = fs::remove_file(&tmp);
@@ -964,7 +990,11 @@ pub fn prune_apply(
         }
         // Streamed on purpose (unlike the converge children): `prune` is manual,
         // confirmed and destructive, the user is at the keyboard, and *what was
-        // removed* is the deliverable. Only the discarded exit code was a bug.
+        // removed* is the deliverable. Under `--json` the same stream would land
+        // in the document, so there it goes to stderr.
+        if crate::ui::json_mode() {
+            cmd.stdout(stderr_stdio());
+        }
         if !cmd.status().map(|s| s.success()).unwrap_or(false) {
             eprintln!(
                 "{} flatpak uninstall failed — {} extra(s) may remain",

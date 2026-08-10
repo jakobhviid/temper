@@ -672,7 +672,12 @@ pub fn exec_apply(
             .with_context(|| format!("running {}", script.display()))?;
         if !out.status.success() {
             use std::io::Write;
-            let _ = std::io::stdout().write_all(&out.stdout);
+            // BOTH streams go to stderr. A failing script's stdout is diagnostic
+            // output about the failure, not temper's answer to the command —
+            // and writing it to stdout made `temper install --json` emit a
+            // script's chatter where a JSON document belonged, so a run that
+            // failed also became unparseable (Principle #6b).
+            let _ = std::io::stderr().write_all(&out.stdout);
             let _ = std::io::stderr().write_all(&out.stderr);
             bail!("exec {} failed ({})", script.display(), out.status);
         }
