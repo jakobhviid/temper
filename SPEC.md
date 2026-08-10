@@ -7,6 +7,35 @@ This documents the **actual** parsed schema (the serde structs in
 A temper-home folder holds `temper.toml`, `apps/<name>.toml` bundles, and the
 asset files they reference.
 
+## Where a declaration lives decides what can happen to it
+
+Read this before adding anything, because it answers most "can temper do X?"
+questions mechanically. Every declaration sits at one of two scopes, and the
+scope — not the category — decides which verbs may touch it.
+
+**Fleet / group scope** — `[brew-trust]`, `[ignore]`, and everything in an
+`apps/<name>.toml` bundle. It describes a *group* a machine belongs to (its `os`,
+its `role`, the bundles it composes). Verbs: **drift and install. Conform.**
+`reconcile` will never add to it or remove from it, because doing that from one
+machine silently changes every other machine in the group.
+
+**Per-machine scope** — the `[[machine]]` block and the files it names (its
+`brewfile`, its snapshots). It describes one box. Verbs: **drift, install, prune,
+and reconcile in both directions** — this is the part you are meant to edit from
+the machine itself.
+
+Removal works at both scopes; what differs is *who edits the declaration*. At
+fleet scope you edit the shared spec and commit — then every machine's `prune`
+enacts it, because the item is now declared nowhere. At machine scope
+`reconcile` does the same edit for that one box. So `prune` is the enactment
+mechanism either way, and it only ever removes what **neither** scope declares.
+
+Consequently: **a category you want to control per machine must be declared at
+machine scope.** Declaring it in a bundle means every machine in the group gets
+it and no single machine may opt out — which is correct, and is the point of a
+bundle. Both scopes exist for every category for exactly this reason; see
+ARCHITECTURE, "Scope decides the verb set" and "The feature interface".
+
 ## `temper.toml`
 
 ```toml
@@ -164,10 +193,17 @@ it as `[brew].trust` (see `[brew].trust` above).
 > and drift reports image-baked items status-only, so a Bazzite box doesn't list
 > seventeen you never chose. Silence one with `[ignore].gext`.
 >
-> A gext extra is **reported, never absorbed**: `extensions` lives in a shared
-> app-bundle, and `reconcile` edits only the machine's own files — adopting one
-> automatically would silently change every machine composing that bundle. Where
-> it belongs is a hand edit, so `--current-state-wins` leaves it alone too.
+> `reconcile` handles **both** directions against the machine's own
+> `[[machine]].extensions` list: it offers to declare an installed extension no
+> bundle claims, and to drop one this machine declares but no longer has. A
+> bundle's `extensions` is shared by every machine composing it, so neither edit
+> ever touches one — a bundle-declared extension that is absent stays a hand
+> edit, and drift names the file.
+>
+> Both directions are computed only where `gnome-extensions` actually ran and
+> answered. On a host that cannot enumerate, "declared but absent" and "I cannot
+> tell" are the same observation, and acting on the second would delete a list
+> the machine simply could not see.
 
 ## `apps/<name>.toml` (a bundle)
 

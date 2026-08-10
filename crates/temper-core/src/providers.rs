@@ -810,33 +810,69 @@ pub fn effective_extensions(home: &Path, machine: &Machine) -> Result<Vec<String
     Ok(out)
 }
 
-fn gext_installed() -> Vec<String> {
-    // `gnome-extensions list` prints one UUID per line.
-    if have("gnome-extensions") {
-        run_lines("gnome-extensions", &["list"]).unwrap_or_default()
-    } else {
-        Vec::new()
+/// What this host can do about GNOME extensions — answered **once**, and
+/// consulted by every cell of the matrix.
+///
+/// The two abilities are genuinely independent, which is why one predicate is
+/// not enough and five ad-hoc ones were far too many. `gnome-extensions` ships
+/// with gnome-shell and can only **enumerate**; `gext` is a separate install and
+/// is the only thing that can install or uninstall. Conflating them produced a
+/// host — GNOME with `gnome-extensions` but no `gext`, the ordinary case — where
+/// `drift` reported missing extensions forever and `install --packages-only`
+/// silently did nothing about them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GextCaps {
+    /// Can enumerate what is installed. Required before **any** finding: on a
+    /// host that cannot look, "declared but absent" and "I cannot tell" are the
+    /// same observation, and only one of them may be acted on.
+    pub observe: bool,
+    /// Can install and uninstall. Required before naming a converge verb.
+    pub converge: bool,
+}
+
+pub fn gext_caps() -> GextCaps {
+    GextCaps {
+        observe: have("gnome-extensions"),
+        converge: have("gext"),
     }
+}
+
+/// `gnome-extensions list [args]`, three-valued: `None` means *could not ask*
+/// (tool absent, or it failed), which is not the same fact as an empty list.
+///
+/// This mirrors `trusted_taps` — the one place in the tree that already models
+/// capability as "the tool ran and said nothing" vs "I could not ask". Folding
+/// the two together is what lets an absent lister read as "nothing installed",
+/// and from there as "every declared extension is missing".
+fn gext_list(args: &[&str]) -> Option<Vec<String>> {
+    if !gext_caps().observe {
+        return None;
+    }
+    let out = Command::new("gnome-extensions").args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+    )
 }
 
 /// Extensions installed in the **user** scope (`~/.local/share/...`). System
 /// ones are excluded on purpose: those ship with the image, and drift reports
 /// image-baked items status-only rather than as something you failed to declare.
-fn gext_installed_user() -> Vec<String> {
-    if have("gnome-extensions") {
-        run_lines("gnome-extensions", &["list", "--user"]).unwrap_or_default()
-    } else {
-        Vec::new()
-    }
+fn gext_installed_user() -> Option<Vec<String>> {
+    gext_list(&["list", "--user"])
 }
 
-/// User-installed extensions that no bundle declares — the extras direction,
-/// which every other manager already reports. Honors `[ignore].gext`.
+/// User-installed extensions no bundle or machine declares — the extras
+/// direction. Honors `[ignore].gext`.
 ///
-/// Report-only by design: `extensions` lives in a **shared bundle**, and
-/// reconcile edits only the machine's own files, so absorbing one automatically
-/// would silently change every machine that composes that bundle. Deciding where
-/// it belongs is a hand edit.
+/// Absorbed by `reconcile` into the machine's **own** `extensions` list; a
+/// bundle's list is shared, so that is where an absorb must never land.
 ///
 /// Gated on the machine declaring at least one extension, exactly like every
 /// other manager (SPEC's probe invariant). Without that gate a spec that doesn't
@@ -844,15 +880,22 @@ fn gext_installed_user() -> Vec<String> {
 /// hand-installed extension on the host, making drift depend on the machine
 /// rather than the spec. Declaring one opts in.
 pub fn gext_extras(effective: &[String], ignore: &manifest::Ignore) -> Vec<String> {
-    if effective.is_empty() || !have("gnome-extensions") {
+    if effective.is_empty() {
         return Vec::new();
     }
-    gext_extras_from(&gext_installed_user(), effective, &ignore.gext)
+    let Some(installed_user) = gext_installed_user() else {
+        return Vec::new();
+    };
+    gext_extras_from(&installed_user, effective, &ignore.gext)
 }
 
 /// The set logic behind `gext_extras`, split from the shell-out so it is
 /// unit-testable: user-installed, minus declared, minus ignored, sorted.
-fn gext_extras_from(installed_user: &[String], effective: &[String], ignore: &[String]) -> Vec<String> {
+fn gext_extras_from(
+    installed_user: &[String],
+    effective: &[String],
+    ignore: &[String],
+) -> Vec<String> {
     let mut out: Vec<String> = installed_user
         .iter()
         .filter(|u| !effective.contains(u) && !ignore.contains(u))
@@ -862,17 +905,55 @@ fn gext_extras_from(installed_user: &[String], effective: &[String], ignore: &[S
     out
 }
 
-/// Declared extensions not installed. Empty (no-op) where GNOME isn't present.
+/// Declared extensions that are not installed.
+///
+/// Requires the **lister**, not the installer: a host with `gext` alone cannot
+/// enumerate, so it would report every declared extension as missing. That was
+/// the old predicate, and it made drift permanently red on a host where the
+/// named remedy provably could not work.
 pub fn gext_missing(effective: &[String]) -> Vec<String> {
-    if effective.is_empty() || (!have("gext") && !have("gnome-extensions")) {
+    if effective.is_empty() {
         return Vec::new();
     }
-    let installed = gext_installed();
-    effective
+    let Some(installed) = gext_list(&["list"]) else {
+        return Vec::new();
+    };
+    gext_absent_from(&installed, effective)
+}
+
+/// Extensions a machine declares in its **own** `extensions` list that are not
+/// installed — the undeclare cell, and the answer to "I removed this on purpose
+/// and every converge puts it back".
+///
+/// Machine-scope only, for the reason every absorb is machine-scope: a bundle's
+/// `extensions` is shared, so dropping one there from a single box would change
+/// every machine composing that bundle. A bundle-declared extension that is
+/// absent stays a hand edit — and `drift` now names the file.
+///
+/// Requires the lister, for the same reason `gext_missing` does, but the stakes
+/// are higher in this direction: on a host that cannot enumerate, an unguarded
+/// drop would offer to delete the machine's entire declared list.
+pub fn gext_machine_absent(machine_own: &[String]) -> Vec<String> {
+    if machine_own.is_empty() {
+        return Vec::new();
+    }
+    let Some(installed) = gext_list(&["list"]) else {
+        return Vec::new();
+    };
+    gext_absent_from(&installed, machine_own)
+}
+
+/// Declared minus installed, sorted and de-duplicated — the set logic behind
+/// both absent-direction queries, split from the shell-out so it is testable.
+fn gext_absent_from(installed: &[String], declared: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = declared
         .iter()
         .filter(|e| !installed.contains(e))
         .cloned()
-        .collect()
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// Uninstall user-scope extensions via `gext` — the prune side of gext, so an
@@ -882,7 +963,7 @@ pub fn gext_uninstall(uuids: &[String]) -> Result<()> {
     if uuids.is_empty() {
         return Ok(());
     }
-    if !have("gext") {
+    if !gext_caps().converge {
         bail!("gext not found — cannot uninstall GNOME extensions on this host");
     }
     let mut failed = Vec::new();
@@ -909,10 +990,24 @@ pub fn gext_uninstall(uuids: &[String]) -> Result<()> {
 /// stand in temper's output as if it were temper speaking. A failure is warned
 /// and skipped — one unavailable extension must not fail a converge.
 pub fn gext_converge(effective: &[String], dry_run: bool, verbose: bool) -> Result<()> {
-    if dry_run || !have("gext") {
+    if dry_run {
         return Ok(());
     }
+    // No installer: say so instead of returning quietly. Silence here meant
+    // `drift` reported missing extensions, named `install --packages-only` as
+    // the fix, and the converge that ran did nothing and reported nothing —
+    // a permanent red with no way to learn why (Principle #6).
     let missing = gext_missing(effective);
+    if !gext_caps().converge {
+        if !missing.is_empty() {
+            eprintln!(
+                "{} gext not found — {} declared GNOME extension(s) cannot be installed on this host",
+                crate::ui::yellow(crate::ui::g_warn()),
+                missing.len()
+            );
+        }
+        return Ok(());
+    }
     let pb = (!verbose && !missing.is_empty())
         .then(|| crate::ui::spinner_counted(missing.len() as u64, "GNOME extensions"));
     for uuid in &missing {
@@ -996,6 +1091,26 @@ mod progress_tests {
     /// only — system extensions ship with the image, and drift reports
     /// image-baked items status-only rather than as something you failed to
     /// declare (this is what keeps a Bazzite box from listing seventeen).
+    #[test]
+    fn declared_minus_installed_is_sorted_and_deduped() {
+        let installed = vec!["here@x".to_string()];
+        let declared = vec![
+            "gone@x".to_string(),
+            "here@x".to_string(),
+            "also@x".to_string(),
+            "gone@x".to_string(),
+        ];
+        assert_eq!(
+            gext_absent_from(&installed, &declared),
+            vec!["also@x".to_string(), "gone@x".to_string()]
+        );
+        // Nothing declared for this machine → nothing to drop, whatever is on
+        // the host. The machine's OWN list is the candidate set, which is also
+        // why `init` (a machine block it just created empty) cannot drop.
+        assert!(gext_absent_from(&installed, &[]).is_empty());
+        assert!(gext_machine_absent(&[]).is_empty());
+    }
+
     #[test]
     fn gext_extras_are_user_scope_minus_declared_minus_ignored() {
         let installed_user = vec![

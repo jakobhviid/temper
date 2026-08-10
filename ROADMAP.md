@@ -16,6 +16,62 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 
 ---
 
+## Scope-model gaps (known, ranked, each one a filled ⚠ or ❌ in the feature matrix)
+
+The feature matrix in `ARCHITECTURE.md` shows where each feature stands against
+the eleven-column interface. These are the open cells, worst first. Every one is
+a *verified* gap, not a suspicion.
+
+1. **`[brew-trust]` and `[ignore]` are fleet-only, and `reconcile` edits them.**
+   Scope says a machine may never change a group declaration, so the fix is a
+   machine-scope counterpart for each, not removing the prompt. Both also lack the
+   `os`/`role` gate a bundle has, so a declaration that is only meaningful on some
+   machines is permanently red on the rest. Schema change → sequence with the
+   folder-skew path (`load_bundle`) so a staggered fleet does not hard-error.
+2. **`packages::effective_set` never calls `manifest::gated`.** A bundle gated
+   `os = "linux"` still contributes its `packages` — including `flatpak` lines —
+   to a Mac that composes it, where they are permanently missing with a
+   remediation that cannot help. `SPEC.md` currently documents the gate as
+   applying to `extensions`/`rpm` only, so changing it is a behaviour change
+   (`feat!:`) and needs a decision, not a patch.
+3. **`manifest::gated`'s role clause fails open.** It only fires when *both* sides
+   declare a `role`, and a machine's `role` is optional — so a machine that omits
+   it composes every `role = "desktop"` bundle and layers its extensions and rpms,
+   which is exactly what that gate exists to prevent. Behaviour change → `feat!:`.
+4. **`[[machine]].packages` cannot be dropped.** `reconcile` scans the Brewfile
+   only, so a loose machine-scope package is machine scope with no remove cell.
+5. **`rpm-ostree` scores 3 of 11.** No machine-scope list, no extras direction, no
+   ignore list, and `rpm -q` answers about the *booted* deployment — so a layered
+   package reads missing until reboot. `rpm-ostree status --json` exposes both the
+   staged deployment and `requested-packages`, which turns the extras direction
+   from "impossible" into "an unread field".
+6. **`flatpak` does not model user vs system scope.** `prune` can therefore try to
+   remove a system flatpak, which needs polkit and over SSH hangs. `gext` draws
+   this distinction deliberately; flatpak has the same image-baked baseline
+   problem and papers over it with `[ignore]`.
+7. **`[ignore]` is writable for two of its seven lists.** drift honours all seven;
+   only `flatpak` and `tap` can be written by a verb, while the drift status for a
+   GNOME extension extra tells the user to use `[ignore].gext`.
+8. **No deployment ledger, so the file primitives score zero on residue.** Remove
+   a `copy` step and its file stays on every machine forever, with no extras
+   direction to report it. See "Retirement" in `ARCHITECTURE.md` for the shape.
+9. **`configure set|unset` writes `temper.toml` without firing the repo hook**, so
+   a git-backed folder is left silently dirty by it.
+10. **`prune` inherits brew's cleanup defaults.** temper passes no type flags, so
+    which categories get cleaned depends on the user's
+    `HOMEBREW_BUNDLE_CLEANUP_NO_*` environment. Previewed-then-silently-skipped is
+    a silent cap (Principle #6); pass the explicit flags for what is being pruned.
+11. **Missing structural tests**: nothing asserts that every plan field reaches
+    the `--json` document, the emptiness check and the selection check; and
+    nothing asserts that a folder-writing verb fires `after_repo_change`. Both
+    classes have shipped defects.
+
+**Sequencing note.** Build the settings-backend seam only after a *second real
+consumer* exists. Flatpak overrides (`~/.local/share/flatpak/overrides/<app>`) is
+the best candidate — sectioned key=value, one file per app, no cascade, no flag
+syntax, no reload problem — and is valuable to a Linux fleet on its own. KDE is
+the worst candidate to shape a seam around, because every hard case lives there.
+
 ## Deferred features (buildable — just not built yet)
 
 *(none open — the deferred batch has shipped: per-machine vars + `{{ brew_prefix }}`,

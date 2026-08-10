@@ -675,11 +675,88 @@ pub fn load_fleet(home: &Path) -> Result<TemperToml> {
     }
 }
 
+/// Load a bundle, with the same version-skew story `load_fleet` has.
+///
+/// Every struct here carries `deny_unknown_fields`, so a folder written by a
+/// newer temper — one whose bundles use a field this binary has never heard of —
+/// fails to parse. `temper.toml` has always turned that into "upgrade temper";
+/// bundles turned it into a raw TOML error with no hint, which is the wrong half
+/// to leave bare: new gates and new step primitives land in `apps/*.toml`, and a
+/// fleet on staggered updates would hit it on every machine at once.
+///
+/// The stamp lives in `temper.toml` (a bundle carries none), so that is where
+/// the answer is read from — the folder is stamped as a whole.
 pub fn load_bundle(home: &Path, name: &str) -> Result<Bundle> {
     let p = home.join("apps").join(format!("{name}.toml"));
     let s =
         std::fs::read_to_string(&p).with_context(|| format!("reading bundle {}", p.display()))?;
-    toml::from_str(&s).with_context(|| format!("parsing {}", p.display()))
+    match toml::from_str::<Bundle>(&s) {
+        Ok(b) => Ok(b),
+        Err(e) => {
+            if let Ok(fleet) = std::fs::read_to_string(home.join("temper.toml")) {
+                let mode = peek_update_mode(&fleet);
+                if mode != UpdateMode::Off {
+                    if let Some(stamp) = peek_version_stamp(&fleet) {
+                        if version_is_newer(&stamp, VERSION) {
+                            return Err(NewerVersion {
+                                required: stamp,
+                                running: VERSION.to_string(),
+                                mode,
+                                parse_error: format!("{}: {e}", p.display()),
+                            }
+                            .into());
+                        }
+                    }
+                }
+            }
+            Err(e).with_context(|| format!("parsing {}", p.display()))
+        }
+    }
+}
+
+#[cfg(test)]
+mod bundle_skew_tests {
+    use super::*;
+
+    /// A bundle written by a NEWER temper must raise the upgrade path, not a
+    /// bare TOML error. `temper.toml` has always done this; bundles are where
+    /// new gates and step primitives actually land, so leaving them bare turned
+    /// a staggered fleet update into an outage with no guidance.
+    #[test]
+    fn a_newer_folders_bundle_asks_you_to_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::create_dir_all(home.join("apps")).unwrap();
+        std::fs::write(
+            home.join("temper.toml"),
+            "temper_version = \"9999.0.0\"\n",
+        )
+        .unwrap();
+        // A field this binary has never heard of — `deny_unknown_fields` rejects it.
+        std::fs::write(
+            home.join("apps").join("x.toml"),
+            "a_field_from_the_future = true\n",
+        )
+        .unwrap();
+        let err = load_bundle(home, "x").unwrap_err();
+        assert!(
+            err.downcast_ref::<NewerVersion>().is_some(),
+            "expected the upgrade path, got: {err}"
+        );
+    }
+
+    /// …and a genuine authoring mistake, on a folder that is NOT newer, still
+    /// surfaces as the parse error the author has to see.
+    #[test]
+    fn a_plain_mistake_is_still_a_plain_parse_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::create_dir_all(home.join("apps")).unwrap();
+        std::fs::write(home.join("temper.toml"), "temper_version = \"0.0.1\"\n").unwrap();
+        std::fs::write(home.join("apps").join("x.toml"), "typo_here = true\n").unwrap();
+        let err = load_bundle(home, "x").unwrap_err();
+        assert!(err.downcast_ref::<NewerVersion>().is_none());
+    }
 }
 
 /// A machine's effective git settings: a `[machine.git]` wholly overrides the

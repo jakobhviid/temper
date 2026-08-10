@@ -7,11 +7,16 @@
 //! plan/confirm gate on top.
 //!
 //! Design rules that hold across the crate (see ../../PRINCIPLES.md):
-//! - Closed primitive set; open app library. New primitive = big deal.
+//! - Three sets: primitives are closed (new one = big deal), app-bundles are
+//!   free config, providers are open behind the eleven-column interface.
+//! - Scope decides the verb set: a fleet declaration is drift + install; a
+//!   machine declaration adds prune + reconcile. `prune` enacts removal at both.
+//! - Capability is per cell, and absence you could not observe is not evidence.
 //! - Every mutation is plan → apply → drift → undo, and journaled.
 //! - Packages compose at declaration time, converge as one whole-machine call.
 //! - Gate config on reality (a presence probe), not intent.
-//! - Nothing is enforced without a drift story.
+//! - Nothing is enforced without a drift story, and nothing is reported without
+//!   a resolution story.
 //!
 //! The ReinstallScripts migration this crate grew out of is complete: every
 //! module below is implemented and exercised end-to-end (see ../../README.md).

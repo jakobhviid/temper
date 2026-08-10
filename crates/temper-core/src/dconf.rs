@@ -341,19 +341,70 @@ pub fn describe(d: &KeyDiff) -> String {
 
 /// What a snapshot's live state looks like versus its file.
 pub enum SnapshotState {
-    /// No `dconf` on this host — the snapshot can't be evaluated (a Mac).
-    NoDconf,
+    /// The store could not be read here, and why. **Not** the same fact as "the
+    /// subtree is empty", which is what the old `which("dconf")`-only guard
+    /// silently turned it into.
+    Unobservable(String),
     /// The snapshot file doesn't exist yet — nothing has been captured.
     Uncaptured,
     /// Key-level differences (empty = in sync).
     Diffs(Vec<KeyDiff>),
 }
 
+/// Whether the dconf store can actually be read on this host, and if not, why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Store {
+    Readable,
+    Unreadable(String),
+}
+
+/// The dconf user database `dconf dump` would read, when it can be located by
+/// convention. `None` means a custom `DCONF_PROFILE` is in play, where the
+/// database is whatever that profile names — trust it rather than guess.
+fn user_db() -> Option<std::path::PathBuf> {
+    if std::env::var_os("DCONF_PROFILE").is_some() {
+        return None;
+    }
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))?;
+    Some(base.join("dconf").join("user"))
+}
+
+/// The one observability check every dconf read passes through — drift, capture
+/// and reconcile alike.
+///
+/// `which("dconf")` is not evidence of anything. dconf is the GSettings
+/// backend, so the binary is present on any Linux box with GLib apps installed,
+/// including a KDE or COSMIC one; and on a host where this user has no dconf
+/// database, `dconf dump` exits **0 printing nothing**. Both cases used to
+/// arrive at the read path as "the subtree is empty", which every write path
+/// then treats as "delete everything the spec captured" — `snapshot-gnome`
+/// overwrites the file with zero bytes, `reconcile --csw` absorbs every key as
+/// a drop, and `after_repo_change` commits the result.
+///
+/// The dangerous cases this rejects are ordinary, not exotic: a machine reached
+/// over SSH before its first graphical login, a fresh account, a box whose
+/// desktop is not GNOME, and `sudo temper …` — which reads **root's** dconf
+/// database, not yours.
+pub fn observe() -> Store {
+    if which("dconf").is_none() {
+        return Store::Unreadable("dconf is not installed on this host".into());
+    }
+    match user_db() {
+        Some(p) if !p.is_file() => Store::Unreadable(format!(
+            "no dconf database at {} — this user has no desktop session on this host",
+            p.display()
+        )),
+        _ => Store::Readable,
+    }
+}
+
 /// Compare one declared snapshot against live dconf, filtering **both** sides
 /// through its `strip` list so a stripped key never reads as drift.
 pub fn snapshot_state(home: &Path, snap: &DconfSnapshot) -> Result<SnapshotState> {
-    if which("dconf").is_none() {
-        return Ok(SnapshotState::NoDconf);
+    if let Store::Unreadable(why) = observe() {
+        return Ok(SnapshotState::Unobservable(why));
     }
     let src = home.join(&snap.file);
     if !src.is_file() {
@@ -394,8 +445,16 @@ fn dump_raw(path: &str) -> Result<String> {
 /// journaled so `undo` reverts them. Returns the written paths. No-op where
 /// `dconf` is absent — callers that should fail loudly check first.
 pub fn capture(home: &Path, machine: &Machine, journal: &mut Journal) -> Result<Vec<PathBuf>> {
-    if machine.dconf.is_empty() || which("dconf").is_none() {
+    if machine.dconf.is_empty() {
         return Ok(Vec::new());
+    }
+    // The write side needs the guard MORE than the read side, not less: capture
+    // overwrites the snapshot unconditionally, has no preview and no confirm,
+    // and `after_repo_change` commits — so an unreadable store here publishes an
+    // empty spec to the whole fleet in one command. It is also the command
+    // `drift` tells you to run for `dconf-uncaptured`.
+    if let Store::Unreadable(why) = observe() {
+        bail!("cannot capture dconf: {why}");
     }
     let mut written = Vec::new();
     for snap in &machine.dconf {
@@ -422,8 +481,11 @@ pub fn restore(home: &Path, machine: &Machine, dry_run: bool) -> Result<Vec<Path
     if machine.dconf.is_empty() {
         return Ok(Vec::new());
     }
-    if which("dconf").is_none() {
-        bail!("dconf not found — cannot restore a dconf snapshot on this host");
+    // A restore captures the machine's prior state first so `undo` can revert
+    // it; on an unreadable store that "prior state" would be empty, making the
+    // undo a lie. Refuse rather than record a revert that restores nothing.
+    if let Store::Unreadable(why) = observe() {
+        bail!("cannot restore a dconf snapshot: {why}");
     }
     let mut loaded = Vec::new();
     // Per-snapshot progress: a restore overwrites live desktop state, so which

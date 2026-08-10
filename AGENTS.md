@@ -24,11 +24,16 @@ in this repository.
 
 ## Documentation is load-bearing — keep it in sync with the code
 
-`SPEC.md`, `WORKFLOWS.md`, `ARCHITECTURE.md`, `README.md`, and `PRINCIPLES.md`
-are **compiled into `temper --llm`** (see `crates/temper/src/main.rs`) — that
-guide is how humans *and* LLMs learn to operate and author a temper folder. Stale
-docs don't just read wrong; they actively mislead every downstream agent that
-builds a spec from them.
+`SPEC.md`, `WORKFLOWS.md`, `PATTERNS.md`, `ARCHITECTURE.md`, `README.md`,
+`PRINCIPLES.md`, and `MIGRATION-GUIDE.md` are **compiled into `temper --llm`**
+(see `crates/temper/src/main.rs`) — that guide is how humans *and* LLMs learn to
+operate and author a temper folder. Stale docs don't just read wrong; they
+actively mislead every downstream agent that builds a spec from them.
+
+`MIGRATION-GUIDE.md` is the **one** doc whose job is the before/after, and the
+only place exempt from the "documenting the diff" rule below. It gains a section
+per **major** version — the ones where a folder has to be edited — and loses one
+when nobody can still be migrating from it.
 
 So a change to behaviour ships with the doc change **in the same commit**:
 
@@ -139,11 +144,23 @@ both were found by a user, not by a test.
 So when you touch any kind of state, answer all of these in writing before
 pushing:
 
-1. **Can it drift both ways?** installed-but-undeclared *and*
-   declared-but-absent. If only one is reported, say why in a comment.
-2. **Does each direction name a verb that exists?** Machine→spec and spec←machine.
-   "It's a hand edit" is a legitimate answer only after checking that no verb
-   *could* do it.
+1. **Can it drift both ways, and does each way have TWO answers?** The shape is
+   four cells, not two directions: {installed-but-undeclared, declared-but-absent}
+   × {change the machine, change the spec}. Register both directions in
+   `plan::KIND_ANSWERS` — a test fails on an empty one. `Answer::Hand` is a
+   legitimate answer *only* when it names the file a human edits and why.
+2. **Does each direction name a verb that exists *and can reach this kind*?**
+   "It's a hand edit" is legitimate only after checking that no verb *could* do
+   it — and naming a verb that has no code path for the kind is worse than
+   naming none, because the user runs it and it silently does nothing. That is
+   how a removed GNOME extension came back on every converge for two releases.
+
+2b. **Can the state be OBSERVED here, and is that separate from being able to
+   change it?** A host may enumerate a kind and be unable to converge it, or the
+   reverse. Where the state cannot be read, report `unavailable` — never absent —
+   and compute no drops at all: every write path reads "empty" as "delete what
+   the spec captured", which is how one command could publish an emptied spec to
+   the whole fleet.
 3. **What SCOPE does absorbing it write to?** Anything absorbed from one
    machine's live state must land somewhere that belongs to **that machine** — its
    own Brewfile, its own `[[machine]]` block, its own snapshot file. A shared
@@ -160,11 +177,22 @@ pushing:
    unparseable — Principle #6b), and any "nothing to do" message must not
    contradict what `drift` reports in the same breath. `reconcile` claimed
    "already in sync" while drift listed six findings.
-6. **Is the new `Finding.kind` in `KIND_ANSWERS`?** The coverage test fails
-   otherwise — which is the point. Reaching for `NoVerb` is the moment to ask
-   whether the verb simply hasn't been built.
+6. **Is the new `Finding.kind` in `KIND_ANSWERS`, with both cells filled?** The
+   coverage tests fail otherwise — which is the point. Reaching for `NA`/`Hand`
+   is the moment to ask whether the verb simply hasn't been built. Keep kinds as
+   **literal** strings: the completeness test scrapes source for `kind: "…"`, so
+   a kind built with `format!` is invisible to it.
 
-`plan::KIND_ANSWERS` makes 5 mechanical, and a CLI test asserts every command a
-remediation names is a real verb (drift once told users to run `temper snapshot`
-for a whole release after that verb was renamed). The rest are judgement, which
-is why they are written down here.
+7. **Is the converge revertible, and does the user learn that BEFORE
+   confirming?** `undo` covers less on macOS than on Linux (`setkey(defaults)`
+   is deliberately not journaled), and a run whose only changes were unjournaled
+   reverts nothing while reporting success. If a step's effect can't be undone,
+   say so at plan time, not afterwards.
+
+`plan::KIND_ANSWERS` now makes 1, 2 and 6 mechanical: every kind must fill both
+cells, every verb it names must exist and parse, and `remediations` may not offer
+a command the registry does not record for that kind — the reverse check, which
+was missing while drift advised `reconcile` for three kinds reconcile cannot
+touch. A CLI test still asserts every named command is a real verb (drift once
+told users to run `temper snapshot` for a whole release after that verb was
+renamed). The rest are judgement, which is why they are written down here.

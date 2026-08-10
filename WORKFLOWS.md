@@ -254,10 +254,16 @@ of the drift. You pick a direction and run what it prints:
 `temper prune` uninstalls it (asks first), or `[ignore].gext` silences it. Note
 that not-enabled is not not-wanted: an extension disabled in GNOME is still
 installed, and declaring it just means a rebuild puts it back.
+- **GNOME extensions declared but not installed:** two answers. `temper install
+--packages-only` puts it back; `temper reconcile` offers to drop it from this
+machine's own `extensions` list — the answer when you removed it on purpose and
+every converge keeps reinstalling it. The prompt defaults to *keep*, so absence
+alone never quietly un-declares anything.
 
 Reconcile writes to the machine's own list, never a bundle's — a bundle's
-`extensions` is shared by every machine composing it, so absorbing there would
-install it fleet-wide off one machine's state.
+`extensions` is shared by every machine composing it, so editing there would
+change every machine off one machine's state. An extension a *bundle* declares
+therefore stays a hand edit in either direction, and drift names the file.
 
 **A failed `[[assert]]`** has no verb at all: it reports a condition you resolve
 yourself — a group membership clears by logging out. `drift` says so instead of
@@ -560,7 +566,7 @@ which is why it has verbs of its own.
 | app config (`copy`/`block`/`setkey`/`sysfile`) | `install` / `update` | you author it by hand |
 | macOS profiles (`profile`) | `install` only — its apply is a System Settings dialog, so `update` skips it rather than re-asking every run | you author it by hand (the `.mobileconfig` too) |
 | packages (brew, cask, tap, flatpak, mas, vscode, rpm) | `install` (remove: `prune`) | `reconcile`, or `reconcile --csw` |
-| GNOME extensions (`gext`) | `install` (remove: `prune`) | `reconcile` (per machine), or `[ignore].gext` |
+| GNOME extensions (`gext`) | `install` (remove: `prune`) | `reconcile` — both directions, on this machine's own list — or `[ignore].gext` |
 | desktop dconf subtrees | `restore-gnome` | `snapshot-gnome`, or `reconcile` per key |
 | assertions (`[[assert]]`) | nothing — drift-only, you resolve the condition | n/a |
 

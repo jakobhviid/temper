@@ -4,25 +4,38 @@
 > private Nix. When a decision is unclear, resolve it in the direction these
 > point. Refined after the 2026-07-27 sanity-check against ReinstallScripts.
 
-## 1. Closed primitive set; open app library
+## 1. Three sets, three rules for growing them
 
-Adding a **primitive** is a big deal — new release, new drift/undo logic, new
-surface area. Adding an **app-bundle** is free (it's config). The set is
-deliberately small: `copy`, `block`, `setkey` (a backend family — dconf/defaults/
-ini/json/toml — *not* one per format), `brew`/`flatpak`/`mas`/`gext`/`rpm-ostree`
-(converge providers), `profile`, `sysfile` (one root-owned `/etc` file), `exec`. It grew during sanity-check but stayed
-*closed*: each addition was a whole class the repo proved, not a one-app patch.
-If you're reaching for a new primitive to support one app, you want `exec`.
+- **Primitives — closed.** `copy`, `block`, `setkey` (a backend family —
+  dconf/defaults/ini/json/toml, *not* one per format), `profile`, `sysfile` (one
+  root-owned `/etc` file), `exec`. Adding one is a big deal: new release, new
+  drift/undo logic, new surface area. It grew during the sanity-check but stayed
+  closed — each addition was a whole class the repo proved, not a one-app patch.
+  If you're reaching for a new primitive to support one app, you want `exec`.
+- **App-bundles — open, and free.** They're config. "The next ghostty clone" is a
+  file you write, never a tool release.
+- **Providers — open, behind an interface.** `brew`, `cask`, `brew-tap`,
+  `brew-trust`, `flatpak`, `mas`, `vscode`, `gnome-extensions`, `rpm-ostree`,
+  `dconf`. Adding one is neither a big deal nor free: it is **routine**, because
+  it implements the eleven-column interface (#13) rather than inventing its own
+  verb set. `apt`, `dnf`, `npm`, `cargo` should each be a normal piece of work.
+
+The middle tier is the one that used to be missing. Listing the providers among
+the primitives is what made each of them feel like a bespoke decision — and every
+provider built that way decided its own verb set, differently, and got it wrong
+in its own way.
 
 ## 2. Steps stay declarative, idempotent, independently drift-checkable — with one named exception
 
 Ordering within a bundle is fine; *data/effect flowing between steps* is the
 smell. The one sanctioned violation is **the cask-artifact reset**: app config
-that patches a cask-owned `.desktop` file forces a pristine reset before the next
-brew converge. It is handled by an explicit `reset-before-converge` annotation on
-the cask, **named as an exception** — because pretending the scopes are cleanly
-separated would be a lie the code disproves. New couplings do **not** get this
-treatment; they get refactored or go in one `exec`.
+that patches a cask-owned `.desktop` file needs a pristine reset before the next
+brew converge, or the patch and the upgrade fight. It is **named as an
+exception** — pretending the scopes are cleanly separated would be a lie the code
+disproves — and it is currently resolved by hand or in one `exec`; there is no
+schema annotation for it, and this document should not describe one until there
+is. New couplings do **not** get this treatment; they get refactored or go in one
+`exec`.
 
 ## 3. `exec` is the pressure valve — with a defined contract
 
@@ -44,6 +57,13 @@ list only stops installed-but-undeclared packages (the OS-preinstalled flatpak
 baseline) from being flagged as extras by `drift`/`prune`, which is how the
 "everything is traceable" rule survives contact with a real OS baseline.
 
+That union — a machine's bundles plus its own list — is the scope model (#11) in
+its earliest, package-shaped form. What is *not* redundant with #11 is the
+dependency-closure half: `brew bundle cleanup` keeps a formula that is some other
+package's transitive dependency, so drift cannot be computed by set subtraction.
+That is a correctness argument about brew, not about scope, and it is why the
+converge is one aggregate call per manager.
+
 ## 5. Gate config on reality, not intent
 
 Config steps run only when a **presence probe** passes — checking what's
@@ -58,6 +78,12 @@ step, not just its failed probe. Forgiving providers (MAS) report failures loudl
 and continue. `brew` tap-trust runs before converge so third-party taps are never
 *silently* skipped. A discarded exit code is a silent cap too: a best-effort child
 may fail without stopping the run, but never without saying so.
+
+**A count is output, so a wrong count is a silent cap.** If a variant can be
+acted on, it must be counted — an aggregate that omits one reports work it did
+as work it didn't. `prune` once asked "remove **0** item(s)?", uninstalled three
+GNOME extensions, and reported "0 item(s) removed", because the count summed two
+of its three lists.
 
 ## 6b. temper's output is temper's own; it reports effects, in temper's voice
 
@@ -83,9 +109,14 @@ If temper applies it, `drift` can check it — including things pushed to `exec`
 absent, mode, contains-line, not-member, executable-resolves,
 json-semantic, shell). Enforcement that re-runs every `update` (git identity,
 default shell) uses `run = always` + a drift hook so it stays checkable.
-Items temper can't repair are still drift-*reported* as **status-only**. This
-principle is what the sanity-check added — the first draft silently dropped a
-third of `just drift`'s value.
+This principle is what the sanity-check added — the first draft silently dropped
+a third of `just drift`'s value.
+
+The converse matters as much: **nothing is *reported* without a resolution
+story.** Items temper can't repair are still drift-*reported* as **status-only**,
+but "status-only" is not a shrug — it carries the written reason from #11, naming
+the file a human edits. A report with no stated way to act on it is the defect
+this tool keeps shipping, and it hides behind exactly that phrase.
 
 ## 8. Every mutation is planned, reversible, and typed
 
@@ -97,6 +128,13 @@ the rest. Mutating runs are journaled
 changed since skips-and-reports rather than clobbering).
 `--json` on every command; an `--llm` guide; human → stdout, progress/errors →
 stderr so pipes stay clean.
+
+**Advice is a mutation too.** A remediation temper names must be *executable for
+the finding it names* — a verb with a real code path for that kind, on this host.
+Naming one that silently does nothing is worse than naming none, because the user
+runs it, sees no error, and concludes the tool is lying or they are. `drift` told
+users to run `reconcile` for a missing GNOME extension for two releases, and
+reconcile could not touch one.
 
 ## 9. The folder is human-readable; the tool doesn't manage it
 
@@ -124,6 +162,84 @@ Everything else RIS does is temper's job — including `eq-import`, now built as
 its own verb (it writes *into* the folder — authoring, the one labelled #9
 exception). Scope discipline means not growing *past* RIS, never dropping a
 proven RIS recipe.
+
+## 11. Scope decides the verb set
+
+Where a declaration lives decides what may be done to it. This is a lookup, not a
+judgement:
+
+- **Fleet / group scope** — a bundle, or a fleet-level list. It describes a group
+  a machine belongs to. Verbs: **drift and install. Conform.**
+- **Per-machine scope** — the machine's own block and the files it names. Verbs:
+  **drift, install, prune, and reconcile in both directions.**
+
+The scopes do **not** differ in whether something can be removed — they differ in
+*who edits the declaration*. At fleet scope you edit the shared spec and commit,
+and every machine's `prune` then enacts it. At machine scope `reconcile` makes
+the same edit for one box. So `prune` is the **universal enactment mechanism**,
+and it only ever removes what *neither* scope declares.
+
+Two things follow, and both have been shipped wrong:
+
+- **Every category needs both scopes.** "I want this on this box only" is
+  ordinary. A category that exists at one scope is unfinished, and the
+  compensation is always the same defect: a verb reaching up to edit a shared
+  file on one machine's say-so.
+- **A fleet declaration carries the same `os`/`role` gate a bundle does.** A list
+  shared by every machine that cannot say which machines it describes is
+  permanently red on the rest — and the verb offering to "fix" that breaks the
+  ones it does describe.
+
+The four cells fall out of this. A finding is *declared-but-absent* or
+*installed-but-undeclared*, and each admits two resolutions — change the machine,
+or change the spec — but the second column only exists at machine scope. A kind is
+not done until all four are answered: with a verb, or with a written reason
+**naming the file a human edits**. "Report-only" is an answer about scope, never
+about effort.
+
+## 12. Capability is per cell, and absence you could not observe is not evidence
+
+Scope says what the *spec* permits; capability says what *this host* can do, and
+it is not one bit. Three separate questions with three separate answers:
+
+- **Can I observe it?** Without this, neither direction may be computed.
+- **Can I converge it?** A host can enumerate GNOME extensions and be unable to
+  install one; managed macOS preferences are readable and not writable.
+- **Is there somewhere in the spec to write?** Orthogonal to both tools above.
+
+One source of truth per feature, distinct answers per cell. A cell that cannot be
+evaluated reports `unavailable` — **never absent** — and a drop is only ever
+computed from state that was actually observed. Every write path reads "empty" as
+"delete what the spec captured", so a read that could not happen must never reach
+one as a fact.
+
+**Residue is an observability question too.** When a declaration goes away, what
+it deployed stays behind — and whether that needs machinery depends on exactly
+this: *enumerable state needs no tombstone; non-enumerable state does.* Packages
+self-clean, because temper can list what is installed and diff it against what is
+declared. Files cannot, so removing a step leaves them on every machine forever
+with nothing reporting it. Make the residue enumerable and `prune` answers it like
+any package; where it cannot be, an explicit tombstone is the honest fallback —
+reviewed, never expired, because behaviour that changes with the wall clock means
+two machines on one commit doing different things.
+
+## 13. One interface, named precisely
+
+Every provider answers the **same eleven questions** (see ARCHITECTURE, "The
+feature interface"), each with one written definition, so `prune` means one thing
+to every implementer. A column may be declined — but only in writing, because the
+awkwardness is the point: it is where you ask whether the thing simply has not
+been built. This is what makes #1's third tier routine instead of bespoke, and it
+is the enforcement mechanism for #11 and #12 rather than a separate idea.
+
+Name a feature for **what it actually is**, at the narrowest honest level, because
+the family always gets a second member and the desktop always gets a second store.
+`rpm-ostree`, not `rpm` — a future `apt` is a different provider, not a variant,
+and the generic name pre-empts a slot it does not deserve. `brew-trust`, not
+`trust`. `gnome-extensions`, not `extensions` — VS Code extensions are managed
+here too, so that collision is already live. `snapshot-dconf`, not
+`snapshot-gnome` — the mechanism is the store, and dconf runs under KDE as well.
+Renames ship with serde/verb aliases; the old name keeps parsing.
 
 ---
 

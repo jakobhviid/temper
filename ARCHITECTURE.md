@@ -146,9 +146,268 @@ turns the children back on in full.
 
 ---
 
+## Scope decides the verb set
+
+This is the rule the rest of the model hangs off. It is mechanical: given a
+declaration's scope, which verbs may touch it is a lookup, not a judgement.
+
+| | **fleet / group scope** | **per-machine scope** |
+|---|---|---|
+| what it is | a group the machine belongs to — its `os`, its `role`, a bundle it composes | this machine's own declarations |
+| drift | ✅ | ✅ |
+| install (conform) | ✅ | ✅ |
+| prune | ✅ — but only ever for what is **un**declared | ✅ — same |
+| reconcile **add** | ❌ never write a shared file from one box | ✅ |
+| reconcile **remove** | ❌ | ✅ |
+
+**Fleet is drift + install. Conform.** **Machine is drift + install + prune +
+reconcile, both directions.**
+
+The scopes do not differ in whether something can be *removed* — they differ in
+**who is allowed to change the declaration**:
+
+- **Fleet:** the declaration changes in the shared spec (a commit — a group
+  decision). Every machine's `prune` then enacts it.
+- **Machine:** the declaration changes on that box, via `reconcile`. That
+  machine's `prune` then enacts it.
+
+So `prune` is the **universal enactment mechanism** in both cases, and
+`reconcile` is precisely "edit *this machine's* declarations". The fleet
+equivalent of `reconcile` is `git commit`. An item deployed from fleet scope and
+later removed from the group becomes undeclared like any other, and prune cleans
+it up — that is how a fleet-scope retirement lands on every machine.
+
+Getting this wrong is the tool's recurring defect. Every category that was built
+before this rule was written down re-decided its own verb set, and each got it
+wrong differently: `gext` could be added but never removed, `[brew].trust` and
+`[ignore]` existed only at fleet scope yet `reconcile` edited them from a single
+machine, and `rpm-ostree` had no machine scope at all.
+
+**Every category needs both scopes**, because "I want this on this box only" is
+an ordinary thing to want. A category that exists at only one scope is not
+finished.
+
+## The feature interface
+
+A *feature* is a kind of state temper manages — `brew`, `cask`, `brew-tap`,
+`brew-trust`, `flatpak`, `mas`, `vscode`, `gnome-extensions`, `rpm-ostree`,
+`dconf`, and the file primitives. A new one (`apt`, `dnf`, `npm`, `cargo`)
+becomes possible by answering the same eleven questions, so the building blocks
+are identical for everyone and "did we finish it?" stops being a matter of
+opinion.
+
+Each column has **one definition**, below, so every implementer means the same
+thing. A column may be answered `Unsupported`, but only with a **written
+reason** — the awkwardness is the point, because it is the moment to ask whether
+the thing simply has not been built.
+
+| # | column | definition |
+|---|---|---|
+| 1 | **fleet declaration** | which file/key declares it for a group, and what gates it (`os`/`role`) |
+| 2 | **machine declaration** | which file/key declares it for one machine. Required — without it the feature has no spec column and cannot be reconciled |
+| 3 | **observe** | how it enumerates what is present. Must distinguish *"the tool answered, and the answer is none"* from *"I could not ask"*. The second is `unavailable`, **never** absent |
+| 4 | **install / conform** | how it makes the machine match the declaration, and what it reports when it can observe but cannot converge |
+| 5 | **prune** | removes what is installed but declared at neither scope |
+| 6 | **reconcile add** | absorbs an undeclared item into **machine** scope |
+| 7 | **reconcile remove** | drops a **machine**-scope declaration. Never a fleet one |
+| 8 | **ignore** | how an item is permanently silenced, and at which scope |
+| 9 | **drift** | reports both directions, and names the file the declaration lives in |
+| 10 | **revertible** | journaled, or explicitly not — and if not, the user learns *before* confirming |
+| 11 | **residue** | what happens to what it deployed when the declaration goes away (see "Retirement") |
+
+### Where each feature stands
+
+Filled in so the gaps are *readable* rather than re-argued every time someone
+touches one. ✅ done · ⚠ present but wrong · ❌ absent. Columns are numbered as
+above.
+
+| feature | 1 fleet | 2 machine | 3 obs | 4 inst | 5 prune | 6 r+ | 7 r− | 8 ign | 9 drift | 10 rev | 11 res |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `brew` / `cask` / `brew-tap` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠ | ⚠ | ✅ | ❌ | n/a |
+| `brew-trust` | ✅ | ❌ | ✅ | ✅ | ✅ | ⚠ | ⚠ | ⚠ | ✅ | ❌ | n/a |
+| `flatpak` | ✅ | ✅ | ⚠ | ✅ | ⚠ | ✅ | ⚠ | ⚠ | ✅ | ❌ | n/a |
+| `mas` / `vscode` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠ | ⚠ | ✅ | ❌ | n/a |
+| `gnome-extensions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠ | ✅ | ❌ | n/a |
+| `rpm-ostree` | ✅ | ❌ | ⚠ | ✅ | ❌ | ❌ | ❌ | ❌ | ⚠ | ❌ | n/a |
+| `dconf` | ✅ | ✅ | ✅ | ⚠ | ❌ | ✅ | ✅ | ⚠ | ✅ | ✅ | ❌ |
+| `copy` / `block` / `sysfile` | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ⚠ | ✅ | ❌ |
+| `profile` | ✅ | ❌ | ✅ | ⚠ | ❌ | ❌ | ❌ | ❌ | ⚠ | ❌ | ❌ |
+
+What the ⚠ marks mean, briefly:
+
+- **col 7, packages** — `reconcile` drops Brewfile lines, but a package declared
+  in `[[machine]].packages` is machine scope with no drop path.
+- **col 8, everywhere** — `[ignore]` is fleet-only, so silencing something on one
+  box silences it fleet-wide; and only `flatpak`/`tap` can be written by a verb
+  at all, though drift honours all seven lists.
+- **col 6/7, `brew-trust`** — implemented, but they edit a *fleet* file from one
+  machine, which the scope rule forbids. The fix is a machine-scope trust list,
+  not removing the verb.
+- **col 3/5, `flatpak`** — user vs system installs are not distinguished, so
+  `prune` can try to remove a system flatpak (polkit, which over SSH hangs).
+- **col 3/9, `rpm-ostree`** — `rpm -q` answers about the *booted* deployment, so
+  a layered package reads missing until reboot. The staged deployment's
+  `requested-packages` is the honest source.
+- **col 4, `dconf`** — `restore` is excluded from `install`/`update`, which is a
+  symptom of the recording model, not a property of the store (see below).
+- **col 4, `profile`** — its apply is a GUI dialog a human must approve, so it
+  cannot converge unattended or headless.
+- **col 9, files/profile** — one direction only: there is no extras direction,
+  because of col 11.
+- **col 10, packages** — the journal covers file and key writes; a package
+  install is not revertible, and that is not currently said before you confirm.
+- **col 11** — nothing tracks what a spec deployed, so removing a step leaves the
+  file behind on every machine, silently.
+
+### Naming: be specific, minimise overlap
+
+A feature is named for the **mechanism**, not the family or the desktop, because
+the family will get a second member and the desktop will get a second store.
+`rpm-ostree`, not `rpm` — a future `apt` is a different feature, not a variant.
+`brew-trust`, not `trust` — flatpak remotes and apt keys are also trust.
+`gnome-extensions`, not `extensions` — VS Code extensions are managed here too,
+and that collision is already live. `snapshot-dconf`, not `snapshot-gnome` —
+dconf is present under KDE, so the desktop was never the right noun.
+
+## Retirement — what happens to residue
+
+Removing a declaration leaves residue, and whether that matters depends on one
+property:
+
+> **Enumerable state needs no tombstone. Non-enumerable state does.**
+
+Packages self-clean: drop it from the spec, `prune` sees an extra, it goes.
+Nothing accumulates. Files do not — temper keeps a per-run journal for `undo`,
+not a ledger of what a spec deployed, so a deleted `copy` step leaves its file on
+every machine forever with nothing reporting it.
+
+So retirement is two mechanisms, not one:
+
+- **A deployment ledger** makes file residue enumerable, which gives the file
+  primitives a real extras direction and lets `prune` answer it like any package.
+  It is hash-guarded exactly as `undo` is: remove it if it is unmodified since
+  temper deployed it, **report** it if you have edited it. Most retirements then
+  need no tombstone at all.
+- **An explicit tombstone** covers what a ledger structurally cannot: files
+  deployed before the ledger existed, things temper never deployed but that must
+  be gone, and *anti-state* — "this must not be installed", which no ledger
+  gives you.
+
+Tombstones are reviewed, not expired. A date on one is **metadata a listing sorts
+by**, never a trigger: behaviour that changes with the wall clock would mean two
+machines on the same commit doing different things, and a machine offline past
+the date would skip the retirement silently. The review sweep is a verb that
+lists tombstones oldest-first — which is what stops them accumulating unseen,
+without a second folder to become a junk drawer.
+
+## dconf has three owners, not one store
+
+A desktop key store is not one feature. Measured on a real fleet, **95% of the
+keys in a whole-desktop snapshot were extension settings** (262 of 274 on one
+machine, 267 of 280 on another); the remainder was five sections, one of them
+global shortcuts. Treating that as a single blob made the snapshot a *second
+owner* of keys a bundle already declared, kept apart only by a hand-maintained
+`strip` list that rots the moment you forget an entry.
+
+Split by who owns the key:
+
+| owner | what it covers | how it is declared |
+|---|---|---|
+| **the extension** | `/org/gnome/shell/extensions/<uuid>/…` | part of the extension's own declaration, captured and replayed with it |
+| **policy — always set** | a value the fleet or the machine insists on (global shortcuts, 1Password) | a `setkey` step |
+| **policy — always absent** | a key that must not be set | the absence primitive, not a captured value |
+| **machine-specific live state** | the residue: genuinely this-box-only settings | a narrowly-rooted `[[machine.dconf]]` |
+
+Three consequences follow, and they are the reason for the split:
+
+- **Settings inherit the scope of the thing that owns them.** An extension
+  declared in a bundle carries its settings at fleet scope; one declared on a
+  machine carries them per machine. No new scope rule — the existing one, applied
+  to a smaller unit.
+- **`enabled-extensions` stops being captured.** Whether an extension is enabled
+  is a field on its declaration, and the dconf key is *computed* from it.
+  Previously "installed" and "enabled" were two unlinked facts about one object,
+  so a uuid enabled in a snapshot but declared nowhere got switched on by
+  `restore` and never installed by `install` — and GNOME fails soft, so nothing
+  said so.
+- **`strip` goes back to one job.** Its ownership half disappears — not derived,
+  *gone*, because nothing else captures that keyspace. What remains is a noise
+  filter (`monitors/`, `last-selected`) for keys that would corrupt a
+  capture→restore round trip.
+
+An extension owns **only its own subtree**. Anything it touches outside that is
+shared keyspace — two extensions can both want
+`/org/gnome/desktop/interface/gtk-theme` — so an implicit ownership claim there
+would be exactly wrong. Out-of-tree keys are declared explicitly as policy:
+always-set, or always-absent.
+
+This also bounds the blast radius. "The live dump came back empty, so drop every
+captured key" needs a *whole-tree* dump to be dangerous; a per-extension capture
+is bounded by an extension you declared and could observe.
+
+## Constraints on a second settings backend
+
+`dconf` is the only settings store implemented. KDE (KConfig), COSMIC, and macOS
+(`defaults`) are the candidates for a second, and each fails the current model in
+a *different* place — so the seam must be shaped by all three, not extrapolated
+from dconf.
+
+| store | dump/load pair | sectioned `key=value` | a subtree is one prefix |
+|---|---|---|---|
+| dconf | yes | yes | yes |
+| KConfig | **no** — files under `~/.config` | yes (INI-shaped) | **no** — a *set* of files |
+| COSMIC | **no** | **no** — one RON file per key | yes (`~/.config/cosmic/<c>/v<N>/`) |
+| macOS `defaults` | per domain | plist (typed, nested) | **no** — N unrelated domains |
+
+What actually generalises is smaller than it looks: the **diff core** — a map of
+`(section, key) → value`, diffed both ways, grouped by section, absorbed per
+section. Parsing, serialising, the id grammar, the transport and the reload are
+all per-store.
+
+Specific traps, each of which has already cost someone somewhere:
+
+- **dconf's model rests on an invariant the others lack.** dconf stores only
+  *non-default* values, so an absent key means "the schema default" — a known
+  value. macOS has no such registry: absent means "whatever this app registered",
+  which varies by app version. So "declared, not present ⇒ missing" is meaningful
+  on dconf and meaningless on `defaults`, and dropping a key as the absorb action
+  is safe on one and a guess on the other.
+- **The journalable grain and the reviewable grain can differ.** A `defaults`
+  domain round-trips as a blob but not per key; per-key prompts are what makes
+  reconcile reviewable. A store where those disagree gets coarse drift, and that
+  must be stated rather than discovered.
+- **KConfig's syntax breaks a naive INI reuse**: nested `[A][B][C]` headers, entry
+  flags (`Key[$e]`, `[$i]`), locale suffixes (`Name[de]`), and an `/etc/xdg`
+  cascade where the user file holds only overrides. A writer that does not know
+  about `Key[$e]` appends a duplicate key — corruption, not a formatting nit.
+- **Section identity is not always stable.** COSMIC's `v<N>` directory means a
+  version bump renames every section at once, so everything reads as
+  simultaneously missing and extra.
+- **Reload is a store property.** dconf notifies over D-Bus, so `load` is live.
+  KDE needs per-component pokes; without them a write is correct and invisible
+  until next login. That belongs in the feature's column 4 answer, not in a
+  footnote.
+
+### Two decisions recorded, so they are not re-proposed
+
+**There is no `desktop` axis on a machine.** It was proposed and rejected: it
+duplicates the capability question (what would `desktop = "gnome"` gate that
+"is `gnome-extensions` present" does not?), it cannot describe a box with two
+desktops installed, it carries nothing on macOS beyond `os = "mac"`, and it
+cannot express Wayland-vs-X11 — a third axis it would immediately need. Where a
+store must be named, the **backend names itself**; where a tool must be present,
+that is a capability. Both compose; enum axes multiply.
+
+**The desktop is not what makes a machine a desktop, either.** `role` already
+carries "has a graphical session" *and* "extensions are meaningful here" *and*
+"desktop rpms are wanted here". That overload is why the gate is worth fixing
+rather than supplementing.
+
 ## Two scopes
 
-Configuration lives at two scopes, and the distinction is load-bearing.
+Configuration lives at two scopes, and the distinction is load-bearing. See
+"Scope decides the verb set" above for what each scope *permits*; this section is
+about how drift is *computed* at each.
 
 ### Machine scope — aggregate / snapshot
 
@@ -180,18 +439,31 @@ app-bundles it wants. Drift at app scope is per-file / per-key / per-assertion.
 
 ---
 
-## The taxonomy: three layers, two are code
+## The taxonomy: four layers, two are code
 
-1. **Primitives — closed set, tool code (Rust).** The atomic operations. Adding
-   one is a big deal (new release, new drift/undo logic). This set is the tool's
-   entire surface area.
-2. **App-bundles — open set, user config (no code).** A named, ordered list of
+1. **Primitives — closed set, tool code (Rust).** The atomic operations:
+   `copy`, `block`, `setkey`, `profile`, `sysfile`, `exec`. Adding one is a big
+   deal (new release, new drift/undo logic).
+2. **Providers — open set, tool code, behind an interface.** The converge
+   providers: `brew`/`cask`/`brew-tap`/`brew-trust`, `flatpak`, `mas`, `vscode`,
+   `gnome-extensions`, `rpm-ostree`, and the settings stores. Adding one is
+   neither a big deal nor free — it is **routine**, because it answers the
+   eleven-column interface above rather than inventing its own verb set. This
+   tier used to be filed under (1), which is why each provider decided its own
+   verbs and each got it wrong differently (Principle #1).
+3. **App-bundles — open set, user config (no code).** A named, ordered list of
    primitive steps, each OS/role-gated. Where ghostty and 1Password live. "The
    next ghostty clone" is a new *config file you write*, never a tool release.
-3. **Machine registration (`temper.toml`).** Which machines exist (name + OS +
+4. **Machine registration (`temper.toml`).** Which machines exist (name + OS +
    role) and which bundles + loose packages + ignores each one composes.
 
-### The primitives (closed set)
+### The primitives (closed set) and the providers (open, behind the interface)
+
+Both are listed together below because they are both tool code. The rows for
+`brew`, `flatpak`, `mas`, `gext` (properly `gnome-extensions`) and `rpm-ostree`
+are **tier 2 — providers**, not primitives: they are the implementations the
+eleven-column interface exists to standardise, and a future `apt` or `npm` joins
+that list without touching tier 1.
 
 | Primitive | Scope | What it does |
 |---|---|---|
@@ -429,11 +701,16 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
   desktop tweaks, so it is a standalone verb, **never** part of `update` (RIS
   excludes gnome-restore from its update for the same reason). Journaled per
   subtree, so `undo` reverts it.
-GNOME extensions report **both** directions: declared-but-not-installed (fixed by
-`install`), and user-installed-but-undeclared. The extras side is user-scope only
-— system extensions ship with the image, and image-baked items are status-only —
-and it is **report-only**, because `extensions` lives in a shared app-bundle that
-`reconcile` must never edit on one machine's behalf. `[ignore].gext` silences one.
+GNOME extensions report **both** directions and answer both: an extension that is
+declared but not installed is installed by `install` or dropped from the
+machine's own list by `reconcile`; one installed but undeclared is removed by
+`prune` or declared for this machine by `reconcile`. The extras side is
+user-scope only — system extensions ship with the image, and image-baked items
+are status-only. `[ignore].gext` silences one.
+
+Reconcile writes only `[[machine]].extensions`, never a bundle's shared list, and
+computes nothing at all unless `gnome-extensions` answered: capability decides
+whether a direction may be evaluated, not just whether a verb may run.
 
 - **`adopt`** — report installed extras not in the spec (advisory / non-mutating)
   so you can add each to a bundle, the machine loose list, or `[ignore]`. The

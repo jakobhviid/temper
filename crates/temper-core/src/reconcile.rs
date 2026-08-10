@@ -68,6 +68,12 @@ pub struct ReconcilePlan {
     /// User-installed GNOME extensions no bundle or machine declares —
     /// candidates to absorb into THIS machine's own `extensions` list.
     pub gext_adds: Vec<String>,
+    /// Extensions in THIS machine's own `extensions` list that aren't installed
+    /// — candidates to drop. The other half of `gext_adds`, without which
+    /// reconcile could only ever grow the list: absorb an extension, uninstall
+    /// it later, and every converge reinstalled it with no verb to say
+    /// otherwise. Machine-scope only; a bundle's list is shared.
+    pub gext_drops: Vec<String>,
     /// Per-snapshot desktop-key candidates (empty off a dconf host). Absorbing
     /// is spec←machine only — pushing a key back OUT is `restore`'s direction,
     /// which drift names separately.
@@ -115,6 +121,7 @@ pub fn plan(
                 &providers::effective_extensions(home, machine)?,
                 ignore,
             ),
+            gext_drops: providers::gext_machine_absent(&machine.extensions),
             dconf: dconf_plans(home, machine)?,
         });
     };
@@ -241,6 +248,7 @@ pub fn plan(
             &providers::effective_extensions(home, machine)?,
             ignore,
         ),
+        gext_drops: providers::gext_machine_absent(&machine.extensions),
         dconf: dconf_plans(home, machine)?,
     })
 }
@@ -512,6 +520,34 @@ pub fn append_machine_extension(temper_toml: &str, machine: &str, uuid: &str) ->
     Ok(doc.to_string())
 }
 
+/// Remove a GNOME extension UUID from a machine's own `extensions` list,
+/// preserving comments + formatting. A no-op if the machine, the list, or the
+/// entry is absent — the machine may legitimately declare none.
+///
+/// The mirror of `append_machine_extension`, and machine-scoped for the same
+/// reason: a bundle's `extensions` is shared, so a drop there from one box
+/// would un-declare the extension for every machine composing that bundle.
+pub fn remove_machine_extension(temper_toml: &str, machine: &str, uuid: &str) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = temper_toml
+        .parse()
+        .context("parsing temper.toml for the extension edit")?;
+    if let Some(arr) = doc
+        .as_table_mut()
+        .get_mut("machine")
+        .and_then(|m| m.as_array_of_tables_mut())
+    {
+        if let Some(t) = arr
+            .iter_mut()
+            .find(|t| t.get("name").and_then(|v| v.as_str()) == Some(machine))
+        {
+            if let Some(list) = t.get_mut("extensions").and_then(|e| e.as_array_mut()) {
+                list.retain(|v| v.as_str() != Some(uuid));
+            }
+        }
+    }
+    Ok(doc.to_string())
+}
+
 pub fn append_trust(temper_toml: &str, tap: &str) -> Result<String> {
     let mut doc: toml_edit::DocumentMut = temper_toml
         .parse()
@@ -554,6 +590,36 @@ pub fn remove_trust(temper_toml: &str, tap: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The undeclare cell round-trips: absorbing an extension and later dropping
+    /// it returns the file to where it started, comments and all. Without the
+    /// drop half, reconcile could only ever GROW a machine's list — absorb an
+    /// extension, uninstall it, and every converge put it back with no verb to
+    /// say otherwise.
+    #[test]
+    fn a_machine_extension_can_be_absorbed_and_dropped_again() {
+        let before = "# fleet\n[[machine]]\nname = \"atlas\"\nos = \"linux\"\nextensions = [\"keep@x\"]\n";
+        let added = append_machine_extension(before, "atlas", "gone@x").unwrap();
+        assert!(added.contains("gone@x"));
+        let dropped = remove_machine_extension(&added, "atlas", "gone@x").unwrap();
+        assert!(!dropped.contains("gone@x"));
+        assert!(dropped.contains("keep@x"), "dropped a sibling it was not asked about");
+        assert!(dropped.contains("# fleet"), "lost a comment");
+    }
+
+    /// Dropping is machine-scoped and forgiving: an unknown machine, a machine
+    /// with no list, or a uuid that is not there all leave the file alone rather
+    /// than erroring or touching another machine's block.
+    #[test]
+    fn dropping_an_extension_never_reaches_another_machine() {
+        let src = "[[machine]]\nname = \"atlas\"\nextensions = [\"a@x\"]\n\n[[machine]]\nname = \"helios\"\nextensions = [\"a@x\"]\n";
+        let out = remove_machine_extension(src, "atlas", "a@x").unwrap();
+        // helios keeps its own declaration.
+        assert_eq!(out.matches("a@x").count(), 1);
+        for (machine, uuid) in [("nope", "a@x"), ("helios", "absent@x")] {
+            assert_eq!(remove_machine_extension(&out, machine, uuid).unwrap(), out);
+        }
+    }
 
     #[test]
     fn token_grammar() {

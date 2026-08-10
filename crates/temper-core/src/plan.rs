@@ -433,61 +433,336 @@ fn step_columns(rows: &[(String, &'static str)]) -> crate::ui::Columns {
 /// A kind with no entry fails `every_emitted_kind_is_registered`. Writing
 /// `NoVerb` is deliberately awkward: if you find yourself reaching for it, ask
 /// first whether the verb simply hasn't been built yet.
+/// Which side of the matrix a kind reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Detects {
+    /// Declared, not present.
+    Missing,
+    /// Present, not declared.
+    Extra,
+    /// Declared and present, but not equal.
+    Differs,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Answer {
     /// A command that resolves it. Checked against the real CLI verb list.
     Verb(&'static str),
-    /// Nothing temper runs resolves it, with the reason shown to the user.
-    NoVerb(&'static str),
+    /// No verb — so name the FILE a human edits, and why. This is what drift
+    /// prints, and it is the difference between "you cannot fix this" and "the
+    /// declaration is in apps/gnome.toml".
+    Hand {
+        file: &'static str,
+        why: &'static str,
+    },
+    /// The cell is meaningless for this kind, and why.
+    NA(&'static str),
 }
 
-/// Every `Finding.kind` temper emits, and what answers it.
-pub const KIND_ANSWERS: &[(&str, &[Answer])] = &[
-    // App-scope config: re-applied by a converge.
-    ("copy", &[Answer::Verb("temper install")]),
-    ("block", &[Answer::Verb("temper install")]),
-    ("setkey", &[Answer::Verb("temper install")]),
-    ("sysfile", &[Answer::Verb("temper install")]),
-    ("exec", &[Answer::Verb("temper install")]),
+/// One `Finding.kind`, and what answers it **in both directions**.
+///
+/// The two fields are the point. A finding always admits two resolutions —
+/// change the machine, or change the spec — and the old registry was a flat bag
+/// of verbs per kind, which cannot express that a direction is missing. A bag
+/// has no shape to violate, so `extension → [install]` passed every test written
+/// to catch exactly this, and `drift` went on advising `temper reconcile` for a
+/// missing extension that reconcile had no code path to touch.
+///
+/// Writing `Hand` or `NA` is deliberately awkward: if you find yourself reaching
+/// for one, ask first whether the verb simply hasn't been built yet.
+#[derive(Debug, Clone, Copy)]
+pub struct KindSpec {
+    pub name: &'static str,
+    pub detects: Detects,
+    /// Change the machine to match the spec. Non-empty: a kind must say what
+    /// this direction is, even if the answer is `NA`.
+    pub converge: &'static [Answer],
+    /// Change the spec to match the machine. Non-empty, same rule.
+    ///
+    /// A slice, not a single answer, because a direction can legitimately have
+    /// more than one verb — a drifted desktop key is absorbed per-key by
+    /// `reconcile` or wholesale by `snapshot-gnome`. What must never be empty is
+    /// the *direction*; that is the omission this registry exists to make
+    /// impossible.
+    pub absorb: &'static [Answer],
+}
+
+const HAND_BUNDLE: &str = "apps/<bundle>.toml";
+
+/// Every `Finding.kind` temper emits, and what answers each direction.
+pub const KIND_ANSWERS: &[KindSpec] = &[
+    // ---- App-scope config: converged by `install`. -------------------------
+    // Absorbing an edited deployed file back into the folder is a verb temper
+    // does not have; `adopt` is packages-only. Named here rather than left
+    // blank, so the gap is visible instead of implied.
+    KindSpec {
+        name: "copy",
+        detects: Detects::Differs,
+        converge: &[Answer::Verb("temper install")],
+        absorb: &[Answer::Hand {
+            file: "the step's source file in the temper folder",
+            why: "no verb captures an edited deployed file back into the folder",
+        }],
+    },
+    KindSpec {
+        name: "block",
+        detects: Detects::Differs,
+        converge: &[Answer::Verb("temper install")],
+        absorb: &[Answer::Hand {
+            file: HAND_BUNDLE,
+            why: "the block's content is declared in the bundle",
+        }],
+    },
+    KindSpec {
+        name: "setkey",
+        detects: Detects::Differs,
+        converge: &[Answer::Verb("temper install")],
+        absorb: &[Answer::Hand {
+            file: HAND_BUNDLE,
+            why: "a setkey is fixed policy with exactly one owner — retune it there, \
+                  not in the app's own UI",
+        }],
+    },
+    KindSpec {
+        name: "sysfile",
+        detects: Detects::Differs,
+        converge: &[Answer::Verb("temper install")],
+        absorb: &[Answer::Hand {
+            file: "the step's source file in the temper folder",
+            why: "no verb captures a root-owned /etc file back into the folder",
+        }],
+    },
+    KindSpec {
+        name: "exec",
+        detects: Detects::Differs,
+        converge: &[Answer::Verb("temper install")],
+        absorb: &[Answer::NA("an exec declares a script, not a state to absorb")],
+    },
     // `install` opens it in System Settings for the user to approve.
-    ("profile", &[Answer::Verb("temper install")]),
-    // Presence gates: reported for visibility.
-    ("when", &[Answer::NoVerb("the step's app is absent — status only")]),
-    ("needs", &[Answer::NoVerb("install the hard dependency the step names")]),
-    // Packages: the four-branch fork.
-    ("package", &[Answer::Verb("temper install --packages-only")]),
-    ("package-extra", &[Answer::Verb("temper prune"), Answer::Verb("temper reconcile")]),
-    ("rpm", &[Answer::Verb("temper install --packages-only")]),
-    ("trust", &[Answer::Verb("temper install --packages-only")]),
-    ("trust-extra", &[Answer::Verb("temper prune"), Answer::Verb("temper reconcile")]),
-    // GNOME extensions: both directions, since 3.2.
-    ("extension", &[Answer::Verb("temper install --packages-only")]),
-    ("extension-extra", &[Answer::Verb("temper prune"), Answer::Verb("temper reconcile")]),
-    // Desktop dconf.
-    ("dconf-key", &[Answer::Verb("temper restore-gnome"), Answer::Verb("temper reconcile")]),
-    ("dconf-extra", &[Answer::Verb("temper reconcile"), Answer::Verb("temper snapshot-gnome")]),
-    ("dconf-uncaptured", &[Answer::Verb("temper snapshot-gnome")]),
-    // Assertions are drift-only by definition: they report a condition.
-    ("absent", &[Answer::NoVerb("resolve the condition yourself")]),
-    ("contains-line", &[Answer::NoVerb("resolve the condition yourself")]),
-    ("mode", &[Answer::NoVerb("resolve the condition yourself")]),
-    ("executable-resolves", &[Answer::NoVerb("resolve the condition yourself")]),
-    ("not-member", &[Answer::NoVerb("resolve the condition yourself")]),
-    ("shell", &[Answer::NoVerb("resolve the condition yourself")]),
-    ("json-semantic", &[Answer::NoVerb("resolve the condition yourself")]),
-    ("unknown", &[Answer::NoVerb("an unrecognised assertion — fix the bundle")]),
+    KindSpec {
+        name: "profile",
+        detects: Detects::Missing,
+        converge: &[Answer::Verb("temper install")],
+        absorb: &[Answer::Hand {
+            file: HAND_BUNDLE,
+            why: "a .mobileconfig is declared in a shared bundle and nothing exports \
+                  an installed profile back out",
+        }],
+    },
+    // ---- Presence gates: reported for visibility. --------------------------
+    KindSpec {
+        name: "when",
+        detects: Detects::Missing,
+        converge: &[Answer::NA("the step's app is absent — status only")],
+        absorb: &[Answer::NA("a gate reports reality; there is nothing to absorb")],
+    },
+    KindSpec {
+        name: "needs",
+        detects: Detects::Missing,
+        converge: &[Answer::Hand {
+            file: "the machine",
+            why: "install the hard dependency the step names — `install` bails on it",
+        }],
+        absorb: &[Answer::Hand {
+            file: HAND_BUNDLE,
+            why: "drop the `needs` if the dependency is genuinely not wanted",
+        }],
+    },
+    // ---- Packages: all four cells. ----------------------------------------
+    KindSpec {
+        name: "package",
+        detects: Detects::Missing,
+        converge: &[Answer::Verb("temper install --packages-only")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "package-extra",
+        detects: Detects::Extra,
+        converge: &[Answer::Verb("temper prune")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "rpm",
+        detects: Detects::Missing,
+        converge: &[Answer::Verb("temper install --packages-only")],
+        // The next extensions-shaped gap: `rpm` exists only on a Bundle, so
+        // there is no machine-scoped list for reconcile to write to. Stated,
+        // not silently omitted.
+        absorb: &[Answer::Hand {
+            file: HAND_BUNDLE,
+            why: "rpm is declared only in a shared bundle — no machine-scoped list \
+                  exists for reconcile to write",
+        }],
+    },
+    KindSpec {
+        name: "trust",
+        detects: Detects::Missing,
+        converge: &[Answer::Verb("temper install --packages-only")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "trust-extra",
+        detects: Detects::Extra,
+        converge: &[Answer::Verb("temper prune")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    // ---- GNOME extensions: all four cells. --------------------------------
+    KindSpec {
+        name: "extension",
+        detects: Detects::Missing,
+        converge: &[Answer::Verb("temper install --packages-only")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "extension-extra",
+        detects: Detects::Extra,
+        converge: &[Answer::Verb("temper prune")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    // ---- Desktop dconf. ---------------------------------------------------
+    KindSpec {
+        name: "dconf-key",
+        detects: Detects::Differs,
+        converge: &[Answer::Verb("temper restore-gnome")],
+        // Two real answers: per-key, or capture the whole subtree.
+        absorb: &[
+            Answer::Verb("temper reconcile"),
+            Answer::Verb("temper snapshot-gnome"),
+        ],
+    },
+    KindSpec {
+        name: "dconf-extra",
+        detects: Detects::Extra,
+        converge: &[Answer::NA(
+            "a snapshot is not exhaustive — nothing deletes a live key it never mentioned",
+        )],
+        absorb: &[
+            Answer::Verb("temper reconcile"),
+            Answer::Verb("temper snapshot-gnome"),
+        ],
+    },
+    KindSpec {
+        name: "dconf-unavailable",
+        detects: Detects::Differs,
+        converge: &[Answer::NA("the store cannot be read here — nothing can act on it")],
+        absorb: &[Answer::NA("the store cannot be read here — nothing can be absorbed from it")],
+    },
+    KindSpec {
+        name: "dconf-uncaptured",
+        detects: Detects::Missing,
+        converge: &[Answer::NA("there is nothing captured to push back out")],
+        absorb: &[Answer::Verb("temper snapshot-gnome")],
+    },
+    // ---- Assertions are drift-only: they report a condition. --------------
+    // `install` structurally cannot satisfy one, so the converge cell is NA and
+    // the spec cell is the honest answer: change what you asserted.
+    KindSpec {
+        name: "absent",
+        detects: Detects::Differs,
+        converge: &[Answer::NA("assertions report a condition; no converge satisfies one")],
+        absorb: &[Answer::Hand {
+            file: HAND_BUNDLE,
+            why: "resolve the condition, or change the [[assert]] that declares it",
+        }],
+    },
+    KindSpec {
+        name: "contains-line",
+        detects: Detects::Differs,
+        converge: &[Answer::NA("assertions report a condition; no converge satisfies one")],
+        absorb: &[Answer::Hand {
+            file: HAND_BUNDLE,
+            why: "resolve the condition, or change the [[assert]] that declares it",
+        }],
+    },
+    KindSpec {
+        name: "mode",
+        detects: Detects::Differs,
+        converge: &[Answer::NA("assertions report a condition; no converge satisfies one")],
+        absorb: &[Answer::Hand {
+            file: HAND_BUNDLE,
+            why: "resolve the condition, or change the [[assert]] that declares it",
+        }],
+    },
+    KindSpec {
+        name: "executable-resolves",
+        detects: Detects::Differs,
+        converge: &[Answer::NA("assertions report a condition; no converge satisfies one")],
+        absorb: &[Answer::Hand {
+            file: HAND_BUNDLE,
+            why: "resolve the condition, or change the [[assert]] that declares it",
+        }],
+    },
+    KindSpec {
+        name: "not-member",
+        detects: Detects::Differs,
+        converge: &[Answer::NA("assertions report a condition; no converge satisfies one")],
+        absorb: &[Answer::Hand {
+            file: HAND_BUNDLE,
+            why: "resolve the condition, or change the [[assert]] that declares it",
+        }],
+    },
+    KindSpec {
+        name: "shell",
+        detects: Detects::Differs,
+        converge: &[Answer::NA("assertions report a condition; no converge satisfies one")],
+        absorb: &[Answer::Hand {
+            file: HAND_BUNDLE,
+            why: "resolve the condition, or change the [[assert]] that declares it",
+        }],
+    },
+    KindSpec {
+        name: "json-semantic",
+        detects: Detects::Differs,
+        converge: &[Answer::NA("assertions report a condition; no converge satisfies one")],
+        absorb: &[Answer::Hand {
+            file: HAND_BUNDLE,
+            why: "resolve the condition, or change the [[assert]] that declares it",
+        }],
+    },
+    KindSpec {
+        name: "unknown",
+        detects: Detects::Differs,
+        converge: &[Answer::NA("an unrecognised assertion — nothing can act on it")],
+        absorb: &[Answer::Hand {
+            file: HAND_BUNDLE,
+            why: "an unrecognised assertion — fix the bundle",
+        }],
+    },
 ];
+
+/// The registered spec for a `Finding.kind`, if it has one.
+pub fn kind_spec(kind: &str) -> Option<&'static KindSpec> {
+    KIND_ANSWERS.iter().find(|k| k.name == kind)
+}
+
+impl KindSpec {
+    /// Commands that change the machine.
+    pub fn converge_verbs(&self) -> Vec<&'static str> {
+        verbs(self.converge)
+    }
+    /// Commands that change the spec.
+    pub fn absorb_verbs(&self) -> Vec<&'static str> {
+        verbs(self.absorb)
+    }
+}
+
+fn verbs(answers: &'static [Answer]) -> Vec<&'static str> {
+    answers
+        .iter()
+        .filter_map(|a| match a {
+            Answer::Verb(c) => Some(*c),
+            _ => None,
+        })
+        .collect()
+}
 
 /// Every distinct command any answer names — the set a CLI-side test checks
 /// really exists, so a verb rename can never leave drift teaching a dead name.
 pub fn answer_commands() -> Vec<&'static str> {
     let mut v: Vec<&'static str> = KIND_ANSWERS
         .iter()
-        .flat_map(|(_, a)| a.iter())
-        .filter_map(|a| match a {
-            Answer::Verb(c) => Some(*c),
-            Answer::NoVerb(_) => None,
-        })
+        .flat_map(|k| [k.converge, k.absorb])
+        .flat_map(verbs)
         .collect();
     v.sort_unstable();
     v.dedup();
@@ -515,40 +790,33 @@ pub struct Remediation {
 /// hostname, and you run these on the machine they apply to — so the name is
 /// noise (and passing it would trip the not-this-host confirm).
 pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
+    // Which commands the DRIFTED kinds actually name, read out of the registry
+    // rather than re-derived here.
+    //
+    // Two independent encodings of the same knowledge had already drifted apart:
+    // this function offered `temper reconcile` for `extension`, `rpm` and
+    // `dconf-uncaptured` — none of which reconcile has a code path for — while
+    // the registry said otherwise, and only the registry→here direction was
+    // tested. Worse, the config-drift test was a *denylist*, so every kind added
+    // in future defaulted into "run `temper install`"; that is how a failed
+    // `needs` came to be answered by a verb that bails on a failed `needs`.
+    let mut converge: std::collections::BTreeSet<&'static str> = Default::default();
+    let mut absorb: std::collections::BTreeSet<&'static str> = Default::default();
+    for f in items.iter().filter(|f| !f.ok) {
+        if let Some(k) = kind_spec(f.kind) {
+            converge.extend(k.converge_verbs());
+            absorb.extend(k.absorb_verbs());
+        }
+    }
+    let converges = |c: &str| converge.contains(c);
+    let absorbs = |c: &str| absorb.contains(c);
+
     let drifted = |kinds: &[&str]| items.iter().any(|f| !f.ok && kinds.contains(&f.kind));
-    let missing_pkg = drifted(&["package", "extension", "rpm"]);
     let extra_pkg = drifted(&["package-extra"]);
-    let trust_gap = drifted(&["trust"]);
     let trust_extra = drifted(&["trust-extra"]);
-    // dconf splits by direction: a `missing`/`changed` key can be pushed back
-    // out with `restore`; an `extra` only ever moves spec←machine.
-    let dconf_stale = drifted(&["dconf-key"]);
     let dconf_capture = drifted(&["dconf-key", "dconf-extra", "dconf-uncaptured"]);
-    let config_drift = items.iter().any(|f| {
-        !f.ok
-            && ![
-                "package",
-                "package-extra",
-                "extension",
-                "rpm",
-                "trust",
-                "trust-extra",
-                "dconf-key",
-                "dconf-extra",
-                "dconf-uncaptured",
-                // No command re-applies this one — it is a hand edit to a shared
-                // bundle, and the finding says so itself. Suggesting `install`
-                // would be a lie.
-                "extension-extra",
-            ]
-            .contains(&f.kind)
-            // Assertions are drift-ONLY checks, never a converge action (see
-            // `drift.rs`): `install` structurally cannot satisfy one. A staged
-            // ostree deployment clears on reboot, a group membership by logging
-            // out — offering `install` sent people to re-run a converge that was
-            // never going to help.
-            && !drift::is_assert_kind(f.kind)
-    });
+    let pkg_capture = drifted(&["package", "package-extra", "trust", "trust-extra"]);
+    let ext_capture = drifted(&["extension", "extension-extra"]);
 
     let mut out = Vec::new();
     let push = |out: &mut Vec<Remediation>, label: &str, command: &str| {
@@ -558,63 +826,52 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
         })
     };
     // Machine → spec (converge the machine toward the declared state).
-    if missing_pkg {
+    if converges("temper install --packages-only") {
         push(
             &mut out,
-            "install declared packages that are missing",
+            "install declared packages/extensions that are missing, and trust declared taps",
             "temper install --packages-only",
         );
     }
-    if drifted(&["extension-extra"]) {
-        push(
-            &mut out,
-            "uninstall the GNOME extensions not in the spec (asks first)",
-            "temper prune",
-        );
-        // The third branch, which only exists since a machine gained its own
-        // `extensions` list: "yes, I want it — on this machine".
-        push(
-            &mut out,
-            "declare them for this machine instead (per extension)",
-            "temper reconcile",
-        );
-    }
-    if extra_pkg || trust_extra {
-        let label = if extra_pkg && trust_extra {
-            "uninstall packages / untrust taps not in the spec (asks first)"
-        } else if trust_extra {
-            "untrust taps not in the spec (asks first)"
-        } else {
-            "uninstall packages not in the spec (asks first)"
+    if converges("temper prune") {
+        let label = match (extra_pkg, trust_extra, drifted(&["extension-extra"])) {
+            (_, _, true) if extra_pkg || trust_extra => {
+                "uninstall packages / GNOME extensions and untrust taps not in the spec (asks first)"
+            }
+            (false, false, true) => "uninstall the GNOME extensions not in the spec (asks first)",
+            (true, true, _) => "uninstall packages / untrust taps not in the spec (asks first)",
+            (false, true, _) => "untrust taps not in the spec (asks first)",
+            _ => "uninstall packages not in the spec (asks first)",
         };
         push(&mut out, label, "temper prune");
     }
-    if trust_gap {
-        push(
-            &mut out,
-            "trust declared taps so brew loads their formulae",
-            "temper install --packages-only",
-        );
-    }
-    if dconf_stale {
+    if converges("temper restore-gnome") {
         push(
             &mut out,
             "reload the desktop snapshot, clobbering live tweaks (asks first)",
             "temper restore-gnome",
         );
     }
-    // Spec ← machine (absorb the machine's state into the spec).
-    if missing_pkg || extra_pkg || trust_extra || trust_gap || dconf_capture {
-        let label = if dconf_capture && (missing_pkg || extra_pkg || trust_extra || trust_gap) {
-            "interactively add extras / drop missing entries (packages, tap-trust, desktop keys)"
-        } else if dconf_capture {
-            "interactively absorb changed desktop keys, per section"
-        } else {
-            "interactively add extras / drop missing entries (packages + tap-trust)"
-        };
-        push(&mut out, label, "temper reconcile");
+    // Spec ← machine (absorb the machine's state into the spec). Fires only for
+    // kinds whose `absorb` cell actually names reconcile.
+    if absorbs("temper reconcile") {
+        let mut parts = Vec::new();
+        if pkg_capture {
+            parts.push("packages, tap-trust");
+        }
+        if ext_capture {
+            parts.push("GNOME extensions");
+        }
+        if dconf_capture {
+            parts.push("desktop keys");
+        }
+        let label = format!(
+            "interactively add extras / drop entries you removed on purpose ({})",
+            parts.join(", ")
+        );
+        push(&mut out, &label, "temper reconcile");
     }
-    if dconf_capture {
+    if absorbs("temper snapshot-gnome") {
         push(
             &mut out,
             "capture the whole desktop subtree into the spec instead",
@@ -632,8 +889,11 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
             "temper drift",
         );
     }
-    // Config drift: re-apply, or revert the last run.
-    if config_drift {
+    // Config drift: re-apply, or revert the last run. Gated on the registry
+    // naming `install` for a kind that actually drifted — never on "everything
+    // not in this list", which is how a failed `needs` came to be answered by a
+    // verb that bails on a failed `needs`.
+    if converges("temper install") {
         push(
             &mut out,
             "re-apply the drifted config steps above (copy/block/setkey/sysfile/exec/profile)",
@@ -859,7 +1119,22 @@ pub fn run_drift(
     for snap in &machine.dconf {
         let group = format!("dconf/{}", snap.name());
         match crate::dconf::snapshot_state(home, snap)? {
-            crate::dconf::SnapshotState::NoDconf => {}
+            // Reported, not dropped. A declared snapshot that cannot be
+            // evaluated used to vanish from the report entirely, so a Mac — or
+            // a Linux box with no session — showed no sign that a whole
+            // machine-scope subtree was going unchecked. `setkey` already
+            // degrades this way; a snapshot must too.
+            crate::dconf::SnapshotState::Unobservable(why) => findings.push(Finding {
+                app: group,
+                kind: "dconf-unavailable",
+                target: snap.file.clone(),
+                // Status-only: degraded, not drift. `ok` keeps it out of the
+                // out-of-sync count, and the `unavailable` prefix is what
+                // `status_only()` reads.
+                ok: true,
+                status: "unavailable".into(),
+                detail: Some(why),
+            }),
             crate::dconf::SnapshotState::Uncaptured => findings.push(Finding {
                 app: group,
                 kind: "dconf-uncaptured",
@@ -1185,33 +1460,36 @@ impl PrunePlan {
     pub fn is_empty(&self) -> bool {
         self.packages.is_empty() && self.untrust.is_empty() && self.extensions.is_empty()
     }
+    /// Every item the plan would remove. Each variant that `commit_prune` acts
+    /// on is counted: a count that omits one is a silent cap (Principle #6) —
+    /// this once asked "remove 0 item(s)?" and then uninstalled three
+    /// extensions.
     pub fn len(&self) -> usize {
-        self.packages.len() + self.untrust.len()
+        self.packages.len() + self.untrust.len() + self.extensions.len()
     }
 }
 
-/// Prune installed-but-not-declared packages **and** trusted-but-undeclared
-/// taps. Returns the plan; the caller previews and confirms before
-/// `commit_prune` applies it.
+/// Installed-but-undeclared packages, computed **once** for every verb that
+/// reports them (`prune`, `adopt`) so they cannot disagree about what an extra
+/// is. brew-family (brew/cask/tap) extras come from the dependency-aware
+/// `providers::brew_extras`; a naive set-diff wrongly flags every installed
+/// transitive dependency, which is why `adopt` used to list hundreds of entries
+/// that `reconcile` then declined to offer.
 ///
-/// Mirrors `run_drift`: brew-family (brew/cask/tap) extras are computed
-/// dependency-aware via `providers::brew_extras` (a naive set-diff wrongly flags
-/// every installed transitive dependency); only non-brew managers use the naive
-/// `packages::extras`. Tap-trust extras are the untrust side of drift's
-/// `trusted-extra`. Inert when the machine declares no packages (so an
-/// unconfigured machine never proposes nuking everything).
-pub fn run_prune(
+/// Empty when the machine declares no packages, so an unconfigured machine
+/// never proposes nuking everything. That gate belongs to packages ALONE —
+/// tap-trust and extensions are separate kinds with their own opt-in gates.
+fn package_extras(
     home: &Path,
     machine: &Machine,
     ignore: &Ignore,
-    brew_trust: &[String],
-) -> Result<PrunePlan> {
+) -> Result<Vec<(packages::Manager, String)>> {
     let effective = packages::effective_set(home, machine)?;
     if effective.is_empty() {
-        return Ok(PrunePlan::default());
+        return Ok(Vec::new());
     }
     let installed = providers::probe(&effective)?;
-    let mut packages: Vec<(packages::Manager, String)> =
+    let mut out: Vec<(packages::Manager, String)> =
         packages::extras(&effective, &installed, ignore)
             .into_iter()
             .filter(|(m, _)| {
@@ -1221,7 +1499,23 @@ pub fn run_prune(
                 )
             })
             .collect();
-    packages.extend(providers::brew_extras(&effective, ignore)?);
+    out.extend(providers::brew_extras(&effective, ignore)?);
+    Ok(out)
+}
+
+/// Prune installed-but-not-declared packages, trusted-but-undeclared taps, and
+/// user-scope GNOME extensions no bundle declares. Returns the plan; the caller
+/// previews and confirms before `commit_prune` applies it.
+///
+/// Each of the three is gated independently: a machine that declares no
+/// packages still prunes its extension extras, because `drift` reports them.
+pub fn run_prune(
+    home: &Path,
+    machine: &Machine,
+    ignore: &Ignore,
+    brew_trust: &[String],
+) -> Result<PrunePlan> {
+    let packages = package_extras(home, machine, ignore)?;
 
     // Trusted-but-undeclared taps → untrust (honors `[ignore].tap`). Skipped
     // without brew (`trusted_taps` → None).
@@ -1278,8 +1572,8 @@ pub fn run_snapshot(home: &Path, machine: &Machine) -> Result<Vec<std::path::Pat
     if machine.dconf.is_empty() {
         return Ok(Vec::new());
     }
-    if crate::primitives::which("dconf").is_none() {
-        bail!("dconf not found — cannot capture a dconf snapshot on this host");
+    if let crate::dconf::Store::Unreadable(why) = crate::dconf::observe() {
+        bail!("cannot capture a dconf snapshot: {why}");
     }
     let mut journal = Journal::begin();
     let written = crate::dconf::capture(home, machine, &mut journal)?;
@@ -1302,12 +1596,7 @@ pub fn run_adopt(
     machine: &Machine,
     ignore: &Ignore,
 ) -> Result<Vec<(packages::Manager, String)>> {
-    let effective = packages::effective_set(home, machine)?;
-    if effective.is_empty() {
-        return Ok(Vec::new());
-    }
-    let installed = providers::probe(&effective)?;
-    Ok(packages::extras(&effective, &installed, ignore))
+    package_extras(home, machine, ignore)
 }
 
 /// Whether an `ensure` step should apply on `update`. Semantics: install-if-
@@ -1521,6 +1810,7 @@ mod remediation_tests {
             "shell",
             "json-semantic",
             "unknown",
+            "dconf-unavailable",
         ] {
             emitted.push(k.to_string());
         }
@@ -1528,17 +1818,18 @@ mod remediation_tests {
         emitted.dedup();
         for k in &emitted {
             assert!(
-                KIND_ANSWERS.iter().any(|(kind, _)| kind == k),
+                KIND_ANSWERS.iter().any(|spec| spec.name == k),
                 "finding kind `{k}` has no entry in KIND_ANSWERS — say what resolves \
                  it (or that nothing does) before shipping the report"
             );
         }
         // …and the reverse: an entry for a kind nothing emits is dead config that
         // will quietly stop matching reality.
-        for (kind, _) in KIND_ANSWERS {
+        for spec in KIND_ANSWERS {
             assert!(
-                emitted.iter().any(|k| k == kind),
-                "KIND_ANSWERS lists `{kind}`, which nothing emits any more — delete it"
+                emitted.iter().any(|k| k == spec.name),
+                "KIND_ANSWERS lists `{}`, which nothing emits any more — delete it",
+                spec.name
             );
         }
         assert!(emitted.len() >= 15, "kind scrape found too few: {emitted:?}");
@@ -1548,19 +1839,79 @@ mod remediation_tests {
         // let the compiler enforce this instead of a scrape.
     }
 
+    /// BOTH directions must be answered, for every kind.
+    ///
+    /// This is the test the old registry structurally could not have. It was a
+    /// flat bag of verbs per kind, so `extension → [install]` — a kind with a
+    /// converge answer and no spec-side answer at all — passed every check while
+    /// `drift` told users to run `reconcile`, which had no code path for it.
+    /// An empty cell is now a compile-shaped omission; an unhelpful one has to
+    /// be written down as `Hand`/`NA` with a reason someone can argue with.
+    #[test]
+    fn every_kind_answers_both_directions() {
+        for spec in KIND_ANSWERS {
+            assert!(
+                !spec.converge.is_empty(),
+                "kind `{}` says nothing about changing the MACHINE",
+                spec.name
+            );
+            assert!(
+                !spec.absorb.is_empty(),
+                "kind `{}` says nothing about changing the SPEC — if the answer is \
+                 'a hand edit', say which file and why",
+                spec.name
+            );
+            for a in spec.converge.iter().chain(spec.absorb) {
+                if let Answer::NA(why) | Answer::Hand { why, .. } = a {
+                    assert!(
+                        why.len() > 12,
+                        "kind `{}` declines a direction without a real reason",
+                        spec.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// `remediations` may never name a command the registry does not record for
+    /// a kind that actually drifted.
+    ///
+    /// Only the registry→remediations direction was ever tested, so the reverse
+    /// went unnoticed: `remediations` offered `temper reconcile` for `extension`,
+    /// `rpm` and `dconf-uncaptured`, none of which reconcile can touch. Two
+    /// encodings of one fact, and the untested direction is where they drifted.
+    #[test]
+    fn remediations_never_invent_a_verb_the_registry_lacks() {
+        for spec in KIND_ANSWERS {
+            let mut allowed = spec.converge_verbs();
+            allowed.extend(spec.absorb_verbs());
+            // Offered for any failing assertion, and never a repair claim.
+            allowed.push("temper drift");
+            // Paired with `install` as the revert of the same run.
+            if allowed.contains(&"temper install") {
+                allowed.push("temper undo");
+            }
+            for r in remediations(&[f(spec.name, false)]) {
+                assert!(
+                    allowed.contains(&r.command.as_str()),
+                    "a `{}` finding makes drift offer `{}`, which the registry does \
+                     not list for it — advice must be executable for the finding it names",
+                    spec.name,
+                    r.command
+                );
+            }
+        }
+    }
+
     /// Every kind the registry answers with a verb must actually produce that
     /// command from `remediations`. Catches an answer that was declared but
     /// never wired, and one whose wiring drifted from its declaration.
     #[test]
     fn registered_verbs_are_actually_emitted() {
-        for (kind, answers) in KIND_ANSWERS {
-            let wanted: Vec<&str> = answers
-                .iter()
-                .filter_map(|a| match a {
-                    Answer::Verb(c) => Some(*c),
-                    Answer::NoVerb(_) => None,
-                })
-                .collect();
+        for spec in KIND_ANSWERS {
+            let kind = spec.name;
+            let mut wanted = spec.converge_verbs();
+            wanted.extend(spec.absorb_verbs());
             if wanted.is_empty() {
                 continue;
             }

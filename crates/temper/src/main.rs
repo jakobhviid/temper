@@ -1751,6 +1751,23 @@ fn cmd_reconcile(
     } else {
         0
     };
+    // Extensions are NOT tap-trust, and `--csw` takes both directions.
+    //
+    // Tap-trust drops are refused because `[brew].trust` is FLEET scope — one
+    // machine's state must not delete a tap the rest of the fleet needs. A
+    // machine's own `extensions` list is machine scope, which is precisely what
+    // `--csw` exists to absorb, so borrowing the trust rule here would be
+    // reasoning from the wrong precedent. It would also manufacture drift no
+    // verb clears: refuse the drop and the next `drift` reports the extension
+    // missing again, with `install` offered to put back the thing the user just
+    // said they had removed.
+    //
+    // What makes this safe is not refusing the drop, it is refusing to *guess*:
+    // `gext_machine_absent` returns nothing unless `gnome-extensions` actually
+    // ran and answered, so absence is only ever acted on where it was observed.
+    // And because the candidate set is the machine's OWN list, `init` — which
+    // seeds via `--csw` on a machine block it just created empty — has nothing
+    // to drop by construction.
 
     if json && !(csw && yes) {
         let adds: Vec<_> = plan
@@ -1783,39 +1800,44 @@ fn cmd_reconcile(
                 "machine": m.name, "brewfile": plan.brewfile_rel,
                 "adds": adds, "drops": plan.drops,
                 "trust_adds": plan.trust_adds, "trust_drops": plan.trust_drops,
+                // Every candidate the plan carries reaches this document, or a
+                // `--json` consumer previews a reconcile that then changes
+                // something it was never shown (Principle #8's `--json` clause).
+                "gext_adds": plan.gext_adds, "gext_drops": plan.gext_drops,
+                "trust_skipped": skipped_trust_count,
                 "dconf": dconf_plans
             })
         );
         return Ok(());
     }
 
+    // Every candidate the plan can carry is tested here. A field left out makes
+    // its feature UNREACHABLE whenever it is the only drift present — which is
+    // what happened to `gext_adds`: reconcile reported "nothing to absorb" and
+    // returned, while `drift` listed the extensions in the same breath.
     if plan.adds.is_empty()
         && plan.drops.is_empty()
         && plan.trust_adds.is_empty()
         && plan.trust_drops.is_empty()
+        && plan.gext_adds.is_empty()
+        && plan.gext_drops.is_empty()
         && plan.dconf.is_empty()
     {
-        println!(
-            "reconcile {}: nothing for reconcile to absorb or drop.",
-            m.name
-        );
-        // `reconcile` covers packages, tap-trust and desktop keys. Undeclared
-        // GNOME extensions are real drift it deliberately cannot touch (they
-        // live in a shared bundle), so saying "in sync" here read as flatly
-        // contradicting `drift`.
-        let extras = providers::gext_extras(
-            &providers::effective_extensions(&home, &m).unwrap_or_default(),
-            &ft.ignore,
-        );
-        if !extras.is_empty() {
+        // `--csw --yes` skips the JSON branch above, so this needs its own
+        // guard: one unguarded line makes stdout unparseable (Principle #6b).
+        if json {
             println!(
                 "{}",
-                ui::dim(&format!(
-                    "  note: {} GNOME extension(s) are installed but undeclared — reconcile \
-                     can't absorb those (they belong to a shared bundle).\n  \
-                     Declare them, add them to [ignore].gext, or `temper prune` to remove them.",
-                    extras.len()
-                ))
+                serde_json::json!({
+                    "machine": m.name, "applied": false,
+                    "added": 0, "dropped": 0, "ignored": 0, "dconf_keys": 0,
+                    "trust_skipped": skipped_trust_count,
+                })
+            );
+        } else {
+            println!(
+                "reconcile {}: nothing for reconcile to absorb or drop.",
+                m.name
             );
         }
         return Ok(());
@@ -1853,6 +1875,7 @@ fn cmd_reconcile(
     let mut chosen_tap_ignores: Vec<String> = Vec::new();
     let mut chosen_dconf: Vec<(usize, Vec<dconf::KeyDiff>)> = Vec::new();
     let mut chosen_gext: Vec<String> = Vec::new();
+    let mut chosen_gext_drops: Vec<String> = Vec::new();
 
     if csw {
         // Machine-scope only. `[ignore]` routing is a judgement, not a state, so
@@ -1860,9 +1883,12 @@ fn cmd_reconcile(
         // needs --include-trust (and is reported below either way).
         chosen_drops = plan.drops.clone();
         chosen_adds = plan.adds.iter().map(|a| a.token.clone()).collect();
-        // Machine-scoped, so `--csw` may take these: they land in this machine's
-        // own `extensions`, never in a shared bundle.
+        // Machine-scoped, so `--csw` takes both directions: they land in this
+        // machine's own `extensions`, never in a shared bundle. See the note
+        // above on why the tap-trust "never drop automatically" rule does not
+        // transfer here.
         chosen_gext = plan.gext_adds.clone();
+        chosen_gext_drops = plan.gext_drops.clone();
         if include_trust {
             // Adds only — see the note above on why a drop is never automatic.
             chosen_trust_adds = plan.trust_adds.clone();
@@ -1930,7 +1956,24 @@ fn cmd_reconcile(
             }
         }
 
-            // Installed GNOME extensions no bundle or machine declares → add to THIS
+        // Declared by THIS machine but not installed → keep/drop, default KEEP
+        // (the `drops`/`trust_drops` shape). Keeping lets the next converge
+        // reinstall it; dropping says "I removed this on purpose" — which had no
+        // verb at all before, so an extension absorbed once could never be
+        // un-absorbed and every `install` put it back.
+        if !plan.gext_drops.is_empty() {
+            println!(
+                "\n{}",
+                ui::bold("Declared for this machine but not installed:")
+            );
+            for uuid in &plan.gext_drops {
+                if !prompt_yes(&format!("  keep `{uuid}` in [[machine]].extensions?")) {
+                    chosen_gext_drops.push(uuid.clone());
+                }
+            }
+        }
+
+        // Installed GNOME extensions no bundle or machine declares → add to THIS
         // machine's `extensions` (default SKIP, like every other extra).
         if !plan.gext_adds.is_empty() {
             println!(
@@ -2057,6 +2100,7 @@ fn cmd_reconcile(
         && chosen_tap_ignores.is_empty()
         && chosen_dconf.is_empty()
         && chosen_gext.is_empty()
+        && chosen_gext_drops.is_empty()
     {
         if json {
             println!(
@@ -2131,6 +2175,14 @@ fn cmd_reconcile(
             println!(
                 "  {} extension {}  {}",
                 ui::green("+"),
+                uuid,
+                ui::dim(&format!("{} [[machine]].extensions in temper.toml", ui::g_arrow()))
+            );
+        }
+        for uuid in &chosen_gext_drops {
+            println!(
+                "  {} extension {}  {}",
+                ui::red("-"),
                 uuid,
                 ui::dim(&format!("{} [[machine]].extensions in temper.toml", ui::g_arrow()))
             );
@@ -2226,7 +2278,8 @@ fn cmd_reconcile(
         || !chosen_trust_adds.is_empty()
         || !chosen_trust_drops.is_empty()
         || !chosen_tap_ignores.is_empty()
-        || !chosen_gext.is_empty();
+        || !chosen_gext.is_empty()
+        || !chosen_gext_drops.is_empty();
     if tt_edits {
         let tt_path = home.join("temper.toml");
         let before_tt = std::fs::read_to_string(&tt_path)?;
@@ -2246,6 +2299,9 @@ fn cmd_reconcile(
         for uuid in &chosen_gext {
             tt = reconcile::append_machine_extension(&tt, &m.name, uuid)?;
         }
+        for uuid in &chosen_gext_drops {
+            tt = reconcile::remove_machine_extension(&tt, &m.name, uuid)?;
+        }
         // Stamp the temper that wrote this file, so a skew is later distinguishable
         // from a genuine parse error (monotonic — never lowers a newer stamp).
         tt = manifest::stamp_version(&tt)?;
@@ -2257,7 +2313,7 @@ fn cmd_reconcile(
     jrnl.commit()?;
     let keys: usize = chosen_dconf.iter().map(|(_, p)| p.len()).sum();
     let added = chosen_adds.len() + chosen_trust_adds.len() + chosen_gext.len();
-    let dropped = chosen_drops.len() + chosen_trust_drops.len();
+    let dropped = chosen_drops.len() + chosen_trust_drops.len() + chosen_gext_drops.len();
     let ignored = chosen_ignores.len() + chosen_tap_ignores.len();
     if json {
         // Only reachable via --current-state-wins --yes (nothing prompted).
@@ -2473,6 +2529,25 @@ fn cmd_undo(run: Option<String>, list: bool, dry_run: bool, json: bool) -> Resul
         return Ok(());
     }
     let (reverted, skipped) = journal::undo(run.as_deref(), dry_run)?;
+    // `undo` writes folder files — it reverts `temper.toml`, a Brewfile, a dconf
+    // snapshot — so it owes the same git hook every other folder-writing verb
+    // fires. Without it a git-backed home was left silently dirty by the one
+    // command whose whole job is putting things back, which is worst exactly
+    // when it matters: the run being reverted may already have been committed
+    // and pushed, so the repair sat uncommitted while the damage was upstream.
+    // Best-effort and quiet on failure: a folder that can't be resolved must not
+    // turn a successful revert into an error.
+    if !dry_run && reverted > 0 {
+        if let Ok(home) = discovery::find_home() {
+            if let Ok(ft) = load_fleet(&home) {
+                let gc = match machine::resolve(&ft, None) {
+                    Ok(m) => manifest::effective_git(&ft.git, &m.git),
+                    Err(_) => manifest::effective_git(&ft.git, &None),
+                };
+                after_repo_change(&home, &gc, &format!("undo: revert {reverted} change(s)"));
+            }
+        }
+    }
     if json {
         println!(
             "{}",
@@ -2517,10 +2592,20 @@ fn llm_guide() -> String {
     out.push_str(include_str!("../../../PATTERNS.md"));
     out.push_str("\n\n=== README (overview + implementation status) ===\n\n");
     out.push_str(include_str!("../../../README.md"));
+    // Last of the operate-and-author set: only relevant when a folder was
+    // written by an older major, but when it IS relevant nothing else in the
+    // guide explains why the folder no longer parses.
+    out.push_str("\n\n=== MIGRATION (moving a folder across a MAJOR version) ===\n\n");
+    out.push_str(include_str!("../../../MIGRATION-GUIDE.md"));
     // The design docs describe intent; the SCHEMA + STATUS above are what's real.
     out.push_str("\n\n=== ARCHITECTURE (design intent — trust SCHEMA + STATUS above for what's implemented) ===\n\n");
     out.push_str(include_str!("../../../ARCHITECTURE.md"));
     out.push_str("\n\n=== PRINCIPLES (design intent) ===\n\n");
     out.push_str(include_str!("../../../PRINCIPLES.md"));
+    // What is deliberately NOT built, and the known gaps in what is. An agent
+    // authoring a folder needs this as much as the schema: without it, a feature
+    // that scores ⚠ in the matrix reads as one that works.
+    out.push_str("\n\n=== ROADMAP (deferred features + known gaps — what is NOT built) ===\n\n");
+    out.push_str(include_str!("../../../ROADMAP.md"));
     out
 }
