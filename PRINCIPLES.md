@@ -89,10 +89,12 @@ third of `just drift`'s value.
 
 ## 8. Every mutation is planned, reversible, and typed
 
-Plan → apply → drift → undo is the contract **every** primitive implements
-(`profile` is the acknowledged weak case: GUI apply, plist-subset drift). Mutating
-runs are journaled (amdl's content-addressed, after-hash-guarded model: a revert
-that finds the file changed since skips-and-reports rather than clobbering).
+Plan → apply → drift → undo is the contract **every** primitive implements.
+`profile` is the acknowledged weak case, but on two of those four only: its apply
+is a GUI dialog the user approves, and it isn't undoable. It plans and drifts like
+the rest. Mutating runs are journaled
+(amdl's content-addressed, after-hash-guarded model: a revert that finds the file
+changed since skips-and-reports rather than clobbering).
 `--json` on every command; an `--llm` guide; human → stdout, progress/errors →
 stderr so pipes stay clean.
 

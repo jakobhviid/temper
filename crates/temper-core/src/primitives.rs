@@ -1453,14 +1453,45 @@ mod sysfile_tests {
 }
 
 // --- profile: install a macOS .mobileconfig -----------------------------------
-// Apply opens it in System Settings for the user to approve — installation
-// can't be silently scripted without MDM, so drift is status-only ("manual").
+// Apply opens it in System Settings for the user to approve — *installing* can't
+// be silently scripted without MDM. Reading what is installed needs neither MDM nor
+// root: `system_profiler SPConfigurationProfileDataType -json` lists every
+// configuration profile, user AND device scope, as an ordinary user, and each entry
+// carries the `PayloadIdentifier` the source `.mobileconfig` declares. That is what
+// makes the presence half of the contract a real check.
 //
-// Idempotent across runs via a content stamp: the profile is only re-opened when
-// it was never applied or its source changed. So `update` stops re-prompting for
-// unchanged profiles every run. (A profile the user removes by hand outside
-// temper isn't re-detected — that would need root to query installed profiles —
-// but any change to the source `.mobileconfig` re-triggers the apply.)
+// What is checkable and what isn't, precisely:
+//   missing  — the identifier is not installed. `install` opens it for approval.
+//   drifted  — installed, but the source changed since temper last applied it
+//              (the content stamp below disagrees), so the installed copy is
+//              stale. Comparing payloads instead would mean re-implementing
+//              Apple's profile semantics; the stamp answers the same question
+//              for the only source temper controls.
+//   in sync  — installed, and either unchanged since temper applied it or never
+//              applied by temper at all. The second case is deliberate: a
+//              profile installed by hand is present, and temper has no basis to
+//              call it stale. Its cost, stated plainly: for a hand-installed
+//              profile temper never applied, a LATER edit to the source is not
+//              reported, because there is no stamp to disagree with. Stamping one
+//              on sight would fix that by asserting the installed copy matches
+//              this source — which is exactly what temper cannot see. Presence is
+//              knowledge; equality would be a guess.
+// The stamp is also what keeps a repeated `install` from re-opening System
+// Settings for a profile that is already there and unchanged. (`update` skips
+// profiles outright — see `plan::lifecycle`: re-offering a GUI dialog on the
+// routine upgrade path would nag, which a silent file re-write never does.)
+//
+// ONE DIRECTION ONLY. This reports declared-but-absent; it does not report
+// installed-but-undeclared, the way packages and gext do, because there is nowhere
+// to absorb one TO. A `[[step]] profile` lives in a shared app-bundle, which
+// `reconcile` is barred from editing on one machine's behalf (the same rule that
+// makes a gext extra report-only), and unlike a package name an absorbed profile is
+// not one line — the `.mobileconfig` itself would have to be exported into the
+// folder, a `copy`-shaped job no verb does.
+//
+// A deferral with a known shape, then: a report-only `profile-extra`, answered by a
+// hand edit, which is where gext started. Worth building the day a profile arrives
+// on a machine some other way and you want it captured.
 
 /// The applied-stamp path for `file`: under the state root, keyed by a hash of
 /// the source path so two distinct profiles never collide.
@@ -1471,8 +1502,8 @@ fn profile_stamp(state_root: &Path, file: &Path) -> PathBuf {
     state_root.join("profiles").join(key)
 }
 
-/// Whether `file` needs (re)installing: `true` if it was never applied or its
-/// content differs from the last-applied stamp. Pure w.r.t. the given state root.
+/// Whether `file`'s content differs from what was last applied. `true` when it
+/// was never applied. Pure w.r.t. the given state root.
 fn profile_needs_apply(state_root: &Path, file: &Path) -> Result<bool> {
     let content = fs::read(file).with_context(|| format!("reading profile {}", file.display()))?;
     let want = blake3::hash(&content).to_hex().to_string();
@@ -1482,11 +1513,148 @@ fn profile_needs_apply(state_root: &Path, file: &Path) -> Result<bool> {
     }
 }
 
+/// Whether temper has ever applied `file` (a stamp exists), regardless of content.
+fn profile_ever_applied(state_root: &Path, file: &Path) -> bool {
+    profile_stamp(state_root, file).exists()
+}
+
+/// The top-level `PayloadIdentifier` a `.mobileconfig` declares, via `plutil` (it
+/// reads XML and binary plists alike). `None` when it can't be read at all — a
+/// signed/encrypted profile is CMS-wrapped rather than a plain plist, and that is
+/// a "can't evaluate", not a "not installed".
+fn profile_identifier(file: &Path) -> Option<String> {
+    let out = std::process::Command::new("plutil")
+        .args(["-extract", "PayloadIdentifier", "raw", "-o", "-"])
+        .arg(file)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!id.is_empty()).then_some(id)
+}
+
+/// Every configuration-profile identifier macOS reports as installed, across both
+/// the user and device sections. `None` means "could not evaluate" — the tool is
+/// absent, failed, or emitted something we don't recognise as its own output.
+///
+/// Deliberately locale-independent: the section names are localization keys
+/// (`spconfigprofile_section_deviceconfigprofiles`), so identity comes from the
+/// stable `spconfigprofile_profile_identifier` field and never from display text.
+/// An empty result is reported as an empty SET, not as `None` — a machine with no
+/// profiles installed must still report a declared one as `missing`. Only a
+/// response missing temper's own top-level key degrades to `None`, which catches a
+/// wholesale output change without hiding the case the check exists for.
+///
+/// Queried **once per process** and memoized: the set is machine-wide, so asking
+/// per profile step would run `system_profiler` N times for one identical answer
+/// (0.05–0.2s each) — the same "compose on paper, call the tool once" rule the
+/// package providers follow. Caching for the run is sound because approving one
+/// profile cannot change whether a *different* identifier is installed, and temper
+/// is a CLI that exits.
+fn profile_installed_ids() -> Option<&'static std::collections::BTreeSet<String>> {
+    static IDS: std::sync::OnceLock<Option<std::collections::BTreeSet<String>>> =
+        std::sync::OnceLock::new();
+    IDS.get_or_init(|| {
+        which("system_profiler")?;
+        let out = std::process::Command::new("system_profiler")
+            .args(["SPConfigurationProfileDataType", "-json"])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        parse_installed_ids(&out.stdout)
+    })
+    .as_ref()
+}
+
+/// The parsing half of `profile_installed_ids`, split out so the degrade path is
+/// testable without a Mac: `None` for anything that isn't recognisably
+/// `system_profiler`'s own output, `Some(set)` — possibly empty — otherwise.
+fn parse_installed_ids(stdout: &[u8]) -> Option<std::collections::BTreeSet<String>> {
+    let json: Json = serde_json::from_slice(stdout).ok()?;
+    let sections = json.get("SPConfigurationProfileDataType")?;
+    let mut ids = std::collections::BTreeSet::new();
+    collect_profile_ids(sections, &mut ids);
+    Some(ids)
+}
+
+/// Walk `system_profiler`'s nested `_items` arrays, collecting every
+/// `spconfigprofile_profile_identifier`. Only the profile-level field is taken:
+/// the per-payload `spconfigprofile_payload_identifier` is a different namespace
+/// (`<profile>.payload`), and matching it too could let a declared identifier
+/// collide with someone else's inner payload.
+fn collect_profile_ids(node: &Json, out: &mut std::collections::BTreeSet<String>) {
+    match node {
+        Json::Array(items) => items.iter().for_each(|i| collect_profile_ids(i, out)),
+        Json::Object(map) => {
+            if let Some(Json::String(id)) = map.get("spconfigprofile_profile_identifier") {
+                out.insert(id.clone());
+            }
+            map.values().for_each(|v| collect_profile_ids(v, out));
+        }
+        _ => {}
+    }
+}
+
+/// A `profile` evaluation: its state, plus what to show under a finding that
+/// isn't in sync (the identifier we looked for).
+pub struct ProfileState {
+    pub state: FileState,
+    pub detail: Option<String>,
+}
+
+/// Is the profile in `file` installed, and current? Read-only.
+pub fn profile_state(file: &Path) -> Result<ProfileState> {
+    let plain = |state| ProfileState {
+        state,
+        detail: None,
+    };
+    // No `system_profiler` (not a Mac), or output we don't recognise as its own.
+    // Checked first: it is memoized, so every step after the first pays nothing.
+    let Some(installed) = profile_installed_ids() else {
+        return Ok(plain(FileState::Unavailable));
+    };
+    // A signed/encrypted profile is CMS-wrapped rather than a readable plist, so
+    // its identifier can't be extracted. Degrade — never claim `missing` on the
+    // strength of not knowing.
+    let Some(want) = profile_identifier(file) else {
+        return Ok(plain(FileState::Unavailable));
+    };
+    if !installed.contains(&want) {
+        return Ok(ProfileState {
+            state: FileState::Missing,
+            detail: Some(format!("{want} not installed")),
+        });
+    }
+    let state_root = crate::journal::state_root();
+    // Installed but the source moved since we applied it → the installed copy is
+    // stale. Never applied by temper (no stamp) is in sync, not stale.
+    if profile_ever_applied(&state_root, file) && profile_needs_apply(&state_root, file)? {
+        return Ok(ProfileState {
+            state: FileState::Drifted,
+            detail: Some(format!("{want} installed, but the source changed since")),
+        });
+    }
+    Ok(plain(FileState::InSync))
+}
+
 pub fn profile_apply(file: &Path) -> Result<bool> {
     let state_root = crate::journal::state_root();
-    // Unchanged since the last apply → no-op (don't re-open System Settings).
-    if !profile_needs_apply(&state_root, file)? {
-        return Ok(false);
+    match profile_state(file)?.state {
+        // Installed and current → no-op (don't re-open System Settings).
+        FileState::InSync => return Ok(false),
+        // Can't evaluate installation (no `system_profiler`, or a signed
+        // profile): fall back to the stamp alone. Degrading to "never apply"
+        // would be worse than the occasional redundant prompt.
+        FileState::Unavailable => {
+            if !profile_needs_apply(&state_root, file)? {
+                return Ok(false);
+            }
+        }
+        FileState::Missing | FileState::Drifted => {}
     }
     if which("open").is_none() {
         bail!("profile install needs macOS `open`");
@@ -1535,6 +1703,84 @@ mod profile_tests {
         // Content changed → needs re-apply.
         fs::write(&prof, b"<plist>v2</plist>").unwrap();
         assert!(profile_needs_apply(&state, &prof).unwrap());
+    }
+
+    #[test]
+    fn ever_applied_tracks_the_stamp_not_the_content() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let state = dir.path().join("state");
+        let prof = dir.path().join("x.mobileconfig");
+        fs::write(&prof, b"<plist>v1</plist>").unwrap();
+
+        // The "installed by hand, never applied by temper" case: no stamp, so the
+        // state check must read `in sync` rather than inventing staleness.
+        assert!(!profile_ever_applied(&state, &prof));
+
+        let stamp = profile_stamp(&state, &prof);
+        fs::create_dir_all(stamp.parent().unwrap()).unwrap();
+        fs::write(&stamp, "whatever").unwrap();
+        assert!(profile_ever_applied(&state, &prof));
+    }
+
+    /// The shape `system_profiler SPConfigurationProfileDataType -json` really
+    /// emits: two sections (the device one named by a localization KEY, which is
+    /// why nothing here matches on display text), profiles under nested `_items`,
+    /// and a per-payload identifier in a different namespace that must NOT count.
+    const SP_JSON: &[u8] = br#"{
+      "SPConfigurationProfileDataType": [
+        {
+          "_name": "User (501) Configuration Profiles",
+          "_items": [
+            {
+              "_name": "Brave Debloat",
+              "spconfigprofile_profile_identifier": "com.local.brave.debloat",
+              "_items": [
+                { "spconfigprofile_payload_identifier": "com.local.brave.debloat.payload" }
+              ]
+            }
+          ]
+        },
+        {
+          "_name": "spconfigprofile_section_deviceconfigprofiles",
+          "_items": [
+            {
+              "_name": "Encrypted DNS",
+              "spconfigprofile_profile_identifier": "com.local.dns.quad9",
+              "_items": [
+                { "spconfigprofile_payload_identifier": "com.local.dns.quad9.payload" }
+              ]
+            }
+          ]
+        }
+      ]
+    }"#;
+
+    #[test]
+    fn installed_ids_span_both_scopes_and_ignore_payload_ids() {
+        let ids = parse_installed_ids(SP_JSON).expect("recognised as system_profiler output");
+        assert!(ids.contains("com.local.brave.debloat"), "user scope");
+        assert!(ids.contains("com.local.dns.quad9"), "device scope");
+        // A payload identifier lives in the `<profile>.payload` namespace; counting
+        // it would let a declared identifier match someone else's inner payload.
+        assert!(!ids.contains("com.local.brave.debloat.payload"));
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn no_profiles_installed_is_an_empty_set_not_unknown() {
+        // The case the whole check exists for: nothing installed must still let a
+        // declared profile report `missing`, so this may not degrade to `None`.
+        let ids = parse_installed_ids(br#"{"SPConfigurationProfileDataType": []}"#)
+            .expect("valid output with zero profiles");
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn unrecognised_output_degrades_to_unknown() {
+        // Not JSON at all, and JSON without temper's top-level key: both mean
+        // "can't evaluate", never "nothing is installed".
+        assert!(parse_installed_ids(b"not json").is_none());
+        assert!(parse_installed_ids(br#"{"SomethingElse": []}"#).is_none());
     }
 }
 

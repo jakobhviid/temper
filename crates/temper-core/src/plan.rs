@@ -103,12 +103,17 @@ impl Finding {
 
     /// An `ok` finding that isn't actually enforced-in-sync — reported for
     /// visibility but not repairable/converged: a `manual` step, a backend whose
-    /// tool is absent (`unavailable`), an `exec` with no drift hook, or a
-    /// `profile` (GUI apply). The drift renderer surfaces these separately so
-    /// they neither read as green "in sync" nor as red drift.
+    /// tool is absent (`unavailable`), or an `exec` with no drift hook. The drift
+    /// renderer surfaces these separately so they neither read as green "in sync"
+    /// nor as red drift.
+    ///
+    /// `profile` is deliberately absent from this list even though its apply is a
+    /// GUI step: its presence is checked, so an installed one has earned a green
+    /// "in sync" and a removed one is real drift. The case temper cannot evaluate
+    /// reaches here through the `unavailable` status instead, like any other
+    /// backend whose tool is missing.
     pub fn status_only(&self) -> bool {
-        self.kind == "profile"
-            || self.kind == "when"
+        self.kind == "when"
             || self.status.starts_with("unavailable") // incl. "unavailable — secret …"
             || self.status == "no drift-check"
             || self.status.starts_with("manual")
@@ -180,14 +185,17 @@ fn step_finding(
         }));
     }
     if let Some(profile) = &step.profile {
-        // Not verifiable without MDM — reported status-only, never "drifted".
+        // Presence is checkable without MDM or root — see `primitives::profile_state`.
+        // Only *installing* needs the GUI, which is why `install` is the answer to a
+        // profile finding: it opens System Settings.
+        let st = primitives::profile_state(&home.join(profile))?;
         return Ok(Some(Finding {
             app: app.to_string(),
             kind: "profile",
             target: profile.clone(),
-            ok: true,
-            status: "manual".into(),
-            detail: None,
+            ok: st.state.is_ok(),
+            status: st.state.label().to_string(),
+            detail: st.detail,
         }));
     }
     if let (Some(sysfile), Some(to)) = (&step.sysfile, &step.to) {
@@ -441,7 +449,8 @@ pub const KIND_ANSWERS: &[(&str, &[Answer])] = &[
     ("setkey", &[Answer::Verb("temper install")]),
     ("sysfile", &[Answer::Verb("temper install")]),
     ("exec", &[Answer::Verb("temper install")]),
-    ("profile", &[Answer::NoVerb("a macOS profile is a manual System-Settings install")]),
+    // `install` opens it in System Settings for the user to approve.
+    ("profile", &[Answer::Verb("temper install")]),
     // Presence gates: reported for visibility.
     ("when", &[Answer::NoVerb("the step's app is absent — status only")]),
     ("needs", &[Answer::NoVerb("install the hard dependency the step names")]),
@@ -627,7 +636,7 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
     if config_drift {
         push(
             &mut out,
-            "re-apply the drifted config steps above (copy/block/setkey/sysfile/exec)",
+            "re-apply the drifted config steps above (copy/block/setkey/sysfile/exec/profile)",
             "temper install",
         );
         push(
@@ -931,13 +940,19 @@ fn apply_step(
     bail!("step names no known primitive (copy / block / setkey / exec / profile / sysfile)")
 }
 
-/// A step's effective lifecycle. Defaults by primitive: exec & seed are
+/// A step's effective lifecycle. Defaults by primitive: exec, seed & profile are
 /// install-only; copy/setkey/block are re-applied every update ("always").
+///
+/// `profile` is install-only because its apply is a **GUI window**, and a missing
+/// profile is real drift: were it `always`, `update` would re-open System Settings
+/// on every routine run until the user gave in. A file write can be re-applied
+/// silently; a dialog cannot. So `drift` names the condition, `install` is the
+/// deliberate act that re-offers it, and the boring upgrade path stays quiet.
 fn lifecycle(step: &Step) -> &str {
     if let Some(r) = &step.run {
         return r;
     }
-    if step.exec.is_some() || step.seed {
+    if step.exec.is_some() || step.seed || step.profile.is_some() {
         "install"
     } else {
         "always"
@@ -1610,6 +1625,47 @@ mod remediation_tests {
     fn all_in_sync_yields_no_remediation() {
         let items = vec![f("copy", true), f("package", true)];
         assert!(remediations(&items).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    fn step_from(toml_src: &str) -> Step {
+        #[derive(serde::Deserialize)]
+        struct Bundle {
+            step: Vec<Step>,
+        }
+        toml::from_str::<Bundle>(toml_src)
+            .unwrap()
+            .step
+            .pop()
+            .unwrap()
+    }
+
+    /// A `profile`'s apply is a System Settings window, so the routine upgrade path
+    /// must not run it: since a missing profile is real drift, an `always` default
+    /// would re-open that dialog on every `temper update` until the user gave in.
+    /// `drift` reports it and `install` re-offers it instead.
+    #[test]
+    fn a_profile_is_install_only_so_update_never_pops_a_dialog() {
+        let p = step_from("[[step]]\nprofile = \"assets/x.mobileconfig\"\n");
+        assert_eq!(lifecycle(&p), "install");
+        // …and `update`'s own filter agrees, which is the property that matters.
+        assert!(!matches!(lifecycle(&p), "always" | "ensure"));
+    }
+
+    #[test]
+    fn an_explicit_run_still_wins_over_the_default() {
+        let p = step_from("[[step]]\nprofile = \"assets/x.mobileconfig\"\nrun = \"always\"\n");
+        assert_eq!(lifecycle(&p), "always");
+    }
+
+    #[test]
+    fn a_copy_is_still_always() {
+        let c = step_from("[[step]]\ncopy = \"assets/x\"\nto = \"~/x\"\n");
+        assert_eq!(lifecycle(&c), "always");
     }
 }
 

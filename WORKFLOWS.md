@@ -558,15 +558,19 @@ which is why it has verbs of its own.
 | kind of state | onto the machine | into the spec |
 |---|---|---|
 | app config (`copy`/`block`/`setkey`/`sysfile`) | `install` / `update` | you author it by hand |
+| macOS profiles (`profile`) | `install` only — its apply is a System Settings dialog, so `update` skips it rather than re-asking every run | you author it by hand (the `.mobileconfig` too) |
 | packages (brew, cask, tap, flatpak, mas, vscode, rpm) | `install` (remove: `prune`) | `reconcile`, or `reconcile --csw` |
 | GNOME extensions (`gext`) | `install` (remove: `prune`) | `reconcile` (per machine), or `[ignore].gext` |
 | desktop dconf subtrees | `restore-gnome` | `snapshot-gnome`, or `reconcile` per key |
 | assertions (`[[assert]]`) | nothing — drift-only, you resolve the condition | n/a |
 
-So `snapshot-gnome` captures row 4 and nothing else; a leftover finding from rows
-1, 3 or 5 is not that verb failing. And a failed **assertion** is the one drift no
-verb converges — a staged ostree deployment clears on reboot, a group membership
-by logging out. `drift` says so rather than naming a command that cannot work.
+So `snapshot-gnome` captures the **dconf** row and nothing else; a leftover finding
+from any other row is not that verb failing. A **profile** is the one row whose
+converge is deliberately absent from `update`: `drift` tells you it is missing and
+`install` re-offers it, because a dialog can't be re-applied silently the way a
+file can. And a failed **assertion** is the one drift no verb converges — a staged
+ostree deployment clears on reboot, a group membership by logging out. `drift` says
+so rather than naming a command that cannot work.
 
 ## Two directions, one table
 

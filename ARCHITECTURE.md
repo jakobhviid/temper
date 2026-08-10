@@ -203,7 +203,7 @@ app-bundles it wants. Drift at app scope is per-file / per-key / per-assertion.
 | `mas` | machine | converge Mac App Store apps in a separate, **forgiving** `mas install` loop — skips apps already installed (per `mas list`), mutes Spotlight-reindex noise (`MAS_NO_AUTO_INDEX`), and a MAS failure is warned + skipped, never fatal (see below) |
 | `gext` | machine | converge GNOME extensions (install from EGO + `gext update`); distinct from *enabling* them (a dconf key) |
 | `rpm-ostree` | machine | layer an rpm that can't be image-baked (proton-vpn); emits a **reboot-required** signal temper reports but never automates |
-| `profile` | app/machine | install a macOS `.mobileconfig` — **weaker contract** (apply is a GUI `open`; drift is status-only `manual`; not silently undoable). Idempotent across runs via a content stamp — re-opened only when the source `.mobileconfig` changed |
+| `profile` | app/machine | install a macOS `.mobileconfig` — **weaker contract** on the *apply* side only (a GUI `open` the user approves; not undoable). Drift is real: the file's `PayloadIdentifier` is matched against `system_profiler`'s installed profiles (user **and** device scope, no root, no MDM), giving `missing` / `drifted` (installed but the source moved, per a content stamp) / `in sync`. A **signed** profile is CMS-wrapped, so its identifier can't be read → `unavailable` |
 | `sysfile` | app | write one **root-owned** system file (`/etc/…`) with mode/owner/group, escalating internally (`sudo install`) for just that write. Drift compares content + mode + owner; not journaled (system-side) |
 | `exec` | app | run a user-supplied script — the escape hatch (see "exec's contract") |
 
@@ -336,7 +336,7 @@ primitive, so the modifier is written only for exceptions.
 | Value | Runs during | Notes |
 |---|---|---|
 | `always` | install + update | default for `copy`/`template`/`setkey`; re-applied and drift-tracked |
-| `install` | install only | default for `seed`, `profile`, one-time `exec`; update skips (reloading whole-desktop dconf clobbers live tweaks) |
+| `install` | install only | default for `seed`, `profile`, one-time `exec`; update skips (reloading whole-desktop dconf clobbers live tweaks, and re-opening System Settings for a declined `profile` would nag every run) |
 | `ensure` | install + update, **install-if-missing only** | the corrected "update installs a little": backfill `grove`/`amdl`/`pwtune` and the zsh tool set if absent, without upgrade-churn |
 | `manual` | never automated | only when explicitly invoked (`restore-gnome`, `speaker-eq`, `eq-import`) |
 
@@ -390,7 +390,8 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
   steps are skipped by both flows.
 - **`drift [machine]`** — read-only: package set + tap-trust (`[brew].trust` vs
   `brew trust --json`, both directions) + every managed file + keys + assertions
-  + exec-hooks. Findings are `ok` / `drifted` / `missing` / `untrusted` /
+  + exec-hooks + installed macOS profiles. Findings are `ok` / `drifted` /
+  `missing` / `untrusted` /
   `trusted-extra` / **`unavailable`** (a backend whose tool is absent here, e.g.
   dconf on a Mac — degraded, not a failure); `manual` steps and image-baked items
   are status-only, never counted as drift.

@@ -152,8 +152,10 @@ section, so one prompt per extension) or take it wholesale with `temper snapshot
 - **`setkey(defaults)`, `sysfile`, and `exec` aren't undoable** — they mutate
   system-side or arbitrary state, not a file temper can snapshot (dconf writes
   *are* journaled and undoable, per key and per restored subtree).
-- **`profile`** (macOS `.mobileconfig`) install is a manual System-Settings step;
-  drift on it is status-only.
+- **`profile`** (macOS `.mobileconfig`) install is a manual System-Settings step —
+  approving it is the user's click, and it isn't undoable. Drift covers present /
+  stale / missing, in both user and device scope; a **signed** profile is the
+  exception, since its identifier can't be read, and reports `unavailable`.
 
 See `ROADMAP.md` for the full ledger of deferred features and scope boundaries.
 

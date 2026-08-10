@@ -1213,9 +1213,8 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
 
 /// Human drift view: grouped by app, drift surfaced first (red), fully-in-sync
 /// apps collapsed to one green line, status-only items (manual / unavailable /
-/// no-drift-check / profile) called out separately so they read as neither
-/// green nor red. `--json` never reaches here, so ANSI is safe (and gated on a
-/// real tty by `ui`).
+/// no-drift-check) called out separately so they read as neither green nor red.
+/// `--json` never reaches here, so ANSI is safe (and gated on a real tty by `ui`).
 fn render_drift(machine: &str, items: &[plan::Finding]) {
     use std::collections::HashMap;
 

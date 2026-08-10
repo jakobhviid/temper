@@ -203,7 +203,9 @@ Package token grammar (same as a Brewfile line):
 Common: `os = "mac"|"linux"` and `role = "desktop"|"server"` (skip on a
 non-matching OS/role; an unknown os/role errors at load); `run = "always"|
 "install"|"ensure"|"manual"` (lifecycle; default: copy/block/setkey → always,
-exec/seed → install). Presence gates (gate config on **reality**):
+exec/seed/profile → install — a profile's apply is a GUI window, so `update`
+leaves it alone rather than re-opening System Settings every run). Presence gates
+(gate config on **reality**):
 `when = { <probe> }` skips the step (loudly) unless the probe passes;
 `needs = { <probe> }` errors unless it passes. A probe is exactly one of
 `binary` / `path` / `brew` / `cask` / `flatpak` / `mas` / `gext` / `rpm` /
@@ -321,12 +323,24 @@ secrets = ["ACOUSTID_KEY"]   # env vars passed through to the script. A live app
 # re-printing) every `update`, give it a `check` — a passing check skips the run
 # entirely.
 
-# profile: install a macOS .mobileconfig (opens System Settings; manual).
-# Idempotent across runs: only re-opened when the source .mobileconfig changed
-# since the last apply (a content stamp), so `update` won't re-prompt for an
-# unchanged profile.
+# profile: install a macOS .mobileconfig (apply opens System Settings to approve).
+# Installing needs the GUI; READING what is installed needs neither MDM nor root, so
+# drift is checked: temper matches the file's top-level PayloadIdentifier against
+# `system_profiler SPConfigurationProfileDataType`, across BOTH the user and device
+# scopes.
+#   missing      → the identifier isn't installed. `temper install` opens it.
+#   drifted      → installed, but the source file changed since temper applied it,
+#                  so the installed copy is stale (tracked by a content stamp).
+#   in sync      → installed, and either unchanged since temper applied it or never
+#                  applied by temper at all — a hand-installed profile is present,
+#                  and temper won't call it stale on no evidence.
+#   unavailable  → can't be evaluated: not a Mac, or a SIGNED/encrypted profile,
+#                  which is CMS-wrapped rather than a readable plist. Degrades to
+#                  status-only; apply then falls back to the content stamp alone.
+# `update` skips profiles entirely (see the `run` default above), so a profile you
+# decline is reported by drift, never re-offered on the routine upgrade path.
 [[step]]
-profile = "assets/x.mobileconfig"   # drift is status-only ("manual")
+profile = "assets/x.mobileconfig"
 
 # sysfile: write one ROOT-owned system file (the clean /etc path)
 [[step]]
