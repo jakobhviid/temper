@@ -280,3 +280,142 @@ fn prune_previews_every_item_it_counts() {
     );
     assert!(text.contains("stray.conf"), "the retired path was never shown:\n{text}");
 }
+
+/// A retired **directory** is removed, and a failure is never counted as work.
+///
+/// `remove_file` returns EISDIR on a directory, so the removal warned and prune
+/// reported it removed anyway — while SPEC's own worked example for `retire` is
+/// `~/.config/old-app`, a directory.
+#[test]
+fn retire_removes_a_directory_and_counts_only_what_went() {
+    let e = Env::new();
+    let dir = e.target("old-app");
+    fs::create_dir_all(dir.join("nested")).unwrap();
+    fs::write(dir.join("nested/state.json"), "{}").unwrap();
+
+    fs::write(
+        e.h().join("temper.toml"),
+        format!(
+            "[[machine]]\nname = \"t\"\nos = \"{}\"\nretire = [\"~/old-app\"]\n",
+            os()
+        ),
+    )
+    .unwrap();
+
+    let out = e.temper().args(["prune", "--yes"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(!dir.exists(), "the retired directory is still here:\n{text}");
+    assert!(
+        text.contains("1 item(s) removed"),
+        "and the count should say so:\n{text}"
+    );
+}
+
+/// Residue that prune removed stops being reported.
+///
+/// Nothing dropped the record, so the next `drift` re-reported the deleted file
+/// — and, because an absent file is not "untouched", described it as one the
+/// user had edited. Red forever, answerable by no verb.
+#[test]
+fn removed_residue_does_not_come_back_as_drift() {
+    let e = Env::new();
+    fs::create_dir_all(e.h().join("assets")).unwrap();
+    fs::write(e.h().join("assets/x.conf"), "deployed by temper\n").unwrap();
+    e.spec("[[step]]\ncopy = \"assets/x.conf\"\nto = \"~/x.conf\"\n");
+    e.temper().arg("install").assert().success();
+    e.spec("");
+
+    e.temper().args(["prune", "--yes"]).assert().success();
+    assert!(!e.target("x.conf").exists());
+
+    let out = e.temper().args(["drift", "--json"]).output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let kinds: Vec<&str> = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["kind"].as_str().unwrap())
+        .collect();
+    assert!(
+        !kinds.contains(&"deployed-file-extra"),
+        "a file prune deleted is still being reported: {v}"
+    );
+    assert_eq!(v["out_of_sync"], 0, "…and it counts as drift: {v}");
+}
+
+/// Two `block` steps in one file are two pieces of residue, not one.
+///
+/// The ledger keyed by path, so the second block overwrote the first and only
+/// one region was ever tracked. Dropping either left an untracked region in the
+/// user's file forever.
+#[test]
+fn two_blocks_in_one_file_are_tracked_separately() {
+    let e = Env::new();
+    fs::create_dir_all(e.h().join("assets")).unwrap();
+    fs::write(e.h().join("assets/one"), "line one\n").unwrap();
+    fs::write(e.h().join("assets/two"), "line two\n").unwrap();
+    fs::write(e.target("rc"), "# the user's own\n").unwrap();
+    e.spec(
+        "[[step]]\nblock = \"assets/one\"\nin = \"~/rc\"\nmarker = \"one\"\n\n\
+         [[step]]\nblock = \"assets/two\"\nin = \"~/rc\"\nmarker = \"two\"\n",
+    );
+    e.temper().arg("install").assert().success();
+    let rc = fs::read_to_string(e.target("rc")).unwrap();
+    assert!(rc.contains("line one") && rc.contains("line two"), "{rc}");
+
+    // Drop only the first. The second is still declared and must survive.
+    e.spec("[[step]]\nblock = \"assets/two\"\nin = \"~/rc\"\nmarker = \"two\"\n");
+    let out = e.temper().args(["prune", "--json"]).output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let residue: Vec<&str> = v["residue"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        residue.len(),
+        1,
+        "exactly the dropped region is residue: {v}"
+    );
+
+    e.temper().args(["prune", "--yes"]).assert().success();
+    let rc = fs::read_to_string(e.target("rc")).unwrap();
+    assert!(!rc.contains("line one"), "the dropped region should be gone:\n{rc}");
+    assert!(rc.contains("line two"), "the declared region must survive:\n{rc}");
+    assert!(rc.contains("# the user's own"), "…and so must the user's file:\n{rc}");
+}
+
+/// Re-spelling a still-declared target does not make its file residue.
+///
+/// The ledger compared keys as written while everything else resolved them, so
+/// changing `to = "~/x.conf"` to the absolute path made the old key look like
+/// residue — and prune deleted a file the spec still declared.
+#[test]
+fn respelling_a_declared_target_is_not_residue() {
+    let e = Env::new();
+    fs::create_dir_all(e.h().join("assets")).unwrap();
+    fs::write(e.h().join("assets/x.conf"), "deployed by temper\n").unwrap();
+    e.spec("[[step]]\ncopy = \"assets/x.conf\"\nto = \"~/x.conf\"\n");
+    e.temper().arg("install").assert().success();
+    let deployed = e.target("x.conf");
+    assert!(deployed.is_file());
+
+    // Same file, spelled absolutely.
+    e.spec(&format!(
+        "[[step]]\ncopy = \"assets/x.conf\"\nto = \"{}\"\n",
+        deployed.display()
+    ));
+    let out = e.temper().args(["prune", "--json"]).output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        v["residue"].as_array().map(|a| a.len()).unwrap_or(0),
+        0,
+        "a re-spelled target is the same file, not residue: {v}"
+    );
+    e.temper().args(["prune", "--yes"]).assert().success();
+    assert!(
+        deployed.exists(),
+        "prune deleted a file the spec still declares"
+    );
+}

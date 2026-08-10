@@ -384,11 +384,10 @@ fn apply_one(
 /// The paths this machine's spec currently deploys, with the bytes it intends
 /// to leave there — `copy` and `sysfile` only.
 ///
-/// `block` is deliberately absent: it inserts a marker-delimited region into a
-/// file someone else owns, so its residue is the *region*, not the file, and
-/// removing it means editing rather than deleting. That is a different operation
-/// and it is not built; saying so beats recording a path whose removal would
-/// delete a user's `.zshrc`.
+/// `block` is included, but its residue is the *region* rather than the file:
+/// the file belongs to the user — a `.zshrc` — so retiring one is an edit. That
+/// is why an entry is keyed by `(file, marker)` and hashed over the region body,
+/// and why two blocks in one file are two entries.
 fn deployed_paths(home: &Path, machine: &Machine) -> Result<crate::ledger::Ledger> {
     let resolved = resolve(home, machine)?;
     let mut out = crate::ledger::Ledger::new();
@@ -406,29 +405,39 @@ fn deployed_paths(home: &Path, machine: &Machine) -> Result<crate::ledger::Ledge
         // The hash of what the spec WOULD leave there. Reading the source rather
         // than the target keeps this honest on a machine that has drifted: the
         // ledger records what temper deploys, not what happens to be there.
-        let Ok(bytes) = std::fs::read(home.join(src)) else {
-            continue;
-        };
+        //
+        // An unreadable source (a renamed asset, a partial sync) still yields an
+        // entry, with an empty hash. Skipping it dropped the path from the
+        // DECLARED set, which is the same list `residue` diffs against — so a
+        // file the spec still declares became residue and `prune` deleted it.
+        // An empty hash can never match, so the entry is reportable and never
+        // removable.
+        let bytes = std::fs::read(home.join(src)).ok();
         // A block's identity is (file, marker) and its content is the region
         // body, so it is hashed and keyed differently from a whole-file deploy.
-        let (key, hash, marker) = if kind == "block" {
+        let (hash, marker) = if kind == "block" {
             let Some(marker) = step.marker.clone() else {
                 continue;
             };
-            let body = String::from_utf8_lossy(&bytes).trim_end_matches('\n').to_string();
-            (
-                target,
-                blake3::hash(body.as_bytes()).to_hex().to_string(),
-                Some(marker),
-            )
+            let hash = bytes.as_ref().map(|b| {
+                let body = String::from_utf8_lossy(b).trim_end_matches('\n').to_string();
+                blake3::hash(body.as_bytes()).to_hex().to_string()
+            });
+            (hash, Some(marker))
         } else {
-            (target, blake3::hash(&bytes).to_hex().to_string(), None)
+            (
+                bytes
+                    .as_ref()
+                    .map(|b| blake3::hash(b).to_hex().to_string()),
+                None,
+            )
         };
         out.insert(
-            key,
+            crate::ledger::Deployed::key(&target, marker.as_deref()),
             crate::ledger::Deployed {
-                hash,
+                hash: hash.unwrap_or_default(),
                 kind: kind.to_string(),
+                path: target,
                 marker,
             },
         );
@@ -1320,12 +1329,18 @@ pub fn run_drift(
     // Files this spec used to deploy and no longer declares. Nothing else can
     // see these: a filesystem cannot be asked which of its files temper wrote.
     let declared_paths: Vec<String> = deployed_paths(home, machine)?.into_keys().collect();
-    for (path, rec) in crate::ledger::residue(&machine.name, &declared_paths) {
-        let edited = !crate::ledger::is_untouched(&path, &rec);
+    for (_key, rec) in crate::ledger::residue(&machine.name, &declared_paths) {
+        if !crate::ledger::still_present(&rec) {
+            continue;
+        }
+        let edited = !crate::ledger::is_untouched(&rec);
         findings.push(Finding {
             app: "deployed".into(),
             kind: "deployed-file-extra",
-            target: path,
+            target: match &rec.marker {
+                Some(m) => format!("{} ({m})", rec.path),
+                None => rec.path.clone(),
+            },
             ok: false,
             status: "extra".into(),
             detail: Some(if edited {
@@ -2092,11 +2107,14 @@ pub fn run_prune(
     // reportable. A ledger is a record, not a licence to delete a user's edits.
     let declared_paths: Vec<String> = deployed_paths(home, machine)?.into_keys().collect();
     let (mut residue, mut residue_edited) = (Vec::new(), Vec::new());
-    for (path, rec) in crate::ledger::residue(&machine.name, &declared_paths) {
-        if crate::ledger::is_untouched(&path, &rec) {
-            residue.push(path);
-        } else if crate::manifest::expand_tilde(&path).exists() {
-            residue_edited.push(path);
+    for (key, rec) in crate::ledger::residue(&machine.name, &declared_paths) {
+        if !crate::ledger::still_present(&rec) {
+            continue; // already gone — not work, and counting it would inflate the total
+        }
+        if crate::ledger::is_untouched(&rec) {
+            residue.push(key);
+        } else {
+            residue_edited.push(key);
         }
     }
 
@@ -2143,7 +2161,7 @@ pub fn commit_prune(
     machine: &Machine,
     plan: &PrunePlan,
     ignore: &Ignore,
-) -> Result<bool> {
+) -> Result<PruneOutcome> {
     // Uninstalling a pkg-based cask needs root per cask, same as installing one.
     // No `acquire` here: the plan is already confirmed and brew asks in its own
     // words on the first one — this just stops it asking again for the rest.
@@ -2161,31 +2179,59 @@ pub fn commit_prune(
     if !plan.extensions.is_empty() {
         providers::gext_uninstall(&plan.extensions)?;
     }
+    // A retired target is as often a directory (`~/.config/old-app`) as a file,
+    // and `sysfile` retires root-owned ones — `remove_file` alone failed both,
+    // warned, and let the run report them removed.
+    let mut failed: Vec<String> = Vec::new();
     for path in &plan.retired {
         let p = crate::manifest::expand_tilde(path);
-        if let Err(e) = std::fs::remove_file(&p) {
+        if let Err(e) = crate::ledger::remove_path(&p) {
             eprintln!(
                 "{} could not remove {}: {e}",
                 crate::ui::yellow(crate::ui::g_warn()),
                 p.display()
             );
+            failed.push(path.clone());
         }
     }
     // Residue carries how to remove it: a file is deleted, a block's region is
     // edited out of a file that stays.
-    let recorded = crate::ledger::load(&machine.name);
-    for path in &plan.residue {
-        let Some(rec) = recorded.get(path) else { continue };
-        if let Err(e) = crate::ledger::remove(path, rec) {
-            eprintln!(
-                "{} could not remove {path}: {e}",
-                crate::ui::yellow(crate::ui::g_warn())
-            );
+    let mut recorded = crate::ledger::load(&machine.name);
+    for key in &plan.residue {
+        let Some(rec) = recorded.get(key).cloned() else {
+            continue;
+        };
+        match crate::ledger::remove(&rec) {
+            // What is gone stops being recorded. Leaving the entry made the next
+            // `drift` report a file prune had just deleted, as one the user had
+            // edited — red, permanent, and answerable by no verb.
+            Ok(()) => {
+                recorded.remove(key);
+            }
+            Err(e) => {
+                eprintln!(
+                    "{} could not remove {key}: {e}",
+                    crate::ui::yellow(crate::ui::g_warn())
+                );
+                failed.push(key.clone());
+            }
         }
     }
+    let _ = crate::ledger::save(&machine.name, &recorded);
     providers::remotes_delete(&plan.flatpak_remotes)?;
     let reboot = providers::rpm_ostree_uninstall(&plan.rpm_ostree, false)?;
-    Ok(reboot)
+    Ok(PruneOutcome { reboot, failed })
+}
+
+/// What a prune actually did — as distinct from what it planned.
+///
+/// `prune` reported `plan.len()` removed regardless of what failed, so a
+/// permission error or a missing tool still read as success. Principle #6b:
+/// report the effect, never the invocation.
+pub struct PruneOutcome {
+    pub reboot: bool,
+    /// Items that were planned, attempted, and are still here.
+    pub failed: Vec<String>,
 }
 
 /// Snapshot: capture each declared `[[machine.dconf]]` subtree (filtered) into

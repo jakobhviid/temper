@@ -314,7 +314,8 @@ nothing and is not a limit anyone has to weigh.
   because of col 11.
 - **`block` residue is the region, not the file.** The file belongs to the user —
   a `.zshrc` — so retiring a block is an *edit*: the marker-delimited region is
-  removed and the file stays. The ledger records `(file, marker)` and hashes the
+  removed and the file stays. `(file, marker)` is also the entry's **identity**,
+  so two blocks in one file are two pieces of residue. The ledger hashes the
   region body, so the same "untouched or reported" guard applies to the part
   temper actually wrote. Recording the path and deleting it would have been the
   most destructive thing in the tool.
@@ -348,6 +349,13 @@ So retirement is two mechanisms, not one:
   It is hash-guarded exactly as `undo` is: remove it if it is unmodified since
   temper deployed it, **report** it if you have edited it. Most retirements then
   need no tombstone at all.
+
+  Three properties keep it from deleting the wrong thing. Its keys are compared
+  **resolved**, so re-spelling a still-declared target is not a retirement. A
+  source temper cannot read still yields an entry, with no hash — declared, and
+  never removable, because an unknown hash must not read as a matching one. And
+  what is removed stops being recorded, so a path prune deleted does not come
+  back as drift.
 - **An explicit tombstone** — a `retire` list, at bundle or machine scope —
   covers what a ledger structurally cannot: files deployed before the ledger
   existed, and things temper never deployed but that must be gone. It is

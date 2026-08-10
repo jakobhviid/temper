@@ -1462,10 +1462,16 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
             // No tty to confirm on: JSON is a preview unless `--yes` explicitly opts
             // into the (destructive) removal.
             let removed = yes && !dry_run && !prune_plan.is_empty();
-            if removed {
-                let _reboot = plan::commit_prune(&home, &m, &prune_plan, &ignore)?;
-            }
-            println!("{}", prune_plan.to_json(&m.name, removed));
+            let failed = if removed {
+                plan::commit_prune(&home, &m, &prune_plan, &ignore)?.failed
+            } else {
+                Vec::new()
+            };
+            let mut doc = prune_plan.to_json(&m.name, removed);
+            // A consumer that reads `removed: true` and stops has been told a
+            // half-truth if some of it is still on disk.
+            doc["failed"] = serde_json::json!(failed);
+            println!("{doc}");
             return Ok(());
         }
 
@@ -1535,9 +1541,26 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
             println!("aborted — nothing removed.");
             return Ok(());
         }
-        let reboot = plan::commit_prune(&home, &m, &prune_plan, &ignore)?;
-        println!("prune {}: {} item(s) removed", m.name, prune_plan.len());
-        if reboot {
+        let outcome = plan::commit_prune(&home, &m, &prune_plan, &ignore)?;
+        // The count is what happened, not what was planned. A permission error
+        // or a directory where a file was expected used to warn and still be
+        // reported as removed (Principle #6b: report the effect).
+        println!(
+            "prune {}: {} item(s) removed",
+            m.name,
+            prune_plan.len() - outcome.failed.len()
+        );
+        if !outcome.failed.is_empty() {
+            println!(
+                "  {} {} item(s) could NOT be removed and are still here:",
+                ui::yellow(ui::g_warn()),
+                outcome.failed.len()
+            );
+            for f in &outcome.failed {
+                println!("      {f}");
+            }
+        }
+        if outcome.reboot {
             println!("  ! reboot required (rpm-ostree staged a deployment)");
         }
         Ok(())
