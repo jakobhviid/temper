@@ -102,25 +102,30 @@ pub fn save(machine: &str, ledger: &Ledger) -> Result<()> {
 /// written: `~/.config/x` and `/home/you/.config/x` name one file, and a spec
 /// edit that only re-spells a target must not make the still-declared file look
 /// like residue. It did, and `prune` deleted it.
-pub fn residue(machine: &str, declared: &[String]) -> Vec<(String, Deployed)> {
-    let resolved: Vec<PathBuf> = declared.iter().map(|d| resolve_key(d)).collect();
+pub fn residue(machine: &str, declared: &Ledger) -> Vec<(String, Deployed)> {
+    let resolved: Vec<(PathBuf, Option<String>)> =
+        declared.values().map(identity).collect();
     load(machine)
         .into_iter()
-        .filter(|(k, _)| {
-            let mine = resolve_key(k);
-            !resolved.contains(&mine)
-        })
+        .filter(|(_, rec)| !resolved.contains(&identity(rec)))
         .collect()
 }
 
-/// A ledger key resolved for comparison: the path expanded, the marker kept so
-/// two regions in one file stay distinct.
-fn resolve_key(key: &str) -> PathBuf {
-    match key.split_once('#') {
-        Some((path, marker)) => crate::manifest::expand_tilde(path).join(format!("#{marker}")),
-        None => crate::manifest::expand_tilde(key),
-    }
+/// What makes two ledger entries the same thing: the **resolved** path, and the
+/// marker where there is one.
+///
+/// Taken from the record's fields rather than by splitting the key, because the
+/// key is ambiguous by construction — `Deployed::key("~/a#b", None)` and
+/// `Deployed::key("~/a", Some("b"))` are the same string, which is precisely the
+/// collision keying by `(path, marker)` was introduced to prevent. A `#` in a
+/// deployed filename is legal and nothing stops one appearing.
+fn identity(rec: &Deployed) -> (PathBuf, Option<String>) {
+    (
+        crate::manifest::expand_tilde(&rec.path),
+        rec.marker.clone(),
+    )
 }
+
 
 /// Whether the thing this record describes is still on disk — the file, or for
 /// a `block`, its region.
@@ -368,15 +373,47 @@ mod tests {
             save("m", &l).unwrap();
             assert_eq!(load("m"), l);
 
-            let declared = vec!["~/.config/kept".to_string()];
-            let r = residue("m", &declared);
+            let only = |k: &str| -> Ledger {
+                l.iter()
+                    .filter(|(key, _)| key.as_str() == k)
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            };
+            let r = residue("m", &only("~/.config/kept"));
             assert_eq!(r.len(), 1);
             assert_eq!(r[0].0, "~/.config/dropped");
 
             // Declaring everything leaves no residue…
-            assert!(residue("m", &["~/.config/kept".into(), "~/.config/dropped".into()]).is_empty());
+            assert!(residue("m", &l).is_empty());
             // …and a machine with no ledger has none either.
-            assert!(residue("unknown-machine", &[]).is_empty());
+            assert!(residue("unknown-machine", &Ledger::new()).is_empty());
+
+            // A `#` in a deployed filename is legal, and must not be read as a
+            // block marker: `Deployed::key("~/a#b", None)` and
+            // `Deployed::key("~/a", Some("b"))` are the same string, so identity
+            // has to come from the record's fields rather than from the key.
+            let mut hashy = Ledger::new();
+            let file = Deployed {
+                hash: "h".into(),
+                kind: "copy".into(),
+                path: "~/a#b".into(),
+                marker: None,
+            };
+            let block = Deployed {
+                hash: "h".into(),
+                kind: "block".into(),
+                path: "~/a".into(),
+                marker: Some("b".into()),
+            };
+            hashy.insert("file-entry".into(), file.clone());
+            hashy.insert("block-entry".into(), block.clone());
+            save("m2", &hashy).unwrap();
+            // Declaring only the block leaves the `#`-named file as residue —
+            // they are different things and must not cancel each other out.
+            let declared: Ledger = [("block-entry".to_string(), block)].into_iter().collect();
+            let r = residue("m2", &declared);
+            assert_eq!(r.len(), 1, "got {r:?}");
+            assert_eq!(r[0].1.path, "~/a#b");
         })
     }
 

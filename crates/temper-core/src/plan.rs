@@ -1448,8 +1448,8 @@ pub fn run_drift(
     }
     // Files this spec used to deploy and no longer declares. Nothing else can
     // see these: a filesystem cannot be asked which of its files temper wrote.
-    let declared_paths: Vec<String> = deployed_paths(home, machine)?.into_keys().collect();
-    for (_key, rec) in crate::ledger::residue(&machine.name, &declared_paths) {
+    let declared = deployed_paths(home, machine)?;
+    for (_key, rec) in crate::ledger::residue(&machine.name, &declared) {
         if !crate::ledger::still_present(&rec) {
             continue;
         }
@@ -2265,9 +2265,9 @@ pub fn run_prune(
     }
     // Split residue by whether it is still what temper left: removable, or
     // reportable. A ledger is a record, not a licence to delete a user's edits.
-    let declared_paths: Vec<String> = deployed_paths(home, machine)?.into_keys().collect();
+    let declared = deployed_paths(home, machine)?;
     let (mut residue, mut residue_edited) = (Vec::new(), Vec::new());
-    for (key, rec) in crate::ledger::residue(&machine.name, &declared_paths) {
+    for (key, rec) in crate::ledger::residue(&machine.name, &declared) {
         if !crate::ledger::still_present(&rec) {
             continue; // already gone — not work, and counting it would inflate the total
         }
