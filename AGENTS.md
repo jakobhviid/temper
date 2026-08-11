@@ -143,7 +143,32 @@ not enough — **clippy is the gate** (warnings are errors), so run
 `cargo clippy --workspace --all-targets -- -D warnings` locally before every
 push. (There is deliberately **no** `cargo fmt` gate — don't add one.)
 
-Two failure modes look identical from the outside — "no release appeared" — and are
+**Two pushes in quick succession can publish out of order, and the loser wins the
+tap.** The version is derived per commit, so an earlier commit is always the lower
+number — but the *formula* is rewritten by whichever job finishes last. Push A
+then B a minute apart, let A's job run slow, and the tap ends up pinned to A's
+older version with B's release sitting there unused. `brew upgrade` then installs
+a binary without B in it, and nothing looks wrong: both runs are green and both
+releases exist.
+
+Seen 2026-08-11: v7.1.2 published at 16:13, v7.1.1 at 16:16, formula pinned to
+7.1.1. Check it after back-to-back pushes:
+
+```sh
+gh release list --limit 3                                    # is the newest version the newest release?
+brew update && brew info --json=v2 jakobhviid/tap/temper | jq -r '.formulae[0].versions.stable'
+```
+
+Re-run the *newer* commit's job to fix it — same SHA, same version, formula
+rewritten:
+
+```sh
+gh run rerun <run-id>
+```
+
+Do not push an empty commit; that mints a third version to explain.
+
+Two more failure modes look identical from the outside — "no release appeared" — and are
 worth telling apart before you go looking for a bug:
 
 - **Tests/clippy red** → your code. Fix and push again.
