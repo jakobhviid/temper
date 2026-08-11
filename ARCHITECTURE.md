@@ -439,13 +439,19 @@ Three consequences follow, and they are the reason for the split:
   uuids — whatever the snapshot restored for the rest stands. Previously these were two unlinked facts, so a uuid enabled in a
   snapshot but declared nowhere got switched on by `restore` and never installed
   by `install`; GNOME fails soft, so nothing said so.
-- **`strip` goes back to one job.** Its ownership half is **derived**: temper
-  already knows every dconf key the machine's bundles declare via `setkey`, so it
-  excludes them from capture and from both sides of the drift comparison, and
-  reports how many it left out. What remains in `strip` is a noise filter
-  (`monitors/`, `last-selected`) for keys that would corrupt a capture→restore
-  round trip. Ownership is matched **exactly** — a `setkey` on `a/b` does not
-  take `a/bc` with it — because ownership is not a pattern.
+- **`strip` keeps a narrower job.** Its ownership half is **derived** for the
+  keys a `setkey` actually declares: temper excludes those from capture and from
+  both sides of the drift comparison, and reports how many it left out. What
+  remains for `strip` is a noise filter (`monitors/`, `last-selected`) — and one
+  thing the derivation deliberately cannot do.
+
+  A `strip` entry naming a **subtree** also hides the unowned siblings of the
+  declared keys, and the derivation will not, because nothing declares them.
+  Removing such an entry surfaces them as `dconf-extra`, which is honest — an
+  unowned key does not survive a rebuild — but it is a decision about what you
+  want to own, not a cleanup. Ownership is matched **exactly** — a `setkey` on
+  `a/b` does not take `a/bc` with it — because ownership is not a pattern, and
+  that exactness is precisely why the subtree case remains `strip`'s.
 
   An **`append`** step is the exception, and for the same reason: it declares a
   *member* of a list, not the list. Its drift is already subset-shaped, and the

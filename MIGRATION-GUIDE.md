@@ -115,25 +115,34 @@ a hand-maintained `strip` list that silently rotted whenever you forgot an entry
 | a key you want **always absent** | the absence primitive, not a captured value |
 | genuinely machine-specific live state | a narrowly-rooted `[[machine.dconf]]`, still supported |
 
-**`strip` loses its ownership job — you can delete those entries now.** temper
-derives them: any dconf key a `setkey` step declares is excluded from capture and
-from drift automatically, and a capture reports how many it left out. Keep only
-genuine noise (`monitors/`, `last-selected`).
+**`strip` loses *part* of its ownership job.** Any dconf key a `setkey` step
+declares is excluded from capture and from drift automatically, and a capture
+reports how many it left out. So a `strip` entry naming exactly that key is now
+redundant.
+
+**A `strip` entry naming a whole subtree is not.** The derivation covers the keys
+a `setkey` declares; a subtree entry covers their unowned siblings too, and
+deleting it surfaces every one of them as `dconf-extra`. Measured on the fleet
+this was developed against, cutting two subtree entries took drift from 17
+out-of-sync to 19.
 
 ```toml
-# before — the second half restates what apps/gnome.toml already declares
-strip = ["monitors/", "last-selected",
-         "blur-my-shell/applications/", "quick-settings-audio-panel/"]
-
-# after — noise only
-strip = ["monitors/", "last-selected"]
+# `blur-my-shell/applications/blur` is declared by a setkey → the derivation
+# handles it, and a strip entry for that exact key can go.
+# `blur-my-shell/applications/` is the SUBTREE — it also hides `enable-all`,
+# `pipeline` and `blur-on-overview`, which nothing declares.
+strip = ["monitors/", "last-selected", "blur-my-shell/applications/"]
 ```
 
-Leaving them in is harmless (a stripped key is simply filtered twice), which is
-why this is a cleanup rather than a required edit. The reason to do it is that a
-hand-maintained ownership list rots: add a `setkey` and forget the `strip`, and
-the snapshot silently becomes a second owner of that key — your prefs-UI tweak
-gets captured and then fights the bundle on the next converge.
+So this is a decision rather than a cleanup, and the honest options are: keep the
+subtree entry (it is suppressing keys you have chosen not to own), declare the
+siblings with a `setkey` and then drop it, or drop it and let them land in the
+snapshot — which makes the snapshot a second owner inside a subtree a bundle
+also writes, the very thing the split removes.
+
+The reason to reach for the first two is that an unowned key does not survive a
+rebuild: nothing declares it and nothing captured it, so a fresh machine simply
+will not have it.
 
 **The one that will surprise you: extensions you keep installed but switched
 off.** Whether an extension is enabled is now part of its declaration, and a bare
