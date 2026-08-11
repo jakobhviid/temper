@@ -2948,7 +2948,27 @@ fn llm_guide() -> String {
         REPO_URL
     ));
 
-    out.push_str("=== COMMAND REFERENCE ===\n\n");
+    // A map first. At ~3,800 lines a reader arriving cold cannot tell which
+    // section answers their question, and the two that are authoritative — the
+    // clap-rendered reference and the schema — are worth naming as such up front.
+    out.push_str(
+        "=== WHAT IS IN THIS GUIDE ===\n\n\
+Read the first three to author and run a folder; the rest is why.\n\n\
+  README ............ what temper is, and the shape of a folder\n\
+  COMMAND REFERENCE . every verb and flag, rendered from the CLI so it cannot drift\n\
+  MANIFEST SCHEMA ... authoritative field list; an unknown field is a parse error\n\
+  WORKFLOWS ......... the day-to-day loops, and which verb to reach for\n\
+  PATTERNS .......... which primitive fits which problem shape, and the anti-patterns\n\
+  MIGRATION ......... only if a folder will not parse\n\
+  ARCHITECTURE ...... the model behind the schema\n\
+  PRINCIPLES ........ the guardrails, and the defects that earned them\n\
+  ROADMAP ........... what is NOT built, so a gap is not mistaken for a bug\n\n",
+    );
+
+    out.push_str("\n\n=== README (what temper is, and the shape of a folder) ===\n\n");
+    out.push_str(include_str!("../../../README.md"));
+
+    out.push_str("\n\n=== COMMAND REFERENCE ===\n\n");
     let mut cmd = Cli::command();
     out.push_str(&cmd.render_long_help().to_string());
     for sub in cmd.get_subcommands_mut() {
@@ -2967,8 +2987,6 @@ fn llm_guide() -> String {
     out.push_str(include_str!("../../../SPEC.md"));
     out.push_str("\n\n=== PATTERNS (how to COMPOSE primitives for common problem shapes) ===\n\n");
     out.push_str(include_str!("../../../PATTERNS.md"));
-    out.push_str("\n\n=== README (what temper is, and the shape of a folder) ===\n\n");
-    out.push_str(include_str!("../../../README.md"));
     // Pointed at rather than inlined. It is a delta between majors — read once,
     // by whoever is editing a folder across an upgrade — while this guide is read
     // in full by every agent authoring against the CURRENT schema, which SPEC
@@ -2983,10 +3001,12 @@ fn llm_guide() -> String {
          `MIGRATION-GUIDE.md` in the temper repo\ncarries the per-version rename \
          tables and the behaviour changes that go with them.\n",
     );
-    // The design docs describe intent; the SCHEMA + STATUS above are what's real.
-    out.push_str("\n\n=== ARCHITECTURE (design intent — trust SCHEMA + STATUS above for what's implemented) ===\n\n");
+    // The model behind the schema: where a declaration may live, what may touch
+    // it, and which cells of the feature matrix are filled. `SPEC.md` above stays
+    // the parser-of-record where the two could ever disagree.
+    out.push_str("\n\n=== ARCHITECTURE (the model — scopes, primitives, lifecycle, and what each feature supports) ===\n\n");
     out.push_str(include_str!("../../../ARCHITECTURE.md"));
-    out.push_str("\n\n=== PRINCIPLES (design intent) ===\n\n");
+    out.push_str("\n\n=== PRINCIPLES (the guardrails, and the defects that earned them) ===\n\n");
     out.push_str(include_str!("../../../PRINCIPLES.md"));
     // What is deliberately NOT built, and the known gaps in what is. An agent
     // authoring a folder needs this as much as the schema: without it, a feature

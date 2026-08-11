@@ -7,6 +7,12 @@
 > "documenting the diff" is the failure mode AGENTS.md warns about; here the
 > transition is the content. Entries are kept until the fleet has rolled past
 > them, then deleted — an entry nobody can still be migrating *from* is trivia.
+>
+> `temper --llm` **points at this file by name rather than embedding it**. It is
+> read once, by whoever is doing the edit; that guide is read in full by every
+> agent authoring against the current schema, and deltas between majors are not
+> their problem. So write for someone who arrived here deliberately, holding a
+> folder that will not parse.
 
 ## How you find out you need this
 
