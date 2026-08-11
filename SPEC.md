@@ -117,7 +117,10 @@ packages = ["cask \"raycast\""]  # optional loose Brewfile-grammar tokens. Machi
                             #   scope, so `reconcile` both absorbs into and drops
                             #   from this list.
 gnome_extensions = [                        # optional; for THIS machine, unioned
-    "tilingshell@ferrarodomenico.com",      #   with the composed bundles' lists.
+    "tilingshell@ferrarodomenico.com",      #   with the composed bundles' lists —
+                                            #   and where both name a uuid, THIS
+                                            #   one wins, because it is the more
+                                            #   specific declaration.
     { uuid = "CoverflowAltTab@palatis.blogspot.com", enabled = false },
     { uuid = "tilingshell@ferrarodomenico.com",
       settings = "assets/gnome/ext/tilingshell.dconf" },

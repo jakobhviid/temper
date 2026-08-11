@@ -73,8 +73,15 @@ pub fn target(a: &Assert) -> String {
     }
 }
 
-/// The current user's group names (`id -Gn`), split on whitespace.
-fn user_groups() -> Vec<String> {
+/// The current user's group names (`id -Gn`), or `None` when `id` could not
+/// answer.
+///
+/// Three-valued for the same reason every probe is: `unwrap_or_default()` here
+/// meant a missing or failing `id` produced an empty group list, and
+/// `not_member` then reported **"not a member"** — passing, in green, on no
+/// evidence whatever. The `shell` assertion three lines down already modelled
+/// this correctly.
+fn user_groups() -> Option<Vec<String>> {
     std::process::Command::new("id")
         .arg("-Gn")
         .output()
@@ -86,7 +93,6 @@ fn user_groups() -> Vec<String> {
                 .map(String::from)
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 /// The current user's login shell (dscl on macOS, getent on Linux).
@@ -177,11 +183,12 @@ pub fn eval(home: &Path, a: &Assert) -> Result<(bool, String)> {
     }
 
     if let Some(g) = &a.not_member {
-        let member = user_groups().iter().any(|x| x == &g.group);
-        return Ok(if member {
-            (false, format!("in group {}", g.group))
-        } else {
-            (true, "not a member".into())
+        return Ok(match user_groups() {
+            Some(groups) if groups.iter().any(|x| x == &g.group) => {
+                (false, format!("in group {}", g.group))
+            }
+            Some(_) => (true, "not a member".into()),
+            None => (false, "could not read group membership".into()),
         });
     }
 

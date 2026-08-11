@@ -1017,6 +1017,7 @@ pub fn effective_extension_specs(
     machine: &Machine,
 ) -> Result<Vec<manifest::GnomeExtension>> {
     let mut out: Vec<manifest::GnomeExtension> = Vec::new();
+    // First declaration wins WITHIN a tier, so bundle order is stable.
     let push = |e: &manifest::GnomeExtension, out: &mut Vec<manifest::GnomeExtension>| {
         if !out.iter().any(|x| x.uuid() == e.uuid()) {
             out.push(e.clone());
@@ -1033,11 +1034,52 @@ pub fn effective_extension_specs(
             push(e, &mut out);
         }
     }
-    // The machine's own list, unioned last — same rule `packages` uses.
+    // The machine's own list wins outright, rather than being unioned in behind
+    // the bundles': it is the MORE SPECIFIC declaration, and the whole point of
+    // machine scope is "this box differs". Keeping the bundle's entry meant a
+    // machine asking for `enabled = false` on a uuid its bundle also declared
+    // was silently overruled — the attribute was dropped on the floor and the
+    // extension stayed switched on, with nothing reporting why.
     for e in &machine.gnome_extensions {
-        push(e, &mut out);
+        if let Some(slot) = out.iter_mut().find(|x| x.uuid() == e.uuid()) {
+            *slot = e.clone();
+        } else {
+            out.push(e.clone());
+        }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod extension_scope_tests {
+    use crate::manifest::GnomeExtension;
+
+    /// The machine's declaration replaces the bundle's for the same uuid.
+    ///
+    /// Composition kept the FIRST entry per uuid and pushed bundles first, so a
+    /// machine saying `{ uuid = "x", enabled = false }` about something its
+    /// bundle also declared was silently overruled: the attribute vanished and
+    /// the extension stayed switched on. Machine scope exists to say "this box
+    /// differs" — losing that is losing the point.
+    #[test]
+    fn the_machines_declaration_wins_over_a_bundles() {
+        // The composition rule, exercised directly on the shape the loop builds.
+        let bundle = GnomeExtension::Uuid("x@y".into());
+        let machine = GnomeExtension::Spec(crate::manifest::GnomeExtensionSpec {
+            uuid: "x@y".into(),
+            enabled: false,
+            settings: None,
+        });
+        let mut out = [bundle];
+        if let Some(slot) = out.iter_mut().find(|e| e.uuid() == machine.uuid()) {
+            *slot = machine.clone();
+        }
+        assert_eq!(out.len(), 1, "still one declaration, not two");
+        assert!(
+            !out[0].enabled(),
+            "the machine asked for it switched off and must be heard"
+        );
+    }
 }
 
 /// Which bundle file declares this thing, if a bundle does — `None` when the
