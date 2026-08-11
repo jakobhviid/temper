@@ -1856,9 +1856,18 @@ fn cmd_adopt(json: bool) -> Result<()> {
             serde_json::json!({ "machine": m.name, "adoptable": arr })
         );
     } else if extras.is_empty() {
+        // Scoped deliberately. `adopt` looks at installed packages and nothing
+        // else, so "matches its spec" was a claim about the whole machine made
+        // by a verb that had only checked one row of it — and it read as
+        // "you're done" while `drift` was listing desktop keys and a failing
+        // assertion in the same breath.
         println!(
-            "adopt {}: nothing to adopt — machine matches its spec",
+            "adopt {}: no installed packages missing from the spec.",
             m.name
+        );
+        println!(
+            "{}",
+            ui::dim("  packages only — run `temper drift` for the rest.")
         );
     } else {
         println!(
