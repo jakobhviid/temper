@@ -145,10 +145,22 @@ enum Cmd {
     ///
     /// **dconf only.** Packages and app config are not part of it: those are
     /// `reconcile` and hand-authored recipes respectively.
+    ///
+    /// Captures only files that belong to this machine. An extension declared in
+    /// a bundle carries its settings at group scope, and capturing one box's
+    /// desktop into a shared file changes what every machine composing it
+    /// converges towards — so those are listed and skipped.
     #[command(name = "snapshot-dconf", aliases = ["snapshot-gnome", "snapshot"])]
     Snapshot {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
+        /// Also capture settings files owned by a bundle, not by this machine.
+        ///
+        /// Authoring a group's settings from one box is a real thing to want —
+        /// it is just never what you want by accident, because the values this
+        /// machine happens to hold become the group's target.
+        #[arg(long)]
+        include_shared: bool,
     },
     /// List installed packages not in the spec (advisory, non-mutating).
     ///
@@ -406,7 +418,7 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Undo { run, list, dry_run }) => cmd_undo(run, list, dry_run, json)?,
         Some(Cmd::Prune { dry_run, yes }) => cmd_prune(dry_run, yes, json)?,
         Some(Cmd::Init { name, role, yes }) => cmd_init(name, role, yes, json)?,
-        Some(Cmd::Snapshot { machine }) => cmd_snapshot(machine, json)?,
+        Some(Cmd::Snapshot { machine, include_shared }) => cmd_snapshot(machine, include_shared, json)?,
         Some(Cmd::Adopt) => cmd_adopt(json)?,
         Some(Cmd::Retired) => cmd_retired(json)?,
         Some(Cmd::Reconcile {
@@ -1728,7 +1740,7 @@ fn cmd_init(name: Option<String>, role: Option<String>, yes: bool, json: bool) -
 
 /// Capture the machine's declared dconf subtrees into the folder — the
 /// spec←machine mirror of `restore`, and the wholesale sibling of `reconcile`.
-fn cmd_snapshot(machine: Option<String>, json: bool) -> Result<()> {
+fn cmd_snapshot(machine: Option<String>, include_shared: bool, json: bool) -> Result<()> {
     let home = find_home_pulling()?;
     let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, machine.as_deref())?;
@@ -1752,7 +1764,7 @@ fn cmd_snapshot(machine: Option<String>, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    let written = plan::run_snapshot(&home, &m)?;
+    let written = plan::run_snapshot(&home, &m, include_shared)?;
     let paths: Vec<String> = written.iter().map(|p| p.display().to_string()).collect();
     if json {
         println!(

@@ -2446,7 +2446,11 @@ pub struct PruneOutcome {
 ///
 /// Errors where `dconf` is absent rather than silently writing nothing.
 /// Journaled, so `undo` reverts it.
-pub fn run_snapshot(home: &Path, machine: &Machine) -> Result<Vec<std::path::PathBuf>> {
+pub fn run_snapshot(
+    home: &Path,
+    machine: &Machine,
+    include_shared: bool,
+) -> Result<Vec<std::path::PathBuf>> {
     // A machine that declares no subtrees of its own may still have extensions
     // that declare settings.
     if crate::dconf::all_snapshots(home, machine)?.is_empty() {
@@ -2456,7 +2460,7 @@ pub fn run_snapshot(home: &Path, machine: &Machine) -> Result<Vec<std::path::Pat
         bail!("cannot capture a dconf snapshot: {why}");
     }
     let mut journal = Journal::begin();
-    let written = crate::dconf::capture(home, machine, &mut journal)?;
+    let written = crate::dconf::capture(home, machine, include_shared, &mut journal)?;
     journal.commit()?;
     Ok(written)
 }

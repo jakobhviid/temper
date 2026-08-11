@@ -440,6 +440,16 @@ Both captures run through the `strip` filter (bookkeeping + per-monitor keys
 that would corrupt a round-trip), and so does *each side* of a drift compare —
 a stripped key never reads as drift.
 
+> **Absorbing writes only files this machine owns.** An extension's settings
+> belong to whatever declared the extension, so one declared in a bundle several
+> machines compose has a *group-scope* settings file. Capturing this box's live
+> desktop into it would make whatever this box happens to hold the target every
+> other machine converges towards — so `snapshot-dconf` names it and skips it,
+> and `reconcile` reports its keys without offering to absorb them. Pass
+> `--include-shared` to author the group's settings from here on purpose.
+> Restoring and drift are unrestricted: a shared file is *meant* to be applied to
+> and compared against every machine that composes the bundle.
+
 > **A `missing` desktop key means "at the schema default".** dconf only stores
 > non-default values, so absorbing one *removes* it from the snapshot — right
 > after you reset something deliberately and re-tuned a few keys, wrong on a box
@@ -707,7 +717,7 @@ which is why it has verbs of its own.
 | macOS profiles (`profile`) | `install` only — its apply is a System Settings dialog, so `update` skips it rather than re-asking every run | you author it by hand (the `.mobileconfig` too) |
 | packages (brew, cask, tap, flatpak, mas, vscode, rpm) | `install` (remove: `prune`) | `reconcile`, or `reconcile --csw` |
 | GNOME extensions | `install` (remove: `prune`) | `reconcile` — both directions, on this machine's own list — or `[ignore].gnome_extensions` |
-| desktop dconf subtrees | `restore-dconf` | `snapshot-dconf`, or `reconcile` per key |
+| desktop dconf subtrees | `restore-dconf` | `snapshot-dconf`, or `reconcile` per key — a bundle-owned settings file needs `snapshot-dconf --include-shared` |
 | flatpak remotes | `install` (remove: `prune`) | `reconcile` — machine scope |
 | rpm-ostree layered packages | `install` (remove: `prune`, which stages a deployment) | `reconcile` — machine scope |
 | brew tap-trust | `install` / `update` (remove: `prune`) | `reconcile` — the fleet list needs `--include-trust` |

@@ -876,7 +876,10 @@ whether a direction may be evaluated, not just whether a verb may run.
   skips the prompts, keeping the preview + one confirm (`--yes` waives it). It
   is deliberately **machine-scope only**: `[brew].trust` and `[ignore]` are fleet
   config, so absorbing them from one machine would silently change the others —
-  tap-trust drift is *reported* and left alone. **`--include-trust`** opts in the
+  tap-trust drift is *reported* and left alone. The same rule covers **dconf
+  files**: an extension declared in a bundle carries its settings at group scope,
+  so `reconcile` reports its keys and does not offer to absorb them, and
+  `snapshot-dconf` names and skips the file unless given `--include-shared`. **`--include-trust`** opts in the
   **adds** (taps this machine trusts that the fleet doesn't declare); it never
   removes one, because a declared-but-untrusted tap usually means the machine
   hasn't converged yet rather than that the fleet is wrong. `--json` previews the

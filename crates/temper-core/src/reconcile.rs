@@ -523,7 +523,21 @@ fn dconf_plans(home: &Path, machine: &Machine) -> Result<Vec<DconfPlan>> {
     // Extension settings reconcile per section exactly like a machine subtree —
     // and because an extension's snapshot is rooted at its own subtree, each
     // section IS one of its settings groups.
-    for snap in &crate::dconf::all_snapshots(home, machine)? {
+    // Machine-scope files only. `reconcile` absorbs live state into the spec,
+    // and a bundle's settings file is not this machine's to rewrite — the same
+    // reason reconcile never edits a shared Brewfile. Nothing is silently
+    // dropped: `drift` still reports these, it just does not offer to answer
+    // them from here.
+    let (mine, shared) = crate::dconf::snapshots_by_scope(home, machine)?;
+    for s in &shared {
+        eprintln!(
+            "note: `{}` belongs to a bundle, not to {} — its keys are reported \
+             by `drift` but not offered here, because absorbing them would \
+             change every machine that composes it.",
+            s.file, machine.name
+        );
+    }
+    for snap in &mine {
         // Same ownership filter drift uses: reconcile must never offer to absorb
         // a key a `setkey` step already declares.
         let owned = crate::dconf::owned_elsewhere(home, machine, snap)?;

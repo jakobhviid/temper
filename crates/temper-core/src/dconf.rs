@@ -399,6 +399,40 @@ pub enum SnapshotState {
 /// are the bulk of what a desktop snapshot ever held — 95% of the keys, measured
 /// — and giving them a second implementation would mean a second place for the
 /// observability guard, the ownership filter and the undo journal to be forgotten.
+/// Whether this snapshot's **file** belongs to this machine.
+///
+/// A `[[machine.dconf]]` block always does. An extension's `settings` file
+/// belongs to whatever declared the extension: the machine's own list, or a
+/// bundle several machines compose. That distinction decides who may *write* the
+/// file — capturing one box's live desktop into a bundle's file silently
+/// rewrites the target every other machine in the group is converging towards.
+///
+/// Reading is unrestricted: a group's settings are meant to be restored onto,
+/// and compared against, every machine that composes the bundle. It is only
+/// absorption that has to respect whose file it is.
+pub fn is_machine_scope(machine: &Machine, snap: &DconfSnapshot) -> bool {
+    if machine.dconf.iter().any(|d| d.file == snap.file) {
+        return true;
+    }
+    // Extension snapshots carry the uuid as their label.
+    match &snap.label {
+        Some(uuid) => machine.gnome_extensions.iter().any(|e| e.uuid() == uuid),
+        None => false,
+    }
+}
+
+/// `all_snapshots`, split into the ones this machine may write and the ones it
+/// may not. The second half is never silently dropped — every caller reports it.
+pub fn snapshots_by_scope(
+    home: &Path,
+    machine: &Machine,
+) -> Result<(Vec<DconfSnapshot>, Vec<DconfSnapshot>)> {
+    let all = all_snapshots(home, machine)?;
+    Ok(all
+        .into_iter()
+        .partition(|s| is_machine_scope(machine, s)))
+}
+
 pub fn all_snapshots(home: &Path, machine: &Machine) -> Result<Vec<DconfSnapshot>> {
     let mut out = machine.dconf.clone();
     // Fails closed, for the same reason `setkey_owned` does: swallowing a
@@ -604,10 +638,33 @@ fn dump_raw(path: &str) -> Result<String> {
 /// Capture each of the machine's dconf snapshots (filtered) to its file,
 /// journaled so `undo` reverts them. Returns the written paths. No-op where
 /// `dconf` is absent — callers that should fail loudly check first.
-pub fn capture(home: &Path, machine: &Machine, journal: &mut Journal) -> Result<Vec<PathBuf>> {
+pub fn capture(
+    home: &Path,
+    machine: &Machine,
+    include_shared: bool,
+    journal: &mut Journal,
+) -> Result<Vec<PathBuf>> {
     // A declared extension's settings are captured with the machine's own
     // subtrees — same guards, same journaling, one implementation.
-    let snaps = all_snapshots(home, machine)?;
+    let (mine, shared) = snapshots_by_scope(home, machine)?;
+    // …but only into files that belong to this machine. An extension declared in
+    // a bundle carries its settings at group scope, and capture is absorption:
+    // one box's live desktop would become the target every other machine in the
+    // group converges towards, with nothing said. Same rule that keeps `prune`
+    // off a shared Brewfile.
+    let snaps: Vec<DconfSnapshot> = if include_shared {
+        mine.into_iter().chain(shared.iter().cloned()).collect()
+    } else {
+        for s in &shared {
+            eprintln!(
+                "note: not capturing `{}` — it belongs to a bundle, not to {}, \
+                 and writing it here would change every machine that composes \
+                 it. Use `--include-shared` to capture it anyway.",
+                s.file, machine.name
+            );
+        }
+        mine
+    };
     if snaps.is_empty() {
         return Ok(Vec::new());
     }
