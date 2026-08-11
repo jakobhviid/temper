@@ -25,15 +25,36 @@ in this repository.
 ## Documentation is load-bearing — keep it in sync with the code
 
 `SPEC.md`, `WORKFLOWS.md`, `PATTERNS.md`, `ARCHITECTURE.md`, `README.md`,
-`PRINCIPLES.md`, and `MIGRATION-GUIDE.md` are **compiled into `temper --llm`**
+`PRINCIPLES.md`, and `ROADMAP.md` are **compiled into `temper --llm`**
 (see `crates/temper/src/main.rs`) — that guide is how humans *and* LLMs learn to
 operate and author a temper folder. Stale docs don't just read wrong; they
 actively mislead every downstream agent that builds a spec from them.
 
+### `--llm` has one audience, and it is not a contributor
+
+That guide teaches **one job: operate and author a folder.** Every line in it is
+read by every agent that reads it at all, so a section serving a different reader
+is a tax on the right one. Two things follow, and a test enforces both
+(`docs_name_real_verbs.rs`):
+
+- **Tool-internals go in `INTERNALS.md`**, which is exempt. How output is
+  captured, how columns are measured, what a second settings backend would cost —
+  real design rationale, and useless to someone writing `apps/ghostty.toml`.
+- **Don't restate what the CLI already generates.** The COMMAND REFERENCE that
+  opens the guide is rendered from clap, so it cannot drift; a prose verb list
+  beside it both duplicates and rots. `ARCHITECTURE.md` once carried 98 such
+  lines. Say what the flags *mean* in `WORKFLOWS.md`; let clap say what they are.
+
+Before adding a section, ask which of the two readers it is for. If the answer is
+"a contributor", it belongs in `INTERNALS.md` or `AGENTS.md`.
+
 `MIGRATION-GUIDE.md` is the **one** doc whose job is the before/after, and the
 only place exempt from the "documenting the diff" rule below. It gains a section
 per **major** version — the ones where a folder has to be edited — and loses one
-when nobody can still be migrating from it.
+when nobody can still be migrating from it. `--llm` **points at it by name rather
+than embedding it**: it is read once, by whoever is moving a folder across a
+major, and the errors that send you there (an unknown field, a version skew) say
+so themselves.
 
 So a change to behaviour ships with the doc change **in the same commit**:
 

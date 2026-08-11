@@ -178,21 +178,9 @@ proven RIS recipe.
 
 ## 11. Scope decides the verb set
 
-Where a declaration lives decides what may be done to it. This is a lookup, not a
-judgement:
-
-- **Fleet / group scope** — a bundle, or a fleet-level list. It describes a group
-  a machine belongs to. Verbs: **drift and install. Conform.**
-- **Per-machine scope** — the machine's own block and the files it names. Verbs:
-  **drift, install, prune, and reconcile in both directions.**
-
-The scopes do **not** differ in whether something can be removed — they differ in
-*who edits the declaration*. At fleet scope you edit the shared spec and commit,
-and every machine's `prune` then enacts it. At machine scope `reconcile` makes
-the same edit for one box. So `prune` is the **universal enactment mechanism**,
-and it only ever removes what *neither* scope declares.
-
-Two things follow, and both have been shipped wrong:
+Where a declaration lives decides what may be done to it — a lookup, not a
+judgement. `ARCHITECTURE.md` carries the table; the principle is that the lookup
+is **total**, and two things follow from it that have both been shipped wrong:
 
 - **Every category needs both scopes.** "I want this on this box only" is
   ordinary. A category that exists at one scope is unfinished, and the

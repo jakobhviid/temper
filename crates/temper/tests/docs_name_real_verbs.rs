@@ -127,9 +127,26 @@ fn every_doc_is_embedded_in_the_llm_guide_or_exempt() {
         .canonicalize()
         .expect("repo root");
 
-    // Instructions for people (and agents) *working on temper*, not for anyone
-    // authoring a folder — so they deliberately do not ride `--llm`.
-    let exempt = ["AGENTS.md", "CLAUDE.md"];
+    // `--llm` teaches one job: OPERATE and AUTHOR a temper folder. A doc is
+    // exempt when its reader is doing something else, and each exemption has to
+    // name who that reader is — otherwise "exempt" becomes the place documents go
+    // to stop being maintained.
+    //
+    //   AGENTS.md / CLAUDE.md  people and agents working on temper's own source.
+    //   INTERNALS.md           the same reader: how the tool is built, what it
+    //                          would take to extend it. Someone writing
+    //                          `apps/ghostty.toml` never needs it.
+    //   MIGRATION-GUIDE.md     read once, by whoever is moving a folder across a
+    //                          major. `--llm` points at it by name instead of
+    //                          carrying 334 lines of version deltas into every
+    //                          read — and the errors that send you there (an
+    //                          unknown field, a version skew) are self-describing.
+    let exempt = [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "INTERNALS.md",
+        "MIGRATION-GUIDE.md",
+    ];
 
     let mut missing = Vec::new();
     let mut seen = 0;

@@ -109,6 +109,8 @@ a tool release.
 - **[WORKFLOWS.md](WORKFLOWS.md)** — the operating loops (drift → decide → run).
 - **[PRINCIPLES.md](PRINCIPLES.md)** — the guardrails that keep it small.
 - **[ROADMAP.md](ROADMAP.md)** — what's parked and what's deliberately out of scope.
+- **[INTERNALS.md](INTERNALS.md)** — how temper itself is built. Only needed to
+  change the tool; never to write a spec.
 
 ## Origin
 
@@ -117,33 +119,6 @@ provisioned one fleet of Macs and Linux boxes — extracting the *engine* into a
 open tool and leaving the *data* in a folder anyone can bring. It's built in the
 same Rust-on-a-shared-tap style as its siblings [`grove`], [`amdl`], and
 [`dotsync`].
-
-## If you used `temper backup`
-
-**`temper backup` is gone.** It fused two captures with opposite lifecycles — a
-package dump that is only ever correct *once*, and a dconf capture that is the
-*recurring* half of a capture/restore pair. They are separate verbs now, and the
-package half is no longer a wholesale overwrite at all:
-
-| what you used `backup` for | run instead | why |
-|---|---|---|
-| capturing desktop (dconf) state | **`temper snapshot-dconf`** | same behaviour, honest name; now errors where dconf is absent instead of silently writing nothing |
-| capturing installed packages | **`temper reconcile`**, or `temper reconcile --csw` | per-item and surgical: only the machine's own Brewfile, `[ignore]` respected, canonically sorted, comments intact, undoable |
-| seeding a machine that has no spec yet | **`temper init`** | writes the `[[machine]]` block for you, then seeds it |
-
-Nothing in your folder needs to change — `[[machine.dconf]]` is unchanged (the
-new `label` is optional). Only the commands you type do.
-
-Two behaviours also changed:
-
-- **`drift` no longer suggests a wholesale absorb.** It names `reconcile`, in
-  both directions. Re-dumping a spec you already have was never the right fix.
-- **`restore-dconf`** (was `restore`) **is now undoable** (`temper undo`) and takes `--dry-run`.
-
-If your folder declares `[[machine.dconf]]`, run `temper drift` after upgrading:
-desktop state is now compared key-by-key, so you will likely see drift that was
-invisible before. That is the point — decide it with `temper reconcile` (per
-section, so one prompt per extension) or take it wholesale with `temper snapshot-dconf`.
 
 ## Known Limitations
 

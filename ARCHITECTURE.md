@@ -90,62 +90,6 @@ The bar is "as readable as a Brewfile." The CLI carries the `amdl` house style:
 `--json` on every command, an `--llm` guide, a global `-v/--verbose`,
 journaled `undo`, human output to stdout / progress + errors to stderr.
 
-A long converge is the one place that house style needs help: hushing the package
-managers is right (nobody needs 200 "Using x" lines), but silence for the twenty
-minutes it takes to pour `llvm` and `mactex` reads as a hang. So the quiet path
-**captures** the manager's output and renders a `grove`-style spinner naming the
-package in flight, replaying the whole log if the converge fails and surfacing
-warnings even when it succeeds. temper reads Homebrew's `ohai` lines
-(`==> Installing …`, `==> Pouring …`) purely as a progress feed — never as a
-source of truth about what is installed; that always comes from a probe.
-
-**Capture is not only about noise — it is about voice.** Every child temper shells
-out to has its own opinion of the world: `flatpak update` says "Nothing to update."
-about *its remotes*, `git pull` says "Already up to date." about *the folder's
-upstream*, `brew trust` says "Already trusted tap". Left on the terminal, any of
-them reads as temper's verdict on the run, moments before temper installs and
-upgrades plenty — and, going to temper's stdout, breaks `--json` outright. So
-every converge child goes through one door (`providers::run_child`) and every
-phase reports its own effect in temper's words. Three rules fall out, and they
-apply to new code as much as old:
-
-1. **A child's output never stands as temper's.** Capture, replay on failure, and
-   let warnings through. Stream only where the child's output *is* the operation:
-   `prune`'s removals (destructive, confirmed, the user is watching) and the
-   self-update's `brew upgrade temper -y`.
-
-   **But a prompt is not chatter.** `sudo`, polkit and PAM write to `/dev/tty`,
-   which no pipe of ours can capture — so a live progress region gets *fused* onto
-   the prompt and the next tick erases the one message the run is blocked on. Any
-   step that may prompt therefore gets the terminal to itself: the step phase
-   clears its region for the duration of an `exec`, and `sudo::acquire` asks up
-   front, before any region exists. An animated line is not an option there — the
-   prompt arrives at a moment we cannot predict (in practice within the first
-   seconds), so a slow step is announced **once**, in the same shape as its `✓`
-   (`⋯ <label>` then `✓ <label>`), which is the safe half of a spinner.
-
-   Rows are aligned by `ui::Columns`, shared with `drift` so both views measure the
-   same way rather than each hard-coding a width. It works because temper **plans
-   before it applies**: the item list exists before the first row prints, so widths
-   are exact without buffering. Three rules it encodes — measure *display* width
-   (a `ø` is one column, two bytes), elide a path from the **head** (the tail names
-   the step), and never shorten anything when stdout is not a terminal (a redirected
-   log is evidence). Column *order* still differs between the two: `drift` groups
-   under an app header, so repeating the app per row would be noise.
-2. **Report the effect, never the invocation.** Not "we ran the upgrade" but how
-   many packages moved version; not "we called push" but whether the remote moved;
-   not "we pulled" but how many commits landed. Measured, never assumed.
-3. **Never parse a tool's prose to learn what happened.** git and flatpak
-   localize their messages, so string-matching works on the author's machine and
-   silently stops working on someone else's. Compare refs, versions, hashes —
-   things that mean the same in every locale. (Homebrew's `ohai` lines are the one
-   exception, and only as a *progress label*, never as truth.)
-
-The user-facing consequence: **silence means converged.** A run prints a live
-region while it works (erased when done), a `✓` line only for something that
-actually changed, warnings and errors always, and one summary at the end. `-v`
-turns the children back on in full.
-
 ---
 
 ## Scope decides the verb set
@@ -504,64 +448,6 @@ This also bounds the blast radius. "The live dump came back empty, so drop every
 captured key" needs a *whole-tree* dump to be dangerous; a per-extension capture
 is bounded by an extension you declared and could observe.
 
-## Constraints on a second settings backend
-
-`dconf` is the only settings store implemented. KDE (KConfig), COSMIC, and macOS
-(`defaults`) are the candidates for a second, and each fails the current model in
-a *different* place — so the seam must be shaped by all three, not extrapolated
-from dconf.
-
-| store | dump/load pair | sectioned `key=value` | a subtree is one prefix |
-|---|---|---|---|
-| dconf | yes | yes | yes |
-| KConfig | **no** — files under `~/.config` | yes (INI-shaped) | **no** — a *set* of files |
-| COSMIC | **no** | **no** — one RON file per key | yes (`~/.config/cosmic/<c>/v<N>/`) |
-| macOS `defaults` | per domain | plist (typed, nested) | **no** — N unrelated domains |
-
-What actually generalises is smaller than it looks: the **diff core** — a map of
-`(section, key) → value`, diffed both ways, grouped by section, absorbed per
-section. Parsing, serialising, the id grammar, the transport and the reload are
-all per-store.
-
-Specific traps, each of which has already cost someone somewhere:
-
-- **dconf's model rests on an invariant the others lack.** dconf stores only
-  *non-default* values, so an absent key means "the schema default" — a known
-  value. macOS has no such registry: absent means "whatever this app registered",
-  which varies by app version. So "declared, not present ⇒ missing" is meaningful
-  on dconf and meaningless on `defaults`, and dropping a key as the absorb action
-  is safe on one and a guess on the other.
-- **The journalable grain and the reviewable grain can differ.** A `defaults`
-  domain round-trips as a blob but not per key; per-key prompts are what makes
-  reconcile reviewable. A store where those disagree gets coarse drift, and that
-  must be stated rather than discovered.
-- **KConfig's syntax breaks a naive INI reuse**: nested `[A][B][C]` headers, entry
-  flags (`Key[$e]`, `[$i]`), locale suffixes (`Name[de]`), and an `/etc/xdg`
-  cascade where the user file holds only overrides. A writer that does not know
-  about `Key[$e]` appends a duplicate key — corruption, not a formatting nit.
-- **Section identity is not always stable.** COSMIC's `v<N>` directory means a
-  version bump renames every section at once, so everything reads as
-  simultaneously missing and extra.
-- **Reload is a store property.** dconf notifies over D-Bus, so `load` is live.
-  KDE needs per-component pokes; without them a write is correct and invisible
-  until next login. That belongs in the feature's column 4 answer, not in a
-  footnote.
-
-### Two decisions recorded, so they are not re-proposed
-
-**There is no `desktop` axis on a machine.** It was proposed and rejected: it
-duplicates the capability question (what would `desktop = "gnome"` gate that
-"is `gnome-extensions` present" does not?), it cannot describe a box with two
-desktops installed, it carries nothing on macOS beyond `os = "mac"`, and it
-cannot express Wayland-vs-X11 — a third axis it would immediately need. Where a
-store must be named, the **backend names itself**; where a tool must be present,
-that is a capability. Both compose; enum axes multiply.
-
-**The desktop is not what makes a machine a desktop, either.** `role` already
-carries "has a graphical session" *and* "extensions are meaningful here" *and*
-"desktop rpms are wanted here". That overload is why the gate is worth fixing
-rather than supplementing.
-
 ## Two scopes
 
 Configuration lives at two scopes, and the distinction is load-bearing. See
@@ -812,126 +698,18 @@ assumed:
 
 ## Engine operations
 
-All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
-`undo`:
+**The verb reference is generated from the CLI itself** — `temper --help`, or the
+COMMAND REFERENCE that opens `temper --llm`, which renders long help for every
+subcommand. It is written once, in the code, so it cannot drift from what the
+binary does; a second prose copy here could, and did. `WORKFLOWS.md` covers when
+to reach for each verb, and `SPEC.md` the fields they read.
 
-- **`install [machine]`** / **`update`** — the two lifecycle flows. A live
-  `install` refuses to run when the machine's `os` ≠ the host os (drift and
-  `--dry-run` work from any host; only a converge is host-guarded). `manual`
-  steps are skipped by both flows.
-- **`drift [machine]`** — read-only: package set + tap-trust (`[brew].trust` vs
-  `brew trust --json`, both directions) + every managed file + keys + assertions
-  + exec-hooks + installed macOS profiles. Findings are `ok` / `drifted` /
-  `missing` / `untrusted` /
-  `trusted-extra` / **`unavailable`** (a backend whose tool is absent here, e.g.
-  dconf on a Mac — degraded, not a failure); `manual` steps and image-baked items
-  are status-only, never counted as drift.
-
-  An `[[assert]]` may declare `severity = "notice"` with a `message`. A failing
-  notice reports a **pending state, not a defect**: it prints as a `ⓘ` line
-  carrying its message, stays out of the out-of-sync count, and is given no
-  remediation. The motivating case is a staged ostree deployment — the machine
-  matches the spec and an update is waiting for a reboot, so a red `✗` that no
-  verb could ever clear was both wrong and unactionable, and a permanent red
-  teaches people to stop reading the report. Which conditions are pending rather
-  than wrong is a **data** decision (the manifest says so), exactly as `strip`
-  declares which dconf keys are noise — the engine learns nothing about ostree.
-- **`prune`** — remove installed-but-not-declared (dependency-aware, honoring the
-  ignore/baseline list), uninstall user-scope GNOME extensions no bundle declares
-  (the machine→spec answer to an `extension-extra`, which otherwise had none),
-  and `brew untrust` any tap trusted on the machine but
-  not in `[brew].trust` (the machine→spec mirror of `reconcile`'s trust absorb);
-  previews and confirms first (`--yes` skips; under `--json` it previews unless
-  `--yes`). A package manager that is present and **failing** is published as
-  `unavailable` rather than contributing an empty extras list: on a removal verb,
-  "nothing to remove" and "could not look" are opposite instructions, and an
-  empty plan has to say which one it is.
-- **`init [name]`** — scaffold **this** machine into the folder: append a
-  `[[machine]]` block (creating `temper.toml` if absent), wire `brewfiles/<name>`,
-  then seed it via `reconcile --current-state-wins --include-trust`. The name is
-  inferred from the hostname when omitted, matching how every other verb decides
-  which machine it is. Refuses a machine that already exists (rewriting a
-  hand-authored block would lose intent). Distinct from `setup`, which records
-  *which folder* to use rather than putting a machine in one.
-- **`snapshot-dconf [machine]`** (alias `snapshot`) — capture each declared `[[machine.dconf]]` subtree
-  through its strip-keys filter into its file. Unlike a one-shot seed this is
-  **recurring**: it's the spec←machine half of the capture/restore pair and the
-  wholesale sibling of a per-key `reconcile`. Errors where dconf is absent
-  rather than silently writing nothing.
-- **`restore-dconf [machine]`** (alias `restore`) — load the machine's snapshot(s) back into live
-  dconf (confirm-gated, `--yes` to skip, `--dry-run` to preview). Clobbers live
-  desktop tweaks, so it is a standalone verb, **never** part of `update` (RIS
-  excludes gnome-restore from its update for the same reason). Journaled per
-  subtree, so `undo` reverts it.
-GNOME extensions report **both** directions and answer both: an extension that is
-declared but not installed is installed by `install` or dropped from the
-machine's own list by `reconcile`; one installed but undeclared is removed by
-`prune` or declared for this machine by `reconcile`. The extras side is
-user-scope only — system extensions ship with the image, and image-baked items
-are status-only. `[ignore].gnome_extensions` silences one.
-
-Reconcile writes only `[[machine]].gnome_extensions`, never a bundle's shared list, and
-computes nothing at all unless `gnome-extensions` answered: capability decides
-whether a direction may be evaluated, not just whether a verb may run.
-
-- **`adopt`** — report installed extras not in the spec (advisory / non-mutating)
-  so you can add each to a bundle, the machine loose list, or `[ignore]`. The
-  read-only sibling of `reconcile`.
-- **`reconcile [machine]`** — the interactive spec←machine capture (RIS's
-  `reconcile`): per-item, absorb installed-but-undeclared extras INTO the
-  machine's own Brewfile, drop declared-but-absent entries FROM it, or route a
-  flatpak extra to `[ignore]` (comment-preserving, via toml_edit). It also
-  reconciles **tap-trust**: absorb a trusted-but-undeclared tap into
-  `[brew].trust` (or `[ignore].tap`), or drop a declared-but-untrusted tap from
-  it — the same both-direction diff, written to `temper.toml` via toml_edit.
-  Missing entries default to *keep*, extras default to *skip*; a unified preview
-  + one confirm precede any write. Edits only the machine's **own** `brewfile`
-  (and the fleet `temper.toml` for `[brew].trust`/`[ignore]`), never a shared
-  bundle. It also absorbs **desktop keys** per section (see machine scope above).
-  **`--current-state-wins`** (`--csw`) answers every item with "the machine" and
-  skips the prompts, keeping the preview + one confirm (`--yes` waives it). It
-  is deliberately **machine-scope only**: `[brew].trust` and `[ignore]` are fleet
-  config, so absorbing them from one machine would silently change the others —
-  tap-trust drift is *reported* and left alone. The same rule covers **dconf
-  files**: an extension declared in a bundle carries its settings at group scope,
-  so `reconcile` reports its keys and does not offer to absorb them, and
-  `snapshot-dconf` names and skips the file unless given `--include-shared`. **`--include-trust`** opts in the
-  **adds** (taps this machine trusts that the fleet doesn't declare); it never
-  removes one, because a declared-but-untrusted tap usually means the machine
-  hasn't converged yet rather than that the fleet is wrong. `--json` previews the
-  plan without prompting. Converging the other way,
-  machine←spec, *is* `install`/`update`.
-- **`undo [run]`** — revert a run — the one named by its id, else the newest;
-  **`undo --list`** enumerates revertible runs (read-only). amdl's
-  content-addressed journal: after-hash-guarded reverts skip-and-report (a file
-  changed since, or a missing object) rather than clobber or abort mid-run.
-
----
-
-## Delivered outside the temper *binary* (still replicated — not refused)
-
-RIS-parity is the goal, so nothing RIS does is dropped. A few RIS jobs are
-delivered by something other than a temper *verb* — because of a genuine
-constraint, not a scope preference. RIS itself delivers these outside its `just`
-recipes too (a `bootstrap.sh`, an image tier), so this is parity, not a gap.
-
-- **Bootstrap** — getting brew + temper onto a bare machine runs *before* the tap
-  (and thus temper) exists — the paradox. It stays a small companion shell script
-  (`install-bazzite.sh`'s bootstrap tier + the `curl | sh` fallback), exactly as
-  RIS bootstraps with `bootstrap.sh`. Phase-1 image work (cosign key,
-  `policy.json` JSON-merge, signed `rpm-ostree rebase`, reboot) rides there too.
-- **Image-side system layer** — the OS image bakes browsers, CLI baseline, brave
-  policy, etc. Building the image is a different *artifact* (the Stacks repo), the
-  same split RIS draws with `install-bazzite.sh`. temper *configures* a machine on
-  top of that image; drift still reports image-baked items status-only.
-- **`eq-import` — folder-authoring, and built.** The `eq-import` verb shallow-
-  clones the configured `[eq_import].repo` and lands each `<x>.calibrated.conf`
-  as `<dest>/<x>.conf`. It writes *into* the config folder (authoring) rather
-  than converging a machine — the one clearly-labelled Principle-#9 exception —
-  so it lives as its own verb, not a converge step. Was a working RIS recipe;
-  now replicated, not carved out.
-
----
+One rule is the engine's rather than any single verb's, so it lives here: **a
+converge is host-guarded.** `install` refuses to run when the named machine's
+`os` differs from the host's — reading a Mac's block on a Linux box and applying
+it would deploy the wrong half of every per-OS step. `drift` and `--dry-run` are
+not guarded, because inspecting another machine's spec from this one is exactly
+how you check it before you travel.
 
 ## Folder layout — building your own spec folder
 
