@@ -2680,18 +2680,18 @@ mod remediation_tests {
             "vscode-package-extra",
             "dconf-key",
             "dconf-extra",
-            "absent",
-            "contains-line",
-            "mode",
-            "executable-resolves",
-            "not-member",
-            "shell",
-            "json-semantic",
-            "unknown",
             "dconf-unavailable",
         ] {
             emitted.push(k.to_string());
         }
+        // The assertion kinds come from `drift::kind`, which returns them rather
+        // than writing them beside a `kind:` — so they are taken from the one
+        // list that defines them instead of being copied here. A third copy is
+        // how the set silently diverged before.
+        for k in crate::drift::ASSERT_KINDS {
+            emitted.push((*k).to_string());
+        }
+        emitted.push(crate::drift::ASSERT_UNKNOWN.to_string());
         emitted.sort();
         emitted.dedup();
         for k in &emitted {

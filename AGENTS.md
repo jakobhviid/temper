@@ -188,7 +188,11 @@ pushing:
    coverage tests fail otherwise — which is the point. Reaching for `NA`/`Hand`
    is the moment to ask whether the verb simply hasn't been built. Keep kinds as
    **literal** strings: the completeness test scrapes source for `kind: "…"`, so
-   a kind built with `format!` is invisible to it.
+   a kind built with `format!` is invisible to it. A kind that is *returned*
+   rather than written beside a `kind:` — the assertion kinds, the per-manager
+   package kinds — needs a named list the scrape reads (`drift::ASSERT_KINDS`,
+   `package_kind`). Copying it into the scrape is what let three copies of the
+   assertion list drift apart.
 
 7. **Is the converge revertible, and does the user learn that BEFORE
    confirming?** `undo` covers less on macOS than on Linux (`setkey(defaults)`

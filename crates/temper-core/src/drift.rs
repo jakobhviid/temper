@@ -14,6 +14,29 @@ use crate::manifest::{expand_tilde, Assert};
 use crate::primitives::which;
 
 /// A short label for the kind of check this assertion is.
+/// Every kind an `[[assert]]` can report, in one place.
+///
+/// Three copies of this list existed — `kind`'s arms, `is_assert_kind`'s match,
+/// and the explicit escape in the finding-kind completeness scrape (which cannot
+/// see them, because they are returned rather than written next to a `kind:`).
+/// A new assertion type had to be remembered in all three, and forgetting the
+/// second means `remediations` offers `install` for a condition no verb can
+/// converge, while forgetting the third means the kind ships unregistered with
+/// the test still green.
+pub const ASSERT_KINDS: &[&str] = &[
+    "absent",
+    "contains-line",
+    "mode",
+    "executable-resolves",
+    "not-member",
+    "shell",
+    "json-semantic",
+];
+
+/// The kind reported for an assertion that sets no check — a manifest error the
+/// parser cannot catch, since every check field is optional.
+pub const ASSERT_UNKNOWN: &str = "unknown";
+
 pub fn kind(a: &Assert) -> &'static str {
     if a.absent.is_some() {
         "absent"
@@ -40,16 +63,7 @@ pub fn kind(a: &Assert) -> &'static str {
 /// them. Remediation has to know that, or it offers `install` for a staged
 /// ostree deployment that only a reboot clears.
 pub fn is_assert_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "absent"
-            | "contains-line"
-            | "mode"
-            | "executable-resolves"
-            | "not-member"
-            | "shell"
-            | "json-semantic"
-    )
+    ASSERT_KINDS.contains(&kind)
 }
 
 /// The target the assertion is about (for reporting).
@@ -218,6 +232,59 @@ pub fn eval(home: &Path, a: &Assert) -> Result<(bool, String)> {
     }
 
     bail!("assertion has no recognized check field")
+}
+
+#[cfg(test)]
+mod assert_kind_tests {
+    use super::*;
+    use crate::manifest::Assert;
+
+    /// Every check an `[[assert]]` can set has a kind, and every kind is
+    /// registered.
+    ///
+    /// `kind` falls through to `"unknown"` when no check matches, so adding a
+    /// field to `Assert` without an arm here is silent: the finding still ships,
+    /// carrying a kind that means "this assertion sets nothing". Counting the
+    /// struct's check fields against `ASSERT_KINDS` makes that a build failure
+    /// instead — the same completeness-by-construction the finding registry uses.
+    #[test]
+    fn every_assert_check_has_a_registered_kind() {
+        let src = include_str!("manifest.rs");
+        let start = src.find("pub struct Assert {").expect("Assert struct");
+        let body = &src[start..][..src[start..].find("\n}").expect("struct end")];
+        // The fields that are *checks*; the rest describe how one is reported.
+        let not_a_check = ["severity", "message", "os", "role"];
+        let checks: Vec<&str> = body
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("pub "))
+            .filter_map(|l| l.split_once(':').map(|(n, _)| n.trim()))
+            .filter(|n| !not_a_check.contains(n))
+            .collect();
+
+        assert_eq!(
+            checks.len(),
+            ASSERT_KINDS.len(),
+            "`Assert` declares {} check(s) but ASSERT_KINDS names {} — a check \
+             with no kind reports as `unknown`, and a kind with no check is dead. \
+             checks: {checks:?}, kinds: {ASSERT_KINDS:?}",
+            checks.len(),
+            ASSERT_KINDS.len()
+        );
+
+        // …and each kind really is treated as an assertion kind, so remediation
+        // does not offer a converge for something no verb can converge.
+        for k in ASSERT_KINDS {
+            assert!(is_assert_kind(k), "`{k}` is not recognised as an assert kind");
+        }
+        assert!(!is_assert_kind("copy"), "a primitive is not an assertion");
+    }
+
+    /// An assertion that sets no check reports `unknown` rather than pretending.
+    #[test]
+    fn an_empty_assertion_is_unknown() {
+        let a: Assert = toml::from_str("").expect("every check field is optional");
+        assert_eq!(kind(&a), ASSERT_UNKNOWN);
+    }
 }
 
 #[cfg(test)]
