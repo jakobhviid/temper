@@ -48,6 +48,9 @@ impl Env {
     fn brewfile_seen(&self) -> std::path::PathBuf {
         self.fake_home.path().join("cleanup-brewfile")
     }
+    fn untrust_log(&self) -> std::path::PathBuf {
+        self.fake_home.path().join("untrust-args")
+    }
 
     /// A `brew` that reports two installed formulae and three trusted taps, and
     /// records what `bundle cleanup` was asked to do instead of doing it.
@@ -60,6 +63,7 @@ impl Env {
 case "$1 $2" in
   "list --formula") echo keeper; echo ignored-tool ;;
   "trust --json")   echo '{{"taps":["a/one","b/two","c/three"]}}' ;;
+  "untrust --tap")  echo "$@" >> {untrust} ;;
   "bundle cleanup")
       # Two callers, and only one is destructive. Without --force this is the
       # dry listing `brew_extras` uses to compute the plan; with it, this is the
@@ -87,6 +91,7 @@ exit 0
 "#,
                 log = self.cleanup_log().display(),
                 seen = self.brewfile_seen().display(),
+                untrust = self.untrust_log().display(),
             ),
         )
         .unwrap();
@@ -194,6 +199,16 @@ fn a_spec_silent_about_taps_untrusts_nothing() {
     assert!(
         !kinds.contains(&"brew-trust-extra"),
         "drift reported tap-trust extras on a spec with no opinion about taps: {kinds:?}"
+    );
+
+    // …and then take the destructive path, because the plan being empty is not
+    // the claim that matters — `brew untrust` never running is. Asserting on the
+    // preview would leave `commit_prune` free to untrust from somewhere else.
+    e.temper().args(["prune", "--yes"]).output().unwrap();
+    assert!(
+        read(&e.untrust_log()).is_empty(),
+        "prune ran `brew untrust` on a spec that never mentions taps: {}",
+        read(&e.untrust_log())
     );
 }
 
