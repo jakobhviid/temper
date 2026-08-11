@@ -46,7 +46,11 @@ So a change to behaviour ships with the doc change **in the same commit**:
   yours.
 - **Added/changed/removed a verb, flag, or its behaviour**? Update the clap
   help (it renders into `--llm`), **`WORKFLOWS.md`** (the operating loops), and
-  the **`README.md`** if it changes what the tool is or how you start.
+  the **`README.md`** if it changes what the tool is or how you start. Renaming
+  one is the case to watch: the alias keeps every example working, so nothing
+  fails and the docs quietly go on teaching the dead name. A test now asserts
+  every `` `temper <verb>` `` in the docs is the **canonical** spelling — an
+  alias does not count, which is the whole point.
 - **Changed the model** (scopes, gating, lifecycle, journaling, a design
   principle)? Update **`ARCHITECTURE.md`** / **`PRINCIPLES.md`**.
 
