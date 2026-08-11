@@ -71,7 +71,26 @@ pub struct Owned {
     pub keys: Vec<String>,
     /// Snapshot-relative prefixes a deeper snapshot owns, each ending in `/`.
     pub subtrees: Vec<String>,
+    /// uuids a `gnome_extensions` declaration names, whose **membership** in
+    /// `enabled-extensions` / `disabled-extensions` the declaration owns.
+    ///
+    /// Unlike the other two this is not a whole key: those arrays also list the
+    /// image-baked extensions nobody declares, and the snapshot is their only
+    /// record. So the filter is element-level — a declared uuid is removed from
+    /// the array, and the rest of it is kept.
+    ///
+    /// Without this the snapshot records an enable-state the declaration also
+    /// asserts, and the two disagree the moment either changes: `reconcile`
+    /// offers to absorb the array, absorbing it changes nothing the declaration
+    /// says, and `drift` still reports the extension.
+    pub declared_extensions: Vec<String>,
 }
+
+/// The two arrays whose membership a `gnome_extensions` declaration owns.
+///
+/// Snapshot-relative and root-level: an `enabled-extensions` key deeper in the
+/// tree belongs to whatever lives there, not to the shell's extension list.
+const EXTENSION_LISTS: [&str; 2] = ["enabled-extensions", "disabled-extensions"];
 
 impl Owned {
     fn covers(&self, id: &str) -> bool {
@@ -82,7 +101,62 @@ impl Owned {
 
 /// Drop everything another declaration owns.
 pub fn drop_owned(dump: &str, owned: &Owned) -> String {
-    filter_dump(dump, |id| owned.covers(id))
+    let dump = drop_declared_members(dump, &owned.declared_extensions);
+    filter_dump(&dump, |id| owned.covers(id))
+}
+
+/// Remove declared uuids from the shell's two extension arrays, keeping every
+/// other member and every other key.
+///
+/// A key that is left holding an empty array is dropped entirely: an empty
+/// `disabled-extensions` is what dconf reports for a machine that disables
+/// nothing, so recording `@as []` would be a value the snapshot invented.
+pub fn drop_declared_members(dump: &str, uuids: &[String]) -> String {
+    if uuids.is_empty() {
+        return dump.to_string();
+    }
+    let mut out = String::new();
+    let mut section = String::new();
+    for line in dump.lines() {
+        let t = line.trim();
+        if t.starts_with('[') && t.ends_with(']') {
+            section = section_of(t);
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        };
+        let key = k.trim();
+        // Root of the snapshot only — `section_of` yields "" there.
+        if !section.is_empty() || !EXTENSION_LISTS.contains(&key) {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        let Ok(members) = crate::primitives::parse_gvariant_as(v.trim()) else {
+            out.push_str(line); // not list-shaped after all — leave it alone
+            out.push('\n');
+            continue;
+        };
+        let kept: Vec<String> = members
+            .into_iter()
+            .filter(|m| !uuids.iter().any(|u| u == m))
+            .collect();
+        if kept.is_empty() {
+            continue;
+        }
+        let rendered = kept
+            .iter()
+            .map(|m| format!("'{}'", m.replace('\\', "\\\\").replace('\'', "\\'")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!("{key}=[{rendered}]\n"));
+    }
+    out
 }
 
 fn filter_dump(dump: &str, drop: impl Fn(&str) -> bool) -> String {
@@ -489,7 +563,17 @@ pub fn owned_elsewhere(home: &Path, machine: &Machine, snap: &DconfSnapshot) -> 
     }
     subtrees.sort();
     subtrees.dedup();
-    Ok(Owned { keys, subtrees })
+    // Only for a snapshot that actually contains the shell's extension arrays.
+    // A `/org/gnome/Ptyxis/` block has no `enabled-extensions`, and claiming
+    // ownership of a key that is not there would be noise in the struct.
+    let declared_extensions = crate::providers::effective_extension_specs(home, machine)
+        .map(|specs| specs.iter().map(|e| e.uuid().to_string()).collect())
+        .unwrap_or_default();
+    Ok(Owned {
+        keys,
+        subtrees,
+        declared_extensions,
+    })
 }
 
 pub fn setkey_owned(home: &Path, machine: &Machine, snap: &DconfSnapshot) -> Result<Vec<String>> {
@@ -818,6 +902,7 @@ mod subtree_ownership_tests {
         let owned = Owned {
             keys: vec![],
             subtrees: vec!["extensions/tilingshell/".into()],
+            ..Owned::default()
         };
         let out = drop_owned(dump, &owned);
         assert!(out.contains("favorite-apps"), "the root keys stay:\n{out}");
@@ -872,6 +957,7 @@ mod subtree_ownership_tests {
         let owned = Owned {
             keys: vec![],
             subtrees: vec!["extensions/blur/".into()],
+            ..Owned::default()
         };
         let out = drop_owned(dump, &owned);
         assert!(!out.contains("x=1"), "the owned subtree goes:\n{out}");
@@ -885,6 +971,7 @@ mod subtree_ownership_tests {
         let owned = Owned {
             keys: vec!["a/b".into()],
             subtrees: vec![],
+            ..Owned::default()
         };
         let out = drop_owned(dump, &owned);
         assert!(!out.contains("b=1"), "{out}");
@@ -1172,5 +1259,86 @@ clock-format='24h'
         let file = strip_dump("[/]\nk='v'\nlast-selected='a'\n", &strip);
         let live = strip_dump("[/]\nk='v'\nlast-selected='b'\n", &strip);
         assert!(diff_dumps(&file, &live).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod declared_membership_tests {
+    use super::{drop_declared_members, drop_owned, Owned};
+
+    fn uuids(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The bug, in one assertion: a uuid the spec declares must not also be
+    /// recorded by the snapshot, or absorbing the array changes nothing the
+    /// declaration says and `drift` keeps reporting the extension.
+    #[test]
+    fn a_declared_uuid_leaves_the_extension_arrays() {
+        let dump = "[/]\nenabled-extensions=['smile@x', 'blur-my-shell@aunetx']\n";
+        let out = drop_declared_members(dump, &uuids(&["smile@x"]));
+        assert!(!out.contains("smile@x"), "declared uuid still recorded: {out}");
+        assert!(
+            out.contains("blur-my-shell@aunetx"),
+            "the image-baked extension is the snapshot's to keep — it is declared \
+             by nobody, so nothing else records it: {out}"
+        );
+    }
+
+    /// Both arrays, since a declaration asserts enabled *or* disabled and the
+    /// machine may hold the uuid in either.
+    #[test]
+    fn disabled_extensions_is_filtered_the_same_way() {
+        let dump = "[/]\ndisabled-extensions=['smile@x', 'gsconnect@y']\n";
+        let out = drop_declared_members(dump, &uuids(&["smile@x"]));
+        assert_eq!(out, "[/]\ndisabled-extensions=['gsconnect@y']\n");
+    }
+
+    /// An array left empty is dropped rather than written as `[]`: dconf reports
+    /// no key at all for a machine that disables nothing, so an empty array
+    /// would be a value the snapshot invented.
+    #[test]
+    fn a_key_emptied_by_the_filter_is_dropped() {
+        let dump = "[/]\ndisabled-extensions=['smile@x']\nfavorite-apps=['a.desktop']\n";
+        let out = drop_declared_members(dump, &uuids(&["smile@x"]));
+        assert!(!out.contains("disabled-extensions"), "empty array kept: {out}");
+        assert!(out.contains("favorite-apps"), "unrelated key lost: {out}");
+    }
+
+    /// Root-level only. A key of the same name deeper in the tree belongs to
+    /// whatever lives there — the rule is about the shell's extension lists, not
+    /// about every key that happens to share their name.
+    #[test]
+    fn a_deeper_key_of_the_same_name_is_untouched() {
+        let dump = "[extensions/some-ext]\nenabled-extensions=['smile@x']\n";
+        let out = drop_declared_members(dump, &uuids(&["smile@x"]));
+        assert!(
+            out.contains("smile@x"),
+            "filtered a key outside the snapshot root: {out}"
+        );
+    }
+
+    /// Declaring nothing changes nothing — the filter must not rewrite a dump it
+    /// has no opinion about.
+    #[test]
+    fn no_declared_extensions_is_a_no_op() {
+        let dump = "[/]\nenabled-extensions=['a@b']\n";
+        assert_eq!(drop_declared_members(dump, &[]), dump);
+    }
+
+    /// …and it composes with the other two owners rather than replacing them.
+    #[test]
+    fn it_runs_alongside_setkey_and_subtree_ownership() {
+        let dump = "[/]\nenabled-extensions=['smile@x', 'keep@y']\n\n\
+                    [extensions/blur-my-shell/applications]\nsigma=27\n";
+        let owned = Owned {
+            keys: vec!["extensions/blur-my-shell/applications/sigma".into()],
+            declared_extensions: uuids(&["smile@x"]),
+            ..Owned::default()
+        };
+        let out = drop_owned(dump, &owned);
+        assert!(!out.contains("smile@x"), "declared uuid kept: {out}");
+        assert!(!out.contains("sigma"), "setkey-owned key kept: {out}");
+        assert!(out.contains("keep@y"), "undeclared member lost: {out}");
     }
 }
