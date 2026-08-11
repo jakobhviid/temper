@@ -87,12 +87,31 @@ fn every_spec_example_loads_as_a_real_folder() {
         fs::write(h.join("assets").join(f), "# fixture\n").unwrap();
     }
 
+    // SPEC's `setkey` example renders `{{ which "ghostty" }}`, which resolves at
+    // load — so on a host without ghostty the folder fails to load and this test
+    // reports a schema error that isn't one. It did exactly that on CI while
+    // passing on the developer's machine, where ghostty happens to be installed.
+    //
+    // The example stays honest (ghostty is the real-world case); the test stops
+    // asking the host what software it has. Every binary SPEC names is provided
+    // here, on a PATH this test controls.
+    let bin = TempDir::new().unwrap();
+    stub(bin.path(), "ghostty");
+
     let out = Command::cargo_bin("temper")
         .unwrap()
         .args(["drift", "--json"])
         .env("TEMPER_DIR", h)
         .env("HOME", fake_home.path())
         .env("TEMPER_STATE_DIR", state.path())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.path().display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
         .output()
         .unwrap();
 
@@ -111,4 +130,16 @@ fn every_spec_example_loads_as_a_real_folder() {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout)
         .unwrap_or_else(|e| panic!("drift did not emit a document ({e})"));
     assert_eq!(v["machine"], "chronos", "SPEC's example machine should resolve");
+}
+
+/// A do-nothing executable, so a `which` in SPEC resolves without asking the
+/// host whether it happens to have that software installed.
+fn stub(dir: &std::path::Path, name: &str) {
+    let p = dir.join(name);
+    fs::write(&p, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    }
 }
