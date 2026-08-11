@@ -104,6 +104,55 @@ fn every_read_only_verb_emits_exactly_one_json_document() {
     }
 }
 
+/// The **destructive** paths emit one document too.
+///
+/// `prune --json --yes` runs `commit_prune` *before* printing, so every child it
+/// spawns has a chance to write to stdout first — which is exactly how `brew
+/// bundle cleanup`, `brew untrust` and `flatpak uninstall` used to land ahead of
+/// the document. The preview cases above cannot catch that, because in a preview
+/// no child runs at all.
+///
+/// Scoped to a retired file inside the test's own `HOME`, so the destructive
+/// path is genuinely exercised without touching anything real.
+#[test]
+fn the_destructive_json_paths_emit_one_document() {
+    let e = Env::new();
+    let doomed = e.fake_home.path().join("retire-me.conf");
+    fs::write(&doomed, "gone soon\n").unwrap();
+    let os = if cfg!(target_os = "macos") { "mac" } else { "linux" };
+    fs::write(
+        e.home.path().join("temper.toml"),
+        format!(
+            "[[machine]]\nname = \"t\"\nos = \"{os}\"\napps = [\"a\"]\n\
+             retire = [\"~/retire-me.conf\"]\n"
+        ),
+    )
+    .unwrap();
+
+    let out = e.temper().args(["prune", "--json", "--yes"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|err| {
+        panic!("`prune --json --yes` did not emit one document ({err}):\n{stdout}")
+    });
+    assert_eq!(v["removed"], true, "it should have acted: {v}");
+    assert!(
+        !doomed.exists(),
+        "and actually removed the retired path, or this test proves nothing"
+    );
+
+    // `reconcile --csw --yes` writes the folder rather than the machine, and is
+    // the other verb that acts before it prints.
+    let out = e
+        .temper()
+        .args(["reconcile", "--csw", "--yes", "--json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    serde_json::from_str::<serde_json::Value>(&stdout).unwrap_or_else(|err| {
+        panic!("`reconcile --csw --yes --json` did not emit one document ({err}):\n{stdout}")
+    });
+}
+
 /// `--verbose` composes with `--json`, and must not put a child's output in the
 /// document. Both are global flags, so the combination is reachable by anyone.
 #[test]
