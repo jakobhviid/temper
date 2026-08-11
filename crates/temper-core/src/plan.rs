@@ -461,23 +461,33 @@ fn packages_only_unrevertible(
     home: &Path,
     machine: &Machine,
 ) -> Vec<String> {
+    // Only what this run would actually CHANGE. Keying off "does the spec
+    // declare any" warned about reverting work that is not going to happen —
+    // a converged machine declaring three taps was told its tap-trust could not
+    // be taken back, while the run was about to touch nothing. That is the same
+    // defect as listing an in-sync `sysfile` as unrevertible, which the step
+    // path is careful about and this one was not.
+    //
     // The reasons come from `interface::PROVIDERS`, not from here: that table is
     // where a provider's revertibility is declared, and writing the same thing
     // twice is how a capability table and its code stop agreeing.
+    let untrusted = crate::providers::trusted_taps()
+        .ok()
+        .flatten()
+        .map(|t| brew_trust.iter().any(|d| !t.contains(d)))
+        .unwrap_or(false);
+    let remotes_to_add = !crate::providers::remotes_missing(
+        &crate::providers::effective_remotes(home, machine).unwrap_or_default(),
+    )
+    .is_empty();
+    let switches_to_flip = !crate::providers::gext_enable_drift(
+        &crate::providers::effective_extension_specs(home, machine).unwrap_or_default(),
+    )
+    .is_empty();
     let touched: [(&str, bool); 3] = [
-        ("brew-trust", !brew_trust.is_empty()),
-        (
-            "flatpak-remote",
-            !crate::providers::effective_remotes(home, machine)
-                .unwrap_or_default()
-                .is_empty(),
-        ),
-        (
-            "gnome-extensions",
-            !crate::providers::effective_extensions(home, machine)
-                .unwrap_or_default()
-                .is_empty(),
-        ),
+        ("brew-trust", untrusted),
+        ("flatpak-remote", remotes_to_add),
+        ("gnome-extensions", switches_to_flip),
     ];
     touched
         .iter()
@@ -2119,6 +2129,41 @@ mod revertibility_tests {
 
     /// What `undo` cannot take back is named, and everything else is silent.
     ///
+    /// `install --packages-only` names only what this run would actually change.
+    ///
+    /// It keyed off "does the spec declare any", so a converged machine
+    /// declaring three taps was warned that its tap-trust could not be taken
+    /// back while the run was about to touch nothing. The step path is careful
+    /// about exactly this — an in-sync `sysfile` is not listed — and this path
+    /// was not.
+    #[test]
+    fn nothing_to_do_means_nothing_to_warn_about() {
+        let src = include_str!("plan.rs");
+        let body = {
+            let start = src
+                .find("fn packages_only_unrevertible(")
+                .expect("packages_only_unrevertible");
+            &src[start..][..src[start..].find("\n}").expect("fn end")]
+        };
+        // The three flags must be computed from a DRIFT question, not from the
+        // declared list being non-empty.
+        for (flag, from) in [
+            ("untrusted", "trusted_taps"),
+            ("remotes_to_add", "remotes_missing"),
+            ("switches_to_flip", "gext_enable_drift"),
+        ] {
+            assert!(
+                body.contains(from),
+                "`{flag}` must come from `{from}` — asking whether the spec \
+                 declares any warns about work that is not going to happen"
+            );
+        }
+        assert!(
+            !body.contains("effective_extensions(home, machine)\n"),
+            "the bare declared list is not the question"
+        );
+    }
+
     /// AGENTS.md question 7: a run whose only changes were unrevertible reverts
     /// nothing while reporting success, and the user finds out when the revert
     /// turns out to be a no-op. Each case here has a real reason, which matters
