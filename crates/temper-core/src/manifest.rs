@@ -828,12 +828,39 @@ fn reject_duplicate_machines(ft: &TemperToml) -> Result<()> {
     Ok(())
 }
 
+/// A uuid declared twice in one machine's list is a mistake, not a merge.
+///
+/// The two entries are resolved by array **order** — the later one replaces the
+/// earlier — so `{uuid = "x", settings = "…"}` before a bare `"x"` silently
+/// loses the settings, while the other order silently keeps them. Nothing in the
+/// file says which you wrote first matters. Rejecting is the same answer
+/// duplicate machine names already get, and for the same reason: temper should
+/// not guess which of two contradictory declarations you meant.
+fn reject_duplicate_extensions(ft: &TemperToml) -> Result<()> {
+    for m in &ft.machine {
+        let mut seen = std::collections::HashSet::new();
+        for e in &m.gnome_extensions {
+            if !seen.insert(e.uuid().to_string()) {
+                anyhow::bail!(
+                    "machine '{}' declares the GNOME extension '{}' twice — merge \
+                     them into one entry (a table may carry both `enabled` and \
+                     `settings`)",
+                    m.name,
+                    e.uuid()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn load_fleet(home: &Path) -> Result<TemperToml> {
     let p = home.join("temper.toml");
     let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
     match toml::from_str::<TemperToml>(&s) {
         Ok(ft) => {
             reject_duplicate_machines(&ft)?;
+            reject_duplicate_extensions(&ft)?;
             Ok(ft)
         }
         // Couldn't parse. Version skew (a newer temper's field) or a genuine
@@ -1439,6 +1466,42 @@ mod tests {
             ),
             PullMode::Rebase
         );
+    }
+
+    /// A uuid declared twice in one machine's list is rejected, not merged.
+    ///
+    /// The entries resolve by array order — later replaces earlier — so which
+    /// one you wrote first silently decides whether `settings` or `enabled`
+    /// survives, and nothing in the file says so. SPEC's own example carried the
+    /// shape until this caught it.
+    #[test]
+    fn a_uuid_declared_twice_on_one_machine_is_rejected() {
+        let dup = r#"
+[[machine]]
+name = "atlas"
+os = "linux"
+gnome_extensions = [
+    "x@y",
+    { uuid = "x@y", settings = "assets/x.dconf" },
+]
+"#;
+        let ft: TemperToml = toml::from_str(dup).expect("it parses; the check is semantic");
+        let err = super::reject_duplicate_extensions(&ft).expect_err("must be rejected");
+        assert!(format!("{err}").contains("x@y"), "the error must name it: {err}");
+
+        // One entry carrying both fields is the correct shape, and is accepted.
+        let ok = r#"
+[[machine]]
+name = "atlas"
+os = "linux"
+gnome_extensions = [
+    { uuid = "x@y", enabled = false, settings = "assets/x.dconf" },
+    "z@w",
+]
+"#;
+        let ft: TemperToml = toml::from_str(ok).unwrap();
+        assert!(super::reject_duplicate_extensions(&ft).is_ok());
+        assert!(!ft.machine[0].gnome_extensions[0].enabled());
     }
 
     #[test]
