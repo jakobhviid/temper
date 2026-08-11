@@ -272,3 +272,91 @@ fn a_dry_run_names_what_undo_could_not_revert() {
         "a dry run must not deploy anything"
     );
 }
+
+/// The reason is a property of the primitive, so it is stated **once** however
+/// many steps share it.
+///
+/// It used to be joined onto every row: three `exec` steps printed the same
+/// sentence three times, and each step's own name sat to the left of it where
+/// the eye had to hunt for it. Three affected steps read as three different
+/// problems. The rows are terse now and the explanation is a legend beneath
+/// them — the shape `grove` uses for a multi-repo table.
+#[test]
+fn one_reason_is_printed_once_however_many_steps_share_it() {
+    let home = TempDir::new().unwrap();
+    let fake_home = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    let h = home.path();
+
+    fs::create_dir_all(h.join("apps")).unwrap();
+    fs::create_dir_all(h.join("assets")).unwrap();
+    for n in ["one", "two", "three"] {
+        fs::write(h.join(format!("assets/{n}.sh")), "true\n").unwrap();
+    }
+    fs::write(
+        h.join("temper.toml"),
+        format!("[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
+    )
+    .unwrap();
+    fs::write(
+        h.join("apps/demo.toml"),
+        "[[step]]\nexec = \"assets/one.sh\"\nrun = \"always\"\n\n\
+         [[step]]\nexec = \"assets/two.sh\"\nrun = \"always\"\n\n\
+         [[step]]\nexec = \"assets/three.sh\"\nrun = \"always\"\n",
+    )
+    .unwrap();
+
+    let out = temper(h, fake_home.path(), state.path())
+        .args(["install", "--dry-run"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+
+    let reason = "runs arbitrary code";
+    assert_eq!(
+        text.matches(reason).count(),
+        1,
+        "three execs share one reason, so it belongs on one line:\n{text}"
+    );
+    // …and every step is still named, or the legend saved space by losing the
+    // thing the reader actually needs.
+    for n in ["one.sh", "two.sh", "three.sh"] {
+        assert!(text.contains(n), "step `{n}` is not named:\n{text}");
+    }
+}
+
+/// Two different primitives are two different reasons, so both are printed —
+/// deduplication must not collapse them into one.
+#[test]
+fn two_different_reasons_are_both_printed() {
+    let home = TempDir::new().unwrap();
+    let fake_home = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    let h = home.path();
+
+    fs::create_dir_all(h.join("apps")).unwrap();
+    fs::create_dir_all(h.join("assets")).unwrap();
+    fs::write(h.join("assets/x.sh"), "true\n").unwrap();
+    fs::write(h.join("assets/f.conf"), "x\n").unwrap();
+    fs::write(
+        h.join("temper.toml"),
+        format!("[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"demo\"]\n", os()),
+    )
+    .unwrap();
+    fs::write(
+        h.join("apps/demo.toml"),
+        "[[step]]\nexec = \"assets/x.sh\"\nrun = \"always\"\n\n\
+         [[step]]\nsysfile = \"assets/f.conf\"\nto = \"/tmp/temper-test-absent/f.conf\"\n",
+    )
+    .unwrap();
+
+    let out = temper(h, fake_home.path(), state.path())
+        .args(["install", "--dry-run"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("runs arbitrary code") && text.contains("outside the journal"),
+        "each distinct reason needs its own line:\n{text}"
+    );
+}

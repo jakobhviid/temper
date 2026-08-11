@@ -1026,6 +1026,39 @@ fn save_and_report(target: &std::path::Path, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Print the unrevertible changes as rows, then each distinct reason once.
+///
+/// The reason belongs to the primitive, not the step: every `exec` is
+/// unrevertible in the same words. Printed per row it repeated itself, pushed
+/// the step's own name off to the left of a long sentence, and made three
+/// affected steps look like three different problems. As a legend it is said
+/// once and the rows stay scannable — the shape `grove` uses, where the table is
+/// terse and what it means lives underneath it.
+fn print_unrevertible(items: &[(String, &'static str)], cannot: &str) {
+    if items.is_empty() {
+        return;
+    }
+    println!(
+        "  {} {} change(s) `temper undo` {cannot}:",
+        ui::yellow(ui::g_warn()),
+        items.len()
+    );
+    for (label, _) in items {
+        println!("      {label}");
+    }
+    // Deduplicated, order preserved: two different reasons are two lines, and
+    // the common case of one reason is one line.
+    let mut seen: Vec<&str> = Vec::new();
+    for (_, why) in items {
+        if !seen.contains(why) {
+            seen.push(why);
+        }
+    }
+    for why in seen {
+        println!("    {}", ui::dim(why));
+    }
+}
+
 /// How to phrase `undo`'s limits. A dry run is a forecast, so the same list has
 /// to read as one — "cannot revert" on a run that has not happened yet invites
 /// the reader to go looking for changes nothing made.
@@ -1096,7 +1129,9 @@ fn cmd_install(
                 "machine": m.name, "packages": r.packages,
                 "changed": r.steps_changed, "total": r.steps_total,
                 "reboot": r.reboot, "dry_run": dry_run, "packages_only": packages_only,
-                "unrevertible": r.unrevertible,
+                "unrevertible": r.unrevertible.iter()
+                    .map(|(label, why)| format!("{label} — {why}"))
+                    .collect::<Vec<_>>(),
                 "skipped": r.skipped
             })
         );
@@ -1111,16 +1146,7 @@ fn cmd_install(
             "install-missing {}: {verb} {} declared package(s), config skipped",
             m.name, r.packages
         );
-        if !r.unrevertible.is_empty() {
-            println!(
-                "  {} {} change(s) `temper undo` {cannot}:",
-                ui::yellow(ui::g_warn()),
-                r.unrevertible.len()
-            );
-            for u in &r.unrevertible {
-                println!("      {u}");
-            }
-        }
+        print_unrevertible(&r.unrevertible, cannot);
         if r.reboot {
             println!("  ! reboot required (rpm-ostree layered a package)");
         }
@@ -1158,16 +1184,7 @@ fn cmd_install(
             "install {}: {} package(s) declared, {steps}",
             m.name, r.packages
         );
-        if !r.unrevertible.is_empty() {
-            println!(
-                "  {} {} change(s) `temper undo` {cannot}:",
-                ui::yellow(ui::g_warn()),
-                r.unrevertible.len()
-            );
-            for u in &r.unrevertible {
-                println!("      {u}");
-            }
-        }
+        print_unrevertible(&r.unrevertible, cannot);
         if r.reboot {
             println!("  ! reboot required (rpm-ostree layered a package)");
         }

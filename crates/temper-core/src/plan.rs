@@ -460,7 +460,7 @@ fn packages_only_unrevertible(
     brew_trust: &[String],
     home: &Path,
     machine: &Machine,
-) -> Vec<String> {
+) -> Vec<(String, &'static str)> {
     // Only what this run would actually CHANGE. Keying off "does the spec
     // declare any" warned about reverting work that is not going to happen —
     // a converged machine declaring three taps was told its tap-trust could not
@@ -493,7 +493,7 @@ fn packages_only_unrevertible(
         .iter()
         .filter(|(_, would_touch)| *would_touch)
         .filter_map(|(name, _)| {
-            crate::interface::unrevertible_reason(name).map(|why| format!("{name} — {why}"))
+            crate::interface::unrevertible_reason(name).map(|why| (name.to_string(), why))
         })
         .collect()
 }
@@ -1724,10 +1724,14 @@ pub struct InstallReport {
     pub steps_total: usize,
     /// A layered rpm was added and the machine needs a reboot.
     pub reboot: bool,
-    /// Changes this run made that `undo` cannot revert, as `label — why`.
-    /// Empty is the normal case, and the point is that it is *said* either way
-    /// rather than discovered when the revert turns out to be a no-op.
-    pub unrevertible: Vec<String>,
+    /// Changes this run made that `undo` cannot revert, as `(label, why)`.
+    ///
+    /// The two are kept apart rather than pre-joined because `why` is a property
+    /// of the **primitive**, not of the step: every `exec` is unrevertible for
+    /// the same reason, in the same words. Joined, a run with three of them
+    /// printed that sentence three times and buried which three steps it was
+    /// about. The renderer groups by reason and states each once.
+    pub unrevertible: Vec<(String, &'static str)>,
     /// Steps skipped because their `when` probe failed (app not present) —
     /// announced loudly (Principle #6). Each entry is a probe description.
     pub skipped: Vec<String>,
@@ -1862,7 +1866,7 @@ pub fn run_install(
     // Phase 2 — config steps (`resolved` was needed above, for the root ask).
     let (mut changed, mut total, mut ran) = (0usize, 0usize, 0usize);
     let mut skipped = Vec::new();
-    let mut unrevertible: Vec<String> = Vec::new();
+    let mut unrevertible: Vec<(String, &'static str)> = Vec::new();
     // Candidates are known before any of them runs, so the phase has an honest
     // denominator. A dry-run reports rather than applies — no live region for it.
     let planned: Vec<(String, &'static str)> = resolved
@@ -1910,7 +1914,7 @@ pub fn run_install(
                 // converged `sysfile` as unrevertible warns about work that
                 // is not going to happen.
                 if let Some(why) = unrevertible_reason(step) {
-                    unrevertible.push(format!("{} — {why}", label.trim()));
+                    unrevertible.push((label.trim().to_string(), why));
                 }
             }
         } else {
@@ -1926,12 +1930,12 @@ pub fn run_install(
             )?;
             if matches!(did, Applied::Changed | Applied::Ran) {
                 if let Some(why) = unrevertible_reason(step) {
-                    let named = format!("{} — {why}", label.trim());
+                    let named = (label.trim().to_string(), why);
                     // Also journaled, so the RUN exists even when nothing in it
                     // is revertible — otherwise a converge whose only changes
                     // were an `exec` and a `sysfile` wrote no run at all, and
                     // the next bare `undo` reverted an older, unrelated one.
-                    journal.record_unrevertible(&named);
+                    journal.record_unrevertible(&format!("{} — {}", named.0, named.1));
                     unrevertible.push(named);
                 }
             }
@@ -2722,7 +2726,7 @@ pub fn run_update(
     let mut journal = Journal::begin();
     let (mut changed, mut total, mut ran) = (0usize, 0usize, 0usize);
     let mut skipped = Vec::new();
-    let mut unrevertible: Vec<String> = Vec::new();
+    let mut unrevertible: Vec<(String, &'static str)> = Vec::new();
     // `always` + `ensure` are what an update re-applies; `ensure` is filtered
     // again inside the loop (it needs a probe), so this is an upper bound — the
     // counter can finish short of its total, which beats a total that grows.
@@ -2774,8 +2778,8 @@ pub fn run_update(
         )?;
         if matches!(did, Applied::Changed | Applied::Ran) {
             if let Some(why) = unrevertible_reason(step) {
-                let named = format!("{} — {why}", label.trim());
-                journal.record_unrevertible(&named);
+                let named = (label.trim().to_string(), why);
+                journal.record_unrevertible(&format!("{} — {}", named.0, named.1));
                 unrevertible.push(named);
             }
         }
