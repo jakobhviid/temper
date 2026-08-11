@@ -256,8 +256,3 @@ settles them:
    *including* keys the restore introduced that the prior dump never had.
 
 Cheap to do on a machine that already has a snapshot, and worth doing once.
-
-`speaker-eq` is unrun for a different reason: it is `run = "manual"` because its
-script *asks* which profile to install, so no converge reaches it. That is a
-property of the recipe rather than of the work — see the note in `PATTERNS.md` on
-gating a step on hardware instead of on a human.
