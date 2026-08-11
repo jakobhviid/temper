@@ -155,11 +155,16 @@ retire_packages = ["brew \"foo\""]  # optional; packages that must NOT be instal
                             #   it — ignoring is "don't tell me", retiring is
                             #   "get rid of it".
 retire = ["~/.config/old-app"]  # optional; paths that must NOT exist. `prune`
-                            #   removes them (confirmed). Distinct from
+                            #   removes them (confirmed), escalating only if the
+                            #   unprivileged removal is refused. Distinct from
                             #   [[assert]] absent, which REPORTS a condition you
                             #   resolve yourself; a retire entry temper enacts.
                             #   Nothing expires on a date — review with
                             #   `temper retired`.
+                            #   temper refuses a handful of targets outright —
+                            #   `/`, a top-level directory, your home or anything
+                            #   containing it — because a typo here travels to
+                            #   every machine.
 flatpak_remotes = ["vendor https://example.com/vendor.flatpakrepo"]
                             # optional; remotes THIS machine adds, as "<name> <url>".
                             #   The name is the identity; the url can drift.

@@ -171,6 +171,46 @@ pub fn is_untouched(rec: &Deployed) -> bool {
     }
 }
 
+/// Refuse to delete a path whose removal could not plausibly be what anyone
+/// meant.
+///
+/// `retire` deletes on the strength of a declaration, and `remove_path`
+/// escalates to `sudo rm` when the unprivileged attempt is refused — so a typo
+/// in a spec that travels to every machine is a fleet-wide `rm -rf`. The confirm
+/// lists the path, but a list of paths is exactly where one wrong entry hides.
+///
+/// This is deliberately a short list of the unrecoverable cases rather than a
+/// policy about what is "important": the filesystem root, a root-level
+/// directory, the user's home itself, and anything containing the home. temper
+/// has no business refusing `~/.config/whatever`, and every business refusing
+/// `/`.
+fn refuse_catastrophic(p: &Path) -> Result<()> {
+    let bad = |why: &str| {
+        Err(anyhow::anyhow!(
+            "refusing to remove {} — {why}. If that really is what the spec \
+             means, remove it by hand.",
+            p.display()
+        ))
+    };
+    if p.parent().is_none() {
+        return bad("it is the filesystem root");
+    }
+    // `/etc`, `/usr`, `/home` … one component below the root.
+    if p.is_absolute() && p.components().count() <= 2 {
+        return bad("it is a top-level directory");
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let home = Path::new(&home);
+        if p == home {
+            return bad("it is your home directory");
+        }
+        if home.starts_with(p) {
+            return bad("it contains your home directory");
+        }
+    }
+    Ok(())
+}
+
 /// Remove one piece of residue: a whole file, or a block's region.
 ///
 /// Never a delete for a block — the file belongs to the user and only the
@@ -198,6 +238,7 @@ pub fn remove(rec: &Deployed) -> Result<()> {
 /// into root-owned `/etc`, and a retired target is as likely to be a directory
 /// (`~/.config/old-app`) as a file. Both failed, and prune counted them removed.
 pub fn remove_path(p: &Path) -> Result<()> {
+    refuse_catastrophic(p)?;
     let meta = std::fs::symlink_metadata(p)
         .with_context(|| format!("reading {}", p.display()))?;
     let unprivileged = if meta.is_dir() {
@@ -212,14 +253,13 @@ pub fn remove_path(p: &Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
             // Root-owned residue is temper's to remove — it placed it, with
             // `sudo install`. Same escalation, backwards.
-            let ok = std::process::Command::new("sudo")
-                .arg("rm")
-                .arg("-rf")
-                .arg("--")
-                .arg(p)
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
+            // `-r` only for a directory. A file does not need it, and passing
+            // it anyway widens what a wrong path would take with it.
+            let mut cmd = std::process::Command::new("sudo");
+            cmd.arg("rm");
+            cmd.arg(if meta.is_dir() { "-rf" } else { "-f" });
+            cmd.arg("--").arg(p);
+            let ok = cmd.status().map(|s| s.success()).unwrap_or(false);
             if ok {
                 Ok(())
             } else {
@@ -243,6 +283,73 @@ mod tests {
         let out = f();
         std::env::remove_var("TEMPER_STATE_DIR");
         out
+    }
+
+    /// The paths whose removal could not plausibly be intended are refused.
+    ///
+    /// `retire` deletes on the strength of a declaration and escalates to `sudo
+    /// rm` when refused, so one wrong entry in a spec that travels to every
+    /// machine is a fleet-wide `rm -rf`. The confirm lists the path — and a list
+    /// of paths is exactly where one wrong entry hides.
+    #[test]
+    fn a_catastrophic_path_is_refused_before_anything_is_deleted() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
+        for p in [
+            "/",
+            "/etc",
+            "/usr",
+            &home,
+            // A parent of the home directory.
+            Path::new(&home).parent().unwrap().to_str().unwrap(),
+        ] {
+            assert!(
+                super::refuse_catastrophic(Path::new(p)).is_err(),
+                "`{p}` must be refused"
+            );
+        }
+
+        // …and ordinary targets are not second-guessed. temper has no business
+        // refusing a path a spec legitimately retires.
+        for p in [
+            "/etc/1password/custom_allowed_browsers",
+            "/usr/local/share/x",
+        ] {
+            assert!(
+                super::refuse_catastrophic(Path::new(p)).is_ok(),
+                "`{p}` is an ordinary target and must be allowed"
+            );
+        }
+        let under_home = Path::new(&home).join(".config/old-app");
+        assert!(super::refuse_catastrophic(&under_home).is_ok());
+    }
+
+    /// …and the guard is actually on the delete path, not merely present.
+    ///
+    /// Checked by reading the source rather than by calling `remove_path` on a
+    /// catastrophic path, deliberately. The honest test would pass `/`, and if
+    /// the guard were ever absent that test would escalate to `sudo rm -rf /`:
+    /// a test must not be capable of doing the thing it checks is prevented.
+    /// Standing a temp directory in as `HOME` was the other option, and it
+    /// mutates a process-wide variable that other tests in this suite read.
+    #[test]
+    fn remove_path_consults_the_guard_before_removing_anything() {
+        let src = include_str!("ledger.rs");
+        let body = {
+            let start = src.find("pub fn remove_path(p: &Path)").expect("remove_path");
+            &src[start..][..src[start..].find("\n}").expect("fn end")]
+        };
+        let guard = body
+            .find("refuse_catastrophic")
+            .expect("remove_path must consult the guard");
+        for call in ["remove_dir_all", "remove_file", "Command::new(\"sudo\")"] {
+            if let Some(at) = body.find(call) {
+                assert!(
+                    guard < at,
+                    "`{call}` runs before the guard — the check has to happen \
+                     first or it checks nothing"
+                );
+            }
+        }
     }
 
     /// The ledger round-trips, and residue is "recorded but no longer declared".
