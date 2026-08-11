@@ -360,7 +360,11 @@ copy     = "assets/x.conf"   # source, relative to the temper-home
 to       = "~/.config/x"     # target (single path; ~ expands)
 template = false             # true → substitute {{ var "X" }} / {{ which "x" }} / {{ env "X" }} / {{ brew_prefix }}
 seed     = false             # true → create-once if absent, then hands-off, excluded from drift
-mode     = "0600"            # optional octal file mode
+mode     = "0600"            # optional octal file mode. Drift-checked as well as
+                             #   enforced: a target whose permissions differ reports
+                             #   `drifted`, because temper re-applies it on every
+                             #   converge and anything it enforces it must also be
+                             #   able to report (Principle #7).
 
 # block: ensure a marker-delimited region in a user file (idempotent)
 [[step]]

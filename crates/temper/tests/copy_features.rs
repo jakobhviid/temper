@@ -118,3 +118,72 @@ fn template_seed_mode_and_dry_run() {
         .unwrap()
         .contains("prefix=/opt/homebrew"));
 }
+
+/// A declared `mode` is drift-checked, not just enforced.
+///
+/// `copy_state` compared content only, so a file whose permissions had been
+/// changed reported **in sync** — while every converge silently chmod'd it back
+/// and reported "0 changed". Enforcement without a drift story is exactly what
+/// Principle #7 forbids, and `sysfile` has compared mode all along.
+#[cfg(unix)]
+#[test]
+fn a_declared_mode_is_drift_checked_and_counted() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = TempDir::new().unwrap();
+    let fake_home = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    let h = home.path();
+    let os = if cfg!(target_os = "macos") { "mac" } else { "linux" };
+
+    fs::create_dir_all(h.join("apps")).unwrap();
+    fs::create_dir_all(h.join("assets")).unwrap();
+    fs::write(h.join("assets/key"), "secret\n").unwrap();
+    fs::write(
+        h.join("temper.toml"),
+        format!("[[machine]]\nname = \"t\"\nos = \"{os}\"\napps = [\"a\"]\n"),
+    )
+    .unwrap();
+    fs::write(
+        h.join("apps/a.toml"),
+        "[[step]]\ncopy = \"assets/key\"\nto = \"~/key\"\nmode = \"0600\"\n",
+    )
+    .unwrap();
+
+    let temper = || {
+        let mut c = Command::cargo_bin("temper").unwrap();
+        c.env("TEMPER_DIR", h)
+            .env("HOME", fake_home.path())
+            .env("TEMPER_STATE_DIR", state.path());
+        c
+    };
+
+    temper().arg("install").assert().success();
+    let deployed = fake_home.path().join("key");
+    assert_eq!(
+        fs::metadata(&deployed).unwrap().permissions().mode() & 0o7777,
+        0o600
+    );
+
+    // Content untouched, permissions widened — the case that read as in sync.
+    fs::set_permissions(&deployed, fs::Permissions::from_mode(0o644)).unwrap();
+
+    let out = temper().args(["drift", "--json"]).output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        v["out_of_sync"], 1,
+        "a file with the wrong mode is out of sync: {v}"
+    );
+
+    // …and fixing it counts as a change, rather than happening silently.
+    let out = temper().arg("install").output().unwrap();
+    let said = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        said.contains("1 changed"),
+        "a mode-only correction is still a change:\n{said}"
+    );
+    assert_eq!(
+        fs::metadata(&deployed).unwrap().permissions().mode() & 0o7777,
+        0o600
+    );
+}

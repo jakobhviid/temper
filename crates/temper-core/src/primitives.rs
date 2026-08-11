@@ -115,11 +115,39 @@ pub fn copy_state(src: &Path, target: &Path, opts: &CopyOpts) -> Result<FileStat
         return Ok(FileState::Missing);
     }
     let have = fs::read(target).with_context(|| format!("reading {}", target.display()))?;
-    Ok(if have == want {
+    if have != want {
+        return Ok(FileState::Drifted);
+    }
+    // A declared `mode` is enforced on every converge, so by Principle #7 it has
+    // to be drift-checked: temper was silently chmod-ing a file it reported as
+    // in sync, on every run, with nothing journaled and nothing to undo.
+    // `sysfile` has compared mode all along; `copy` never did.
+    Ok(if mode_matches(target, opts.mode)? {
         FileState::InSync
     } else {
         FileState::Drifted
     })
+}
+
+/// Whether the target already carries the declared mode. `true` when no mode is
+/// declared — temper only asserts what the spec states.
+#[cfg(unix)]
+fn mode_matches(target: &Path, mode: Option<&str>) -> Result<bool> {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(mode) = mode else { return Ok(true) };
+    let want = u32::from_str_radix(mode.strip_prefix("0o").unwrap_or(mode), 8)
+        .with_context(|| format!("invalid octal mode {mode:?}"))?;
+    let have = fs::metadata(target)
+        .with_context(|| format!("reading {}", target.display()))?
+        .permissions()
+        .mode()
+        & 0o7777;
+    Ok(have == want)
+}
+
+#[cfg(not(unix))]
+fn mode_matches(_target: &Path, _mode: Option<&str>) -> Result<bool> {
+    Ok(true)
 }
 
 /// `copy` apply. Returns whether the file's content changed. A `seed` target
@@ -142,8 +170,12 @@ pub fn copy_apply(
     };
 
     if before.as_deref() == Some(want.as_slice()) {
+        // Content matches; the mode may not. Report a mode-only correction as a
+        // change, because it is one — returning `false` here meant a converge
+        // that chmod'd a file said it changed nothing.
+        let mode_ok = mode_matches(target, opts.mode)?;
         apply_mode(target, opts.mode)?;
-        return Ok(false);
+        return Ok(!mode_ok);
     }
 
     if let Some(parent) = target.parent() {

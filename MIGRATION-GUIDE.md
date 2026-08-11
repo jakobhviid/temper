@@ -259,6 +259,12 @@ is what made `reconcile --current-state-wins` capable of emptying a Brewfile and
 with `auto_push`, sending it to the fleet. Status-only, so it does not count as
 out-of-sync; if you assert on the count, nothing changes.
 
+**A `copy` step's `mode` is drift-checked.** It was enforced on every converge
+and compared by nothing, so a file whose permissions had been widened reported
+*in sync* while temper silently chmod'd it back and said it changed nothing. If a
+declared mode does not match on your machines, this is the release where drift
+starts saying so — and `install` fixes it and counts it.
+
 **rpm-ostree reads one deployment, not all of them.** A rollback keeps the
 `requested-packages` it was built with, so an un-layered package used to be
 reported as layered forever and `prune` claimed to remove it on every run.
