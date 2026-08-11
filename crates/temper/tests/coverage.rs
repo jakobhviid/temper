@@ -151,13 +151,6 @@ fn every_reconcile_plan_field_is_enumerated_by_items() {
     }
 }
 
-/// Every verb that writes the temper folder must fire `after_repo_change`.
-///
-/// A folder-writing verb that skips it leaves a git-backed home silently dirty.
-/// `init` did (it delegated to a `reconcile` that returned early), then `undo`
-/// did — the one command whose whole job is putting things back — and then
-/// `configure set|unset`. Three instances of one omission, none of which any
-/// test could see.
 /// Every candidate list a `PrunePlan` declares is enumerated by `items()`.
 ///
 /// The same guarantee `ReconcilePlan` has above, on the verb where it matters
@@ -224,6 +217,13 @@ fn every_prune_plan_field_is_enumerated_by_items() {
     }
 }
 
+/// Every verb that writes the temper folder must fire `after_repo_change`.
+///
+/// A folder-writing verb that skips it leaves a git-backed home silently dirty.
+/// `init` did (it delegated to a `reconcile` that returned early), then `undo`
+/// did — the one command whose whole job is putting things back — and then
+/// `configure set|unset`. Three instances of one omission, none of which any
+/// test could see.
 #[test]
 fn every_folder_writing_verb_fires_the_repo_hook() {
     let cli_src = include_str!("../src/main.rs");
@@ -235,9 +235,17 @@ fn every_folder_writing_verb_fires_the_repo_hook() {
         "cmd_snapshot",
         "cmd_eq_import",
     ] {
-        let Some(start) = cli_src.find(&format!("fn {verb}(")) else {
-            continue; // renamed or removed — the verb-name test covers that
-        };
+        // A completeness test whose failure mode is "check fewer things" is the
+        // defect this file exists to catch. The comment here used to say the
+        // verb-name test covers a rename — it does not: that one checks CLI verb
+        // strings against `--help`, not internal `cmd_*` function names. Rename
+        // `cmd_snapshot` (as the CLI rename nearly did) and this quietly checked
+        // five of six.
+        let start = cli_src.find(&format!("fn {verb}(")).unwrap_or_else(|| {
+            panic!(
+                "`{verb}` is not in main.rs — if it was renamed, rename it here                  too; if it was removed, remove it here. Skipping it means this                  test silently stops covering a folder-writing verb."
+            )
+        });
         let rest = &cli_src[start..];
         // Function body ends at the next top-level `\n}` .
         let body = &rest[..rest.find("\n}\n").unwrap_or(rest.len())];

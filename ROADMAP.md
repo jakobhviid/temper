@@ -257,7 +257,32 @@ details a uniform signature is designed to hide.
 
 The Linux half of the `steel` migration (`steel` = the author's own fleet spec,
 the folder temper was built for) is transcribed + parse-valid but has
-**never run** — the dconf loads, 1Password NMH surgery, PWAs, speaker-eq exec
-scripts await a VM. See the README "VM run checklist". Mac config is
-drift-verified against a real machine. ReinstallScripts stays as the fallback
-until the VM run confirms Linux.
+**never run** — the dconf loads, 1Password NMH surgery, PWAs and speaker-eq exec
+scripts await a VM. Mac config is drift-verified against a real machine.
+ReinstallScripts stays as the fallback until the VM run confirms Linux.
+
+### VM run checklist
+
+This is the compensating control for what the suite cannot reach, so it is worth
+saying exactly what "cannot reach" means. `restore-dconf`'s **write** path is
+covered only under `--dry-run`, which returns before `dconf load` — so the undo
+payload capture and `journal::dconf_load_tree` (whose whole point is that
+reverting a subtree needs a **reset then load**, because `dconf load` merges and
+replaying the prior dump alone would leave every newly-introduced key behind)
+have no automated coverage at all.
+
+On a throwaway VM, in this order:
+
+1. `temper install` from a clean image. Every `copy`, `block`, `sysfile` and
+   `exec` lands; note anything that needed a second run.
+2. `temper drift` — expect zero out of sync. Anything left is a step that
+   claimed success without converging.
+3. `temper restore-dconf`, then `temper drift` again. The desktop should match
+   the snapshot, and drift should be clean.
+4. **`temper undo`** — the step that is otherwise untested. The desktop must
+   return to its pre-restore state, *including* keys the restore introduced that
+   the prior dump never had. Those are the ones a bare `load` leaves behind.
+5. `temper prune` on a machine with something undeclared installed, confirming
+   the preview lists exactly what it then removes.
+6. The hand-written pieces: 1Password native-messaging host, the PWAs, and the
+   speaker-eq `exec` (a `manual` step, so run it explicitly).

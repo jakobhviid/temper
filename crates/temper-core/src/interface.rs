@@ -397,17 +397,11 @@ mod tests {
         }
     }
 
-    /// Every provider appears in the ARCHITECTURE matrix.
+    /// A matrix row must have a provider behind it — the doc→code direction.
     ///
-    /// The matrix is how a reader learns where a feature stands, and a provider
-    /// missing from it reads as one that does not exist. Docs are compiled into
-    /// `--llm`, so a stale matrix does not merely read wrong — it misleads every
-    /// agent that builds a spec from it (AGENTS.md).
-    /// …and the reverse: a matrix row with no provider behind it.
-    ///
-    /// The check above runs code→doc only, so `profile` sat in the table for a
-    /// long time with nothing asserting any of its cells. A doc row is a claim;
-    /// a claim wants an owner.
+    /// Its counterpart below runs code→doc. Only one of the two existed for a
+    /// long time, which is how `profile` sat in the table with nothing asserting
+    /// any of its cells. A doc row is a claim; a claim wants an owner.
     #[test]
     fn every_matrix_row_has_a_provider() {
         let doc = include_str!("../../../ARCHITECTURE.md");
@@ -431,6 +425,13 @@ mod tests {
         }
     }
 
+    /// Every provider appears in the ARCHITECTURE matrix — the code→doc
+    /// direction, and the counterpart to the check above.
+    ///
+    /// The matrix is how a reader learns where a feature stands, and a provider
+    /// missing from it reads as one that does not exist. Docs are compiled into
+    /// `--llm`, so a stale matrix does not merely read wrong — it misleads every
+    /// agent that builds a spec from it (AGENTS.md).
     #[test]
     fn every_provider_is_in_the_architecture_matrix() {
         let doc = include_str!("../../../ARCHITECTURE.md");
