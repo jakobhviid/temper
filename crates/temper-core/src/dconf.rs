@@ -662,6 +662,20 @@ pub fn capture(
                  it. Use `--include-shared` to capture it anyway.",
                 s.file, machine.name
             );
+            // The half that is easy to miss: declaring the subtree moved it out
+            // of this machine's own snapshot too, whether or not the group file
+            // gets written. Skipping the capture therefore leaves those keys
+            // declared and unowned until someone authors them — `drift` says so,
+            // but only if you know to look, and the sentence above reads like
+            // nothing happened.
+            if !s.path.is_empty() {
+                eprintln!(
+                    "      `{}` is excluded from this machine's own snapshot \
+                     either way, so until that file is captured its keys are \
+                     declared but held nowhere. `temper drift` lists them.",
+                    s.path
+                );
+            }
         }
         mine
     };
