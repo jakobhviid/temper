@@ -838,17 +838,27 @@ fn reject_duplicate_machines(ft: &TemperToml) -> Result<()> {
 /// not guess which of two contradictory declarations you meant.
 fn reject_duplicate_extensions(ft: &TemperToml) -> Result<()> {
     for m in &ft.machine {
-        let mut seen = std::collections::HashSet::new();
-        for e in &m.gnome_extensions {
-            if !seen.insert(e.uuid().to_string()) {
-                anyhow::bail!(
-                    "machine '{}' declares the GNOME extension '{}' twice — merge \
-                     them into one entry (a table may carry both `enabled` and \
-                     `settings`)",
-                    m.name,
-                    e.uuid()
-                );
-            }
+        no_duplicate_uuids(&m.gnome_extensions, &format!("machine '{}'", m.name))?;
+    }
+    Ok(())
+}
+
+/// One entry per uuid, wherever the list lives.
+///
+/// Shared by the machine and bundle checks because the hazard is identical and
+/// the composition rule is not: within one list the entries resolve by array
+/// order, so which you wrote first silently decides whether `settings` or
+/// `enabled` survives. (Across scopes it is not ambiguous — the machine's
+/// declaration deliberately replaces the bundle's.)
+pub fn no_duplicate_uuids(list: &[GnomeExtension], whose: &str) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    for e in list {
+        if !seen.insert(e.uuid().to_string()) {
+            anyhow::bail!(
+                "{whose} declares the GNOME extension '{}' twice — merge them \
+                 into one entry (a table may carry both `enabled` and `settings`)",
+                e.uuid()
+            );
         }
     }
     Ok(())
@@ -929,7 +939,10 @@ pub fn load_bundle(home: &Path, name: &str) -> Result<Bundle> {
     let s =
         std::fs::read_to_string(&p).with_context(|| format!("reading bundle {}", p.display()))?;
     match toml::from_str::<Bundle>(&s) {
-        Ok(b) => Ok(b),
+        Ok(b) => {
+            no_duplicate_uuids(&b.gnome_extensions, &format!("bundle '{name}'"))?;
+            Ok(b)
+        }
         Err(e) => {
             if let Ok(fleet) = std::fs::read_to_string(home.join("temper.toml")) {
                 let mode = peek_update_mode(&fleet);
@@ -1538,6 +1551,19 @@ gnome_extensions = [
         let ft: TemperToml = toml::from_str(dup).expect("it parses; the check is semantic");
         let err = super::reject_duplicate_extensions(&ft).expect_err("must be rejected");
         assert!(format!("{err}").contains("x@y"), "the error must name it: {err}");
+
+        // A BUNDLE's list has the identical hazard — same array-order
+        // resolution, same silent loss — and is checked by the same predicate.
+        // (Across scopes there is no ambiguity: the machine's entry deliberately
+        // replaces the bundle's, which is what machine scope is for.)
+        let b: Bundle = toml::from_str(
+            "gnome_extensions = [{ uuid = \"x@y\", settings = \"a.dconf\" }, \"x@y\"]",
+        )
+        .unwrap();
+        assert!(
+            super::no_duplicate_uuids(&b.gnome_extensions, "bundle 'a'").is_err(),
+            "a bundle must not declare one uuid twice either"
+        );
 
         // One entry carrying both fields is the correct shape, and is accepted.
         let ok = r#"
