@@ -132,18 +132,11 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         prune: Col::Yes,
         reconcile: Col::Yes,
         ignore: Col::Yes,
-        // Not the same claim. `install` runs `flatpak install` with no scope
-        // flag, whose default is the SYSTEM installation, while undo uninstalls
-        // `--user` — so wherever the apps live system-wide (flatpak's default,
-        // and every storefront's) a revert finds nothing and reports success.
-        // That is a bug, not a design question: the bar is the storefront the
-        // desktop already ships, which removes a system app with no privilege
-        // at all, so temper owns the installation its converge writes to.
-        // See ROADMAP, "Bugs".
-        revertible: Col::No(
-            "undo uninstalls `--user`, which is not necessarily the scope install \
-             wrote to — see ROADMAP",
-        ),
+        // Install and uninstall name the SAME installation, `--system`, spelled
+        // out on both sides — so what `journal_provider` records as installed is
+        // what `undo` can remove. The scope is the storefront's: if a user can
+        // delete an app by clicking in GNOME Software, prune has to reach it too.
+        revertible: Col::Yes,
         residue: Col::NA(NO_RESIDUE),
     },
     ProviderSpec {
@@ -305,8 +298,8 @@ mod tests {
     /// reported without anyone remembering to look.
     #[test]
     fn the_revertible_column_is_the_source_for_the_report() {
-        // The three the package phase touches without journaling.
-        for name in ["brew-trust", "flatpak-remote", "flatpak"] {
+        // The two the package phase touches without journaling.
+        for name in ["brew-trust", "flatpak-remote"] {
             let why = super::unrevertible_reason(name)
                 .unwrap_or_else(|| panic!("`{name}` should declare why it is not revertible"));
             assert!(
@@ -314,8 +307,9 @@ mod tests {
                 "`{name}` needs a real reason, got {why:?}"
             );
         }
-        // …and one that IS revertible answers None, so the report stays quiet.
+        // …and ones that ARE revertible answer None, so the report stays quiet.
         assert!(super::unrevertible_reason("brew").is_none());
+        assert!(super::unrevertible_reason("flatpak").is_none());
         assert!(super::unrevertible_reason("not-a-provider").is_none());
     }
 

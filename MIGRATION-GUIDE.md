@@ -319,8 +319,16 @@ instead of reading as permanently missing, and no duplicate user-scope copy is
 added. A declared remote whose url has changed is re-pointed rather than
 reported forever.
 
-> **What is still open.** `install` writes flatpaks to the **system**
-> installation (flatpak's default) while `prune` and `undo` act on the **user**
-> one, so on an image-based host an undo of a flatpak install finds nothing.
-> ROADMAP, "Which flatpak installation temper owns", has the evidence and why
-> neither obvious fix is right. It is stated rather than silently half-fixed.
+**Flatpak apps name their installation explicitly.** `install` converges into the
+**system** installation, and `undo` removes from it — so a revert finds what the
+converge installed. `prune` reaches **both** installations, one batched uninstall
+each, because an undeclared app is an extra wherever it sits; a custom
+installation from `/etc/flatpak/installations.d/` is reported instead, since
+removing from one means being told which. Expect `prune` to list system-scope
+extras it previously walked past — declare them, `[ignore]` them, or let it
+remove them.
+
+> **What is still open.** A declared remote is added `--user` while apps install
+> `--system`, so an app from a vendor remote temper added cannot resolve. ROADMAP,
+> "Bugs", has the evidence and why the fix is a fleet-behaviour decision rather
+> than the mirror of the app-scope one.

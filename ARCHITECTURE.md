@@ -257,7 +257,7 @@ above.
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | `brew` / `cask` / `brew-tap` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `brew-trust` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
-| `flatpak` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
+| `flatpak` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `flatpak-remote` | n/a | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
 | `mas` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `gnome-extensions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
@@ -274,6 +274,17 @@ the exceptions: both take exactly one name, so remotes are converged one at a
 time.) That is not only faster than N process spawns: for anything needing
 root it is the difference between one password prompt and one per item, which is
 what decides whether a converge can be walked away from.
+
+The unit is one call **per item set**, not per run, and flatpak removal shows the
+difference: an undeclared app is an extra in the system installation or the user
+one, and the scope flags do not compose — `flatpak uninstall --user --system` on
+an app present in both refuses as an ambiguous match. So `prune` groups the
+extras by the installation holding each (the `installation` column of one `list`
+call) and issues one batched uninstall per installation. Two calls carrying every
+item in their scope is the principle; two calls per *app* would be the violation.
+An installation temper cannot name — a custom one from
+`/etc/flatpak/installations.d/`, which needs `--installation=NAME` — is reported
+rather than guessed at.
 
 The per-item loops that batching replaced were buying something real, though, and
 it is kept: a batch that fails says nothing about *which* item failed, and one

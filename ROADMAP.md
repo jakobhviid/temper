@@ -26,55 +26,41 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 
 ## Bugs
 
-**temper writes flatpaks to one installation and removes them from the other.**
-The converge runs `flatpak install -y --noninteractive` with **no scope flag**,
-whose default is the **system** installation, while `prune`
-(`providers.rs::prune_extras`) and `undo` (`journal.rs`) pass `--user`. Where the
-two disagree — the ordinary case, since flatpak's own default and every desktop
-storefront's (GNOME Software, KDE Discover, Bazaar) is the system installation —
-`prune` removes nothing temper installed and `undo` reverts nothing. Both report
-success, each truthfully describing an installation the apps are not in.
+**A declared flatpak remote is added where the converge cannot use it.** temper
+adds remotes with `remote-add --user` (`providers::remotes_converge`) while
+installing apps with `install --system`, and a system-scope install cannot
+resolve a user-scope remote. So an app declared from a vendor remote temper itself
+added has nowhere to pull from, while the declaration reads as satisfied —
+`remotes_missing` observes **both** installations, so the remote is found and the
+install still fails.
 
-**The bar is the storefront the desktop already ships: if a user can delete an app
-by clicking in it, `temper prune` has to be able to remove it.** temper owns the
-installation its converge writes to.
+Fixing it is not the one-line mirror of the app-scope fix, which is why it is
+here rather than done:
 
-Privilege is not the obstacle it appears to be. flatpak ships
-`/usr/share/polkit-1/rules.d/org.freedesktop.Flatpak.rules`, which returns `YES` —
-no password at all — for `app-install` / `app-uninstall` / `modify-repo` when
-`subject.active && subject.local && subject.isInGroup("wheel")`. That is why a
-storefront installs and removes system-wide without ever prompting.
+- **Adding is easy; removing is the decision.** `remotes_extras` is correctly
+  gated on the spec declaring at least one remote, and reads only the user
+  installation because `remotes_delete` passes `--user --force`. Point both at the
+  system installation and, on a spec declaring one vendor remote, `flathub`
+  becomes an undeclared extra — so `prune` would offer to force-delete the remote
+  every installed app updates from. `--force` is there precisely because
+  `remote-delete` otherwise refuses a remote with apps installed from it.
+- Three honest options, and it is a fleet-behaviour call: keep removal user-scope
+  and add system-scope remotes only; drop `--force` so flatpak's own refusal is
+  the guard; or gate system-scope removal behind an explicit opt-in, the way
+  `--include-trust` gates fleet-scope taps.
+- Whichever wins, **an app and the remote it comes from must name the same
+  installation** — that is the invariant the app-scope pairing test now holds for
+  install-vs-uninstall, and remotes are outside it.
 
-The fix, and what must ride with it:
-
-- Drop `--user` from the prune and undo uninstalls so both act on the scope the
-  converge wrote to. The flatpak row's `revertible` column becomes provable.
-- Keep the three-valued read; retarget the decline report. The guard that earns
-  its place is declared-vs-undeclared — the one prune already applies to every
-  other provider, through the preview that names each item and the confirm that
-  defaults to no.
-- **`flatpak_user_apps`' rationale does not survive the move.** It reasons by
-  analogy with `gext`, where system scope means *the image owns it*
-  (`/usr/share/gnome-shell/extensions` — removing one means rebuilding the image).
-  A system-scope flatpak is nothing of the kind: it is where the storefront puts an
-  app the user chose. An image's preinstalled set is an OS baseline like any
-  other, which is what `[ignore].flatpak` is for.
-- **Warn on an unattended run**, exactly as a run needing sudo already does. The
-  polkit rule requires an active local session, so over ssh or from cron it falls
-  through to the action's implicit `auth_admin` with nowhere to answer — and
-  `sudo::acquire` pre-authenticates sudo, not polkit, so this sits outside the
-  one-password-per-run guarantee rather than inside it.
-- Two tests pin the current scope and move with it:
-  `prune_actually_removes.rs` asserts the uninstall carries `--user`, and
-  `prune_promises_what_it_does.rs` fakes flatpak per scope.
-
-**The same defect runs the other way for remotes, and is also live.** temper adds
-declared remotes with `remote-add --user` while installing apps into the system
-installation, and a system install cannot resolve a user remote — so an app
-declared from a vendor remote temper itself added has nowhere to pull from, while
-the declaration reads as satisfied, because remotes are observed in **both**
-installations. Whichever installation temper settles on, apps and remotes have to
-name the same one.
+**Root-owned removal is outside the one-password-per-run guarantee.** A
+system-scope `flatpak uninstall` authorizes through **polkit**, and
+`sudo::acquire` pre-authenticates **sudo**. flatpak's shipped rule
+(`/usr/share/polkit-1/rules.d/org.freedesktop.Flatpak.rules`) returns `YES` with
+no password for an active local session in `wheel` — which is why a storefront
+never prompts — but over ssh or from cron `subject.local` is false, it falls
+through to the action's implicit `auth_admin`, and there is nowhere to answer.
+`prune` should say so up front, naming what needs it, exactly as a run needing
+sudo already does; today it finds out when the removal fails.
 
 ## Scope-model gaps (known, ranked, each one a filled ⚠ or ❌ in the feature matrix)
 
@@ -85,7 +71,6 @@ name the same one.
   nor `flatpak remote-add` is journaled. The pattern applies (the missing set is
   known before the converge, uninstall is install backwards); it is unwired.
   `install --packages-only` names them at plan time rather than pretending.
-- **`revertible` on `flatpak`** — the installation bug above.
 - **`dconf`**: `install` is ⚠ because `restore` is excluded from
   `install`/`update` (reloading a snapshot would clobber live tweaks — a
   property of the *recording model*, not of the store); `prune` is ❌ because a

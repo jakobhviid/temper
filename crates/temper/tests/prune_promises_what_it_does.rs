@@ -1,10 +1,11 @@
 //! `prune` must not confirm work its executor is going to decline.
 //!
-//! `install` writes flatpaks to the **system** installation; removal is scoped
-//! to the **user's**, because a system app belongs to the image or to root, needs
-//! polkit, and over ssh hangs. The executor has always known that and refused.
-//! The *plan* did not — so on a machine whose extras were all system-installed,
-//! prune counted them, asked "remove 2 item(s)?", and then removed none.
+//! An undeclared flatpak is an extra wherever it sits, so prune removes from the
+//! system *and* user installations. What it cannot reach is a **custom**
+//! installation (`/etc/flatpak/installations.d/`), which needs
+//! `--installation=NAME` — and an installation it could not read at all. Those
+//! are reported; if the plan counted them anyway, prune would ask "remove 2
+//! item(s)?" and then remove none.
 //!
 //! That is the failure this file pins, and it is the destructive verb's version
 //! of "report effects, not intentions": a confirm that overstates what will
@@ -42,18 +43,19 @@ impl Env {
         e
     }
 
-    /// A `flatpak` where `list --app` reports the declared app plus two extras,
-    /// and `list --app --user` reports only one of them. So one extra is
-    /// user-installed and removable; the other is system-installed and is not.
-    fn flatpak(&self, user_scope: &str) {
+    /// A `flatpak` whose merged `list --app` reports the declared app plus three
+    /// extras, and whose `installation`-column listing places each — that second
+    /// call is what `scopes` answers. The columns arm comes first because both
+    /// invocations contain `list`.
+    fn flatpak(&self, scopes: &str) {
         let bin = self.bin.path().join("flatpak");
         fs::write(
             &bin,
             format!(
                 "#!/bin/sh\n\
                  case \" $* \" in\n\
-                 \x20 *\" --user \"*) {user_scope} ;;\n\
-                 \x20 *\" list \"*) echo org.declared.App; echo org.mine.Removable; echo org.image.Baked ;;\n\
+                 \x20 *\"--columns=application,installation\"*) {scopes} ;;\n\
+                 \x20 *\" list \"*) echo org.declared.App; echo org.sys.Extra; echo org.usr.Extra; echo org.elsewhere.Extra ;;\n\
                  esac\nexit 0\n"
             ),
         )
@@ -109,52 +111,61 @@ fn unremovable(v: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The split: a user-installed extra is work, a system-installed one is not.
+/// The split: system and user extras are both work; one in an installation
+/// temper cannot name is reported instead.
 #[test]
-fn a_system_flatpak_is_reported_but_never_planned() {
+fn both_installations_are_planned_and_a_custom_one_is_reported() {
     let e = Env::new();
-    e.flatpak("echo org.mine.Removable");
+    e.flatpak(
+        "printf 'org.declared.App\\tsystem\\norg.sys.Extra\\tsystem\\n\
+         org.usr.Extra\\tuser\\norg.elsewhere.Extra\\tmy-extra-install\\n'",
+    );
 
     let v = e.plan();
-    assert_eq!(
-        extras(&v),
-        vec!["org.mine.Removable"],
-        "only the user-installed extra may be planned for removal: {v}"
+    let planned = extras(&v);
+    assert!(
+        planned.contains(&"org.sys.Extra".to_string())
+            && planned.contains(&"org.usr.Extra".to_string()),
+        "an undeclared app is an extra in either installation temper can name: {v}"
+    );
+    assert!(
+        !planned.contains(&"org.elsewhere.Extra".to_string()),
+        "a custom installation needs --installation=NAME, so it may not be planned: {v}"
     );
     assert_eq!(
         unremovable(&v),
-        vec!["org.image.Baked"],
-        "the system-installed extra must be reported, not silently dropped: {v}"
+        vec!["org.elsewhere.Extra"],
+        "…and it must be reported rather than silently dropped: {v}"
     );
 
     // …and the human is told, or the only trace of it is in the JSON.
     let text = String::from_utf8(e.temper().args(["prune", "--dry-run"]).output().unwrap().stdout)
         .unwrap();
     assert!(
-        text.contains("org.image.Baked") && text.contains("cannot remove"),
+        text.contains("org.elsewhere.Extra") && text.contains("cannot remove"),
         "the terminal never mentioned the extra prune walked past:\n{text}"
     );
 }
 
-/// The case that made the defect visible: EVERY extra is system-installed, so
-/// the plan is empty. It must not read as a converged machine, and it must not
-/// ask to remove anything.
+/// Every extra is somewhere temper cannot name, so the plan is empty. It must
+/// not read as a converged machine, and it must not ask to remove anything.
 #[test]
-fn a_plan_of_only_system_flatpaks_asks_to_remove_nothing() {
+fn a_plan_of_only_unreachable_flatpaks_asks_to_remove_nothing() {
     let e = Env::new();
-    // No user-scope installs at all — the real shape of the Bazzite desktops.
-    e.flatpak("true");
+    e.flatpak(
+        "printf 'org.sys.Extra\\tother-install\\norg.usr.Extra\\tother-install\\n\
+         org.elsewhere.Extra\\tother-install\\n'",
+    );
 
     let v = e.plan();
     assert!(
         extras(&v).is_empty(),
-        "nothing here is removable by this user, so nothing may be counted: {v}"
+        "nothing here is in an installation temper can name: {v}"
     );
-    let un = unremovable(&v);
-    assert!(
-        un.contains(&"org.image.Baked".to_string())
-            && un.contains(&"org.mine.Removable".to_string()),
-        "both extras must be accounted for rather than vanishing: {v}"
+    assert_eq!(
+        unremovable(&v).len(),
+        3,
+        "every extra must be accounted for rather than vanishing: {v}"
     );
 
     let text = String::from_utf8(e.temper().args(["prune", "--dry-run"]).output().unwrap().stdout)
@@ -165,34 +176,23 @@ fn a_plan_of_only_system_flatpaks_asks_to_remove_nothing() {
     );
 }
 
-/// Three-valued, like every other probe: "could not tell" is not "all yours".
-/// The executor removes nothing when the user scope cannot be enumerated, so the
-/// plan must not promise removals either.
+/// Three-valued, like every other probe: "could not read it" is not "empty".
+/// The executor removes nothing when the installations cannot be enumerated, so
+/// the plan must not promise removals either.
 #[test]
-fn an_unenumerable_user_scope_plans_no_removals() {
+fn an_unreadable_installation_map_plans_no_removals() {
     let e = Env::new();
-    // `list --app --user` fails; the merged listing still answers.
-    let bin = e.bin.path().join("flatpak");
-    fs::write(
-        &bin,
-        "#!/bin/sh\ncase \" $* \" in\n  *\" --user \"*) exit 1 ;;\n\
-         \x20 *\" list \"*) echo org.declared.App; echo org.mine.Removable ;;\nesac\nexit 0\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    // The `installation`-column listing fails; the merged one still answers.
+    e.flatpak("exit 1");
 
     let v = e.plan();
     assert!(
         extras(&v).is_empty(),
         "a scope we could not read must not yield removals: {v}"
     );
-    assert_eq!(
-        unremovable(&v),
-        vec!["org.mine.Removable"],
-        "…and the extra must still be reported, with the reason: {v}"
+    let un = unremovable(&v);
+    assert!(
+        un.contains(&"org.sys.Extra".to_string()) && un.len() == 3,
+        "…and every extra must still be reported, with the reason: {v}"
     );
 }

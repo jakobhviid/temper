@@ -1993,14 +1993,14 @@ pub struct PrunePlan {
     /// Reported, never counted, and deliberately not in `items()` — for the same
     /// reason as `unavailable`: nothing is planned for them.
     ///
-    /// Today this is the system-scope flatpaks. `install` writes flatpaks to the
-    /// system installation, and removal is scoped to the user's (a system app is
-    /// the image's or root's, needs polkit, and hangs over ssh). The executor has
-    /// always known that and declined; the *plan* did not, so a machine whose
-    /// only extras were system flatpaks asked "remove 2 item(s)?" and then
-    /// removed none. A confirm that overstates what a destructive run will do is
-    /// worse than a verbose one — it spends the user's trust on the single prompt
-    /// standing between them and an irreversible removal.
+    /// Today this is the flatpaks in a **custom** installation
+    /// (`/etc/flatpak/installations.d/`), which removal cannot name without being
+    /// told which one, and any whose installation could not be read at all.
+    /// `prune` removes from both the system and user installations, so neither is
+    /// in here. The executor draws the same line, and both must, because a
+    /// confirm that overstates what a destructive run will do is worse than a
+    /// verbose one — it spends the user's trust on the single prompt standing
+    /// between them and an irreversible removal.
     pub unremovable: Vec<(packages::Manager, String, &'static str)>,
 }
 
@@ -2381,30 +2381,53 @@ pub fn run_prune(
     brew_trust: &[String],
 ) -> Result<PrunePlan> {
     let (mut packages, unavailable) = package_extras_observed(home, machine, ignore)?;
-    // Flatpaks this user did not install cannot be removed by this user. Split
+    // A flatpak extra is removable from either installation temper can name —
+    // `prune` issues one batched call per scope. What it cannot name is a custom
+    // installation (`--installation=NAME`), so those are reported instead. Split
     // them out HERE, at plan time, so the count, the confirm and `--json` all
-    // describe the run that will actually happen — the executor has always
-    // declined them, but only after the confirm had already claimed otherwise.
+    // describe the run that will actually happen: the executor draws the same
+    // line, but a confirm that overstates a destructive run has already spent the
+    // trust the prompt exists to earn.
     //
-    // `None` means we could not tell user from system, and the executor removes
-    // nothing in that case; the plan has to agree, or it over-promises again.
+    // `None` means the installations could not be read, and the executor removes
+    // nothing in that case; the plan has to agree, or it over-promises.
     let mut unremovable: Vec<(packages::Manager, String, &'static str)> = Vec::new();
     if packages.iter().any(|(m, _)| *m == packages::Manager::Flatpak) {
-        let user = providers::flatpak_user_apps();
+        let live = providers::flatpak_app_scopes();
         packages.retain(|(m, n)| {
             if *m != packages::Manager::Flatpak {
                 return true;
             }
-            match &user {
-                Some(u) if u.iter().any(|x| x == n) => true,
-                Some(_) => {
-                    unremovable.push((*m, n.clone(), "installed system-wide, not by you"));
-                    false
-                }
-                None => {
-                    unremovable.push((*m, n.clone(), "could not tell user from system installs"));
-                    false
-                }
+            let Some(live) = &live else {
+                unremovable.push((
+                    *m,
+                    n.clone(),
+                    "could not read which installation holds it",
+                ));
+                return false;
+            };
+            let mut holders = live.iter().filter(|(a, _)| a == n).peekable();
+            if holders.peek().is_none() {
+                // Installed according to one listing and in no installation
+                // according to the other. Reported rather than dropped: silently
+                // discarding an extra we cannot place is the same silent skip as
+                // reading "could not ask" as "nothing there" (Principles #6, #12).
+                unremovable.push((
+                    *m,
+                    n.clone(),
+                    "installed, but no installation reports holding it",
+                ));
+                return false;
+            }
+            if holders.any(|(_, inst)| providers::flatpak_scope_flag(inst).is_some()) {
+                true
+            } else {
+                unremovable.push((
+                    *m,
+                    n.clone(),
+                    "in an installation temper does not manage",
+                ));
+                false
             }
         });
     }

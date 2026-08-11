@@ -159,13 +159,10 @@ fn run_uninstall(provider: &str, packages: &[String]) -> bool {
         }
         "flatpak" => {
             let mut c = std::process::Command::new("flatpak");
-            // `--user` is the scope temper may safely remove from: a system app
-            // belongs to the image or to root. It is NOT necessarily the scope
-            // the install wrote to — `flatpak install` defaults to the system
-            // installation — so on an image-based host this revert finds nothing
-            // and says so. Deliberately narrow rather than wrong: see ROADMAP,
-            // "Which flatpak installation temper owns".
-            c.args(["uninstall", "-y", "--noninteractive", "--user"]);
+            // The same scope the converge installs into, spelled out for the same
+            // reason it is there: a revert that names a different installation
+            // from the install finds nothing and reports success.
+            c.args(["uninstall", "-y", "--noninteractive", "--system"]);
             c
         }
         "brew" => {

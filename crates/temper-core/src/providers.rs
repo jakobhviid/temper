@@ -153,9 +153,10 @@ fn probe_argv(m: Manager) -> (&'static str, &'static [&'static str]) {
         Manager::Brew => ("brew", &["list", "--formula"]),
         Manager::Cask => ("brew", &["list", "--cask"]),
         Manager::Tap => ("brew", &["tap"]),
-        // BOTH scopes count as installed, so a declared app installed
-        // system-wide is not reported missing. Which scope it is in only matters
-        // for *removal* — see `flatpak_user_apps`.
+        // BOTH scopes count as installed, so an app is not reported missing
+        // because it sits in the installation temper does not converge into.
+        // Which scope it is in only matters for *removal* — see
+        // `flatpak_system_apps`.
         Manager::Flatpak => ("flatpak", &["list", "--app", "--columns=application"]),
         Manager::Mas => ("mas", &["list"]),
         Manager::Vscode => ("code", &["--list-extensions"]),
@@ -614,7 +615,13 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize
         .collect();
     if !flatpaks.is_empty() && have("flatpak") && !dry_run {
         let mut cmd = Command::new("flatpak");
-        cmd.args(["install", "-y", "--noninteractive"]);
+        // `--system` is spelled out rather than left to flatpak's default, which
+        // is what it happens to be today. Removal names the same scope
+        // explicitly, and the pair only stays a pair if neither side is
+        // inherited: an unflagged install resolves against `--installation`
+        // config and `FLATPAK_USER_DIR`, so "the default" is a property of the
+        // host, not of temper.
+        cmd.args(["install", "-y", "--noninteractive", "--system"]);
         for f in &flatpaks {
             cmd.arg(f);
         }
@@ -986,42 +993,65 @@ pub fn prune_apply(
         }
     }
 
-    let mut flatpaks: Vec<&str> = extras
+    let flatpaks: Vec<&str> = extras
         .iter()
         .filter(|(m, _)| *m == Manager::Flatpak)
         .map(|(_, n)| n.as_str())
         .collect();
-    // Remove only what this user installed. A system flatpak is the image's or
-    // root's, needs polkit, and over SSH that hangs — so it is reported and
-    // left, never silently attempted (Principle #6: no silent skips).
+    // Group the extras by the installation holding each, then issue one batched
+    // call per installation. An app in both yields a removal from both — it is
+    // undeclared, and half-removing it would leave drift the next `drift` reports
+    // and this run claimed to have cleared.
+    //
+    // The plan groups identically, so the confirm cannot overstate what this
+    // does; this is the executor's own last check, not the only one.
+    let mut by_scope: Vec<(&str, Vec<&str>)> =
+        FLATPAK_SCOPES.iter().map(|s| (*s, Vec::new())).collect();
     if !flatpaks.is_empty() {
-        match flatpak_user_apps() {
-            Some(user) => {
-                let (mine, theirs): (Vec<&str>, Vec<&str>) =
-                    flatpaks.iter().partition(|f| user.iter().any(|u| u == *f));
-                if !theirs.is_empty() {
+        match flatpak_app_scopes() {
+            Some(live) => {
+                let mut elsewhere: Vec<String> = Vec::new();
+                for f in &flatpaks {
+                    for (_, inst) in live.iter().filter(|(a, _)| a == f) {
+                        match flatpak_scope_flag(inst) {
+                            Some(flag) => {
+                                if let Some((_, items)) =
+                                    by_scope.iter_mut().find(|(s, _)| *s == flag)
+                                {
+                                    items.push(f);
+                                }
+                            }
+                            // A custom installation needs `--installation=NAME`,
+                            // and picking one for the user is not temper's call.
+                            None => elsewhere.push(format!("{f} ({inst})")),
+                        }
+                    }
+                }
+                if !elsewhere.is_empty() {
                     eprintln!(
-                        "{} {} flatpak(s) are system-wide and were NOT removed: {}",
+                        "{} {} flatpak(s) live in an installation temper does not manage \
+                         and were NOT removed: {}",
                         crate::ui::yellow(crate::ui::g_warn()),
-                        theirs.len(),
-                        theirs.join(", ")
+                        elsewhere.len(),
+                        elsewhere.join(", ")
                     );
                 }
-                flatpaks = mine;
             }
             None => {
                 eprintln!(
-                    "{} could not tell user from system flatpaks — none removed",
+                    "{} could not read which installation holds each flatpak — none removed",
                     crate::ui::yellow(crate::ui::g_warn())
                 );
-                flatpaks.clear();
             }
         }
     }
-    if !flatpaks.is_empty() && have("flatpak") {
+    for (scope, items) in by_scope.iter().filter(|(_, i)| !i.is_empty()) {
+        if !have("flatpak") {
+            break;
+        }
         let mut cmd = Command::new("flatpak");
-        cmd.args(["uninstall", "-y", "--noninteractive", "--user"]);
-        for f in &flatpaks {
+        cmd.args(["uninstall", "-y", "--noninteractive", scope]);
+        for f in items {
             cmd.arg(f);
         }
         // Streamed on purpose (unlike the converge children): `prune` is manual,
@@ -1033,9 +1063,9 @@ pub fn prune_apply(
         }
         if !cmd.status().map(|s| s.success()).unwrap_or(false) {
             eprintln!(
-                "{} flatpak uninstall failed — {} extra(s) may remain",
+                "{} flatpak uninstall {scope} failed — {} extra(s) may remain",
                 crate::ui::yellow(crate::ui::g_warn()),
-                flatpaks.len()
+                items.len()
             );
         }
     }
@@ -1492,6 +1522,12 @@ pub fn gext_enable_converge(drift: &[(String, bool)], dry_run: bool) -> Result<u
 /// Extensions installed in the **user** scope (`~/.local/share/...`). System
 /// ones are excluded on purpose: those ship with the image, and drift reports
 /// image-baked items status-only rather than as something you failed to declare.
+///
+/// This is where extensions genuinely differ from flatpaks, which `prune` removes
+/// from both installations. A system extension lives in `/usr/share/gnome-shell/
+/// extensions`, part of the ostree image — removing one means rebuilding the
+/// image, not running a command. A system *flatpak* is just where the desktop's
+/// storefront puts an app the user chose, so it is ordinary state.
 fn gext_installed_user() -> Option<Vec<String>> {
     gext_list(&["list", "--user"])
 }
@@ -1688,24 +1724,28 @@ pub fn effective_rpm(home: &Path, machine: &Machine) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// Flatpak apps installed in the **user** scope, three-valued.
+/// Every installed flatpak app paired with the **installation** holding it,
+/// three-valued.
 ///
-/// `flatpak list --app` merges user and system installs, which is right for
-/// "is it here?" and wrong for "may I remove it?". A system install belongs to
-/// the image or to root: on Bazzite and Silverblue the image preinstalls a set,
-/// and uninstalling one needs polkit — which over SSH prompts into a void or
-/// fails opaquely.
+/// `flatpak list --app` merges installations, which is right for "is it here?"
+/// and silent about "where would I remove it from?". The `installation` column
+/// answers the second in the same call, so one invocation serves both — and an
+/// app present in *two* installations yields two rows, which is the case that
+/// makes subtracting one list from another wrong.
 ///
-/// This is the same distinction `gext` draws deliberately and for the same
-/// reason: image-baked items are not something you failed to declare. `None`
-/// means the scope could not be enumerated, which is never "nothing is
-/// user-installed".
-pub fn flatpak_user_apps() -> Option<Vec<String>> {
+/// The value is flatpak's own name for the installation: `system`, `user`, or
+/// the name of a custom one from `/etc/flatpak/installations.d/`. Only the first
+/// two are removable — see [`FLATPAK_SCOPES`] — because a custom installation
+/// needs `--installation=NAME`, and guessing which is not temper's call.
+///
+/// `None` means the set could not be enumerated, which is never "nothing is
+/// installed" (Principle #12).
+pub fn flatpak_app_scopes() -> Option<Vec<(String, String)>> {
     if !have("flatpak") {
         return None;
     }
     let out = Command::new("flatpak")
-        .args(["list", "--app", "--user", "--columns=application"])
+        .args(["list", "--app", "--columns=application,installation"])
         .output()
         .ok()?;
     if !out.status.success() {
@@ -1714,10 +1754,41 @@ pub fn flatpak_user_apps() -> Option<Vec<String>> {
     Some(
         String::from_utf8_lossy(&out.stdout)
             .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
+            .filter_map(|l| {
+                let (app, inst) = l.split_once('\t')?;
+                let (app, inst) = (app.trim(), inst.trim());
+                (!app.is_empty() && !inst.is_empty())
+                    .then(|| (app.to_string(), inst.to_string()))
+            })
             .collect(),
     )
+}
+
+/// The installations temper may remove from, and the flag that names each.
+///
+/// Both, because an extra is an extra wherever it sits: temper *converges* into
+/// one installation, but "this should not be here" is a different question from
+/// "where do I put things". Removal is one batched call **per installation** —
+/// `flatpak uninstall` refuses a combined `--user --system` when an app is in
+/// both ("Multiple installed refs match … unable to proceed in non-interactive
+/// mode"), so the scope flags do not compose the way `list`'s do. Two calls, each
+/// batched over every item in its scope, is still one call per installation
+/// rather than one per item (Principle #4).
+pub const FLATPAK_SCOPES: [&str; 2] = ["--system", "--user"];
+
+/// The flag that removes from the installation flatpak calls `inst`, or `None`
+/// where temper has no way to name it.
+///
+/// The `None` arm is the honest half: `/etc/flatpak/installations.d/` can define
+/// any number of installations, and reaching one needs `--installation=NAME`.
+/// Mapping an unrecognised name onto `--system` would remove from an
+/// installation the user did not point at.
+pub fn flatpak_scope_flag(inst: &str) -> Option<&'static str> {
+    match inst {
+        "system" => Some("--system"),
+        "user" => Some("--user"),
+        _ => None,
+    }
 }
 
 // --- flatpak remotes ------------------------------------------------------
@@ -1763,17 +1834,27 @@ pub fn effective_remotes(home: &Path, machine: &Machine) -> Result<Vec<(String, 
     Ok(out)
 }
 
-/// Remotes configured in the **user** scope, three-valued.
+/// Every configured remote, **both installations**, three-valued.
 ///
-/// User scope for the same reason `flatpak_user_apps` is: a system remote
-/// belongs to the image, and removing one needs polkit. `None` is "could not
-/// ask", never "no remotes".
+/// This is the observe side of a *declaration*: "does the machine have the
+/// remote I declared?" is answered by either installation having it, which is why
+/// it carries no scope flag. Reading only `--user` made a remote the image
+/// provides system-wide permanently `missing`, and added a duplicate user copy on
+/// every converge. `None` is "could not ask", never "no remotes".
 pub fn flatpak_remotes_installed() -> Option<Vec<(String, String)>> {
     remotes_in_scope(&[])
 }
 
-/// The remotes temper may **remove** — the user installation only. A system
-/// remote belongs to the image or to root, exactly as a system app does.
+/// The remotes temper may **remove** — the user installation only, because that
+/// is the only one `remotes_delete` writes to.
+///
+/// Deliberately narrower than the app path, which removes from both
+/// installations: deleting a *system* remote is not the app case scaled up.
+/// `remote-delete` is passed `--force`, which overrides flatpak's own refusal to
+/// drop a remote that installed apps still update from — so on a spec declaring
+/// one vendor remote, an undeclared `flathub` would become an extra prune offers
+/// to force-delete out from under everything installed from it. That is a fleet
+/// decision, recorded in ROADMAP under "Bugs", not a symmetry to complete here.
 pub fn flatpak_user_remotes() -> Option<Vec<(String, String)>> {
     remotes_in_scope(&["--user"])
 }

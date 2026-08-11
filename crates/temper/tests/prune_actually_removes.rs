@@ -461,3 +461,99 @@ fn a_run_that_deletes_and_reboots_still_says_so() {
     );
     assert!(doomed.exists(), "declining the confirm must delete nothing");
 }
+
+/// The converge must name its flatpak installation **explicitly**.
+///
+/// An unflagged invocation resolves against `--installation` config and
+/// `FLATPAK_USER_DIR`, so "the default" is the host's answer rather than
+/// temper's. Removal names its scope explicitly for the same reason, and this is
+/// the pairing no single-direction test can see: a converge writing to one
+/// installation while `prune`/`undo` removed from another passed the whole suite
+/// while removing nothing on a real machine.
+#[test]
+fn flatpak_install_names_its_installation() {
+    let e = Env::new();
+    e.stub("flatpak", "");
+    e.spec(&format!(
+        "[[machine]]\nname = \"t\"\nos = \"{}\"\n\
+         packages = [\"flatpak \\\"org.declared.App\\\"\"]\n",
+        os()
+    ));
+
+    e.temper()
+        .args(["install", "--packages-only"])
+        .output()
+        .unwrap();
+
+    let called = e.log("flatpak");
+    let install = called
+        .lines()
+        .find(|l| l.starts_with("install"))
+        .unwrap_or_else(|| panic!("flatpak install never ran; calls were:\n{called}"));
+    assert!(
+        install.contains("--system"),
+        "install must name its installation explicitly: {install:?}"
+    );
+}
+
+/// Removal spans both installations, as **one batched call each** — not one call
+/// per app, and not one combined call.
+///
+/// `flatpak uninstall --user --system <app>` refuses when an app is in both
+/// ("Multiple installed refs match … unable to proceed in non-interactive
+/// mode"), so the scope flags do not compose the way `list`'s do. Two calls, each
+/// carrying every item in its scope, is the shape that satisfies both facts —
+/// and Principle #4, which is about items per call, not calls per run.
+#[test]
+fn prune_removes_from_both_installations_one_batched_call_each() {
+    let e = Env::new();
+    // Two extras in the system installation, one in the user installation, and
+    // the declared app which must survive both calls.
+    e.stub(
+        "flatpak",
+        "case \" $* \" in \
+         *\"--columns=application,installation\"*) \
+         printf 'org.declared.App\\tsystem\\norg.a.Stray\\tsystem\\n\
+org.b.Stray\\tsystem\\norg.c.Stray\\tuser\\n' ;; \
+         *\" list \"*) echo org.declared.App; echo org.a.Stray; echo org.b.Stray; echo org.c.Stray ;; \
+         esac",
+    );
+    e.spec(&format!(
+        "[[machine]]\nname = \"t\"\nos = \"{}\"\n\
+         packages = [\"flatpak \\\"org.declared.App\\\"\"]\n",
+        os()
+    ));
+
+    e.temper().args(["prune", "--yes"]).output().unwrap();
+
+    let called = e.log("flatpak");
+    let uninstalls: Vec<&str> = called
+        .lines()
+        .filter(|l| l.starts_with("uninstall"))
+        .collect();
+    assert_eq!(
+        uninstalls.len(),
+        2,
+        "one batched call per installation — no more, no fewer: {uninstalls:?}"
+    );
+    let system = uninstalls
+        .iter()
+        .find(|l| l.contains("--system"))
+        .unwrap_or_else(|| panic!("nothing removed from the system installation: {uninstalls:?}"));
+    let user = uninstalls
+        .iter()
+        .find(|l| l.contains("--user"))
+        .unwrap_or_else(|| panic!("nothing removed from the user installation: {uninstalls:?}"));
+    assert!(
+        system.contains("org.a.Stray") && system.contains("org.b.Stray"),
+        "both system extras belong in ONE call, not one call each: {system:?}"
+    );
+    assert!(
+        user.contains("org.c.Stray"),
+        "the user-installation extra must be removed too: {user:?}"
+    );
+    assert!(
+        !called.contains("org.declared.App\n") || !system.contains("org.declared.App"),
+        "the declared app must survive: {called:?}"
+    );
+}
