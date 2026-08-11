@@ -295,6 +295,14 @@ Reconcile writes to the machine's own list, never a bundle's — a bundle's
 change every machine off one machine's state. An extension a *bundle* declares
 therefore stays a hand edit in either direction, and drift names the file.
 
+**A package manager that could not answer** reports `package-unavailable` and is
+skipped in both directions. This is not drift and does not count as out of sync:
+the tool is installed but failed — `mas list` when you are not signed into the
+App Store, `brew list` broken by a bad tap, `code` over ssh — so temper does not
+know what is there. Fix the tool, or ignore the line; what temper will **not** do
+is read the silence as "nothing is installed", because `reconcile --csw` would
+then drop every declaration for that manager from your spec.
+
 **A failed `[[assert]]`** has no verb at all: it reports a condition you resolve
 yourself — a group membership clears by logging out. `drift` says so instead of
 naming a command that cannot work.
@@ -447,6 +455,13 @@ key, so it is one ask, shown as a member-level `+2 −1` delta rather than two
 walls of GVariant. `snapshot-dconf` is the wholesale sibling when you'd rather
 diff-then-trim in git than answer prompts.
 
+A snapshot rooted at `/org/gnome/shell/` carries `enabled-extensions`, which is
+also what an extension's `enabled` field asserts. **The declaration wins:**
+`restore-dconf` re-asserts the declared uuids once the load is done, so the
+result does not depend on whether you ran it before or after `install`. Only the
+declared ones — whatever the snapshot restored for the image-baked extensions
+stands.
+
 `restore-dconf` is confirm-gated and never part of `update` (so a routine `update`
 never clobbers live tweaks) — it's a deliberate, on-demand reset. It is
 **journaled**: `temper undo` resets the subtree and reloads your prior state,
@@ -498,6 +513,11 @@ the thing you need before deciding what to do next. `--dry-run` lists the same
 items as `· would revert <path>` and touches nothing. `install --dry-run` names
 the steps behind its count the same way (`· would apply zsh  copy ~/.zshrc`),
 and lists any change `undo` would not be able to revert.
+
+**`prune` reports what it did, not what it planned.** A removal that fails — a
+root-owned file it could not escalate for, a flatpak installed system-wide — is
+listed as still present rather than counted as done, and `--json` carries the
+same list under `failed`. So "3 item(s) removed" means three fewer things exist.
 
 ## 8. Retire something across the fleet
 
