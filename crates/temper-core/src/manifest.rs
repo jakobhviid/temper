@@ -918,6 +918,34 @@ fn reject_bad_dconf_paths(ft: &TemperToml) -> Result<()> {
                 );
             }
         }
+        no_shared_keyspace(&m.gnome_extensions, &format!("machine '{}'", m.name))?;
+    }
+    Ok(())
+}
+
+/// An extension may only claim its own subtree.
+///
+/// The probe enforces this for free — it reads a path out of the gschema and
+/// ignores anything outside `/org/gnome/shell/extensions/`, so an extension that
+/// also ships a schema for `/org/gnome/desktop/interface/` cannot claim it. A
+/// hand-written `settings_path` bypassed that: it would have let one extension
+/// capture, restore and own keyspace the whole desktop shares, and two
+/// extensions declaring the same one would fight over every key in it.
+pub(crate) fn no_shared_keyspace(exts: &[GnomeExtension], whose: &str) -> Result<()> {
+    const ROOT: &str = "/org/gnome/shell/extensions/";
+    for e in exts {
+        let Some(p) = e.declared_dconf_path() else {
+            continue;
+        };
+        if !p.starts_with(ROOT) || p.trim_end_matches('/').len() <= ROOT.len() {
+            anyhow::bail!(
+                "{whose} declares `settings_path = \"{p}\"` for extension '{}' — \
+                 an extension owns only its own subtree beneath {ROOT}. Anything \
+                 wider is keyspace the desktop shares, and one extension may not \
+                 claim it.",
+                e.uuid()
+            );
+        }
     }
     Ok(())
 }
@@ -1031,6 +1059,7 @@ pub fn load_bundle(home: &Path, name: &str) -> Result<Bundle> {
         Ok(b) => {
             let whose = format!("bundle '{name}'");
             no_duplicate_uuids(&b.gnome_extensions, &whose)?;
+            no_shared_keyspace(&b.gnome_extensions, &whose)?;
             validate_retire(&b.retire, &b.retire_packages, &whose)?;
             Ok(b)
         }
@@ -1925,5 +1954,46 @@ gnome_extensions = [
             "temper_version = \"{VERSION}\"\n[[machine]]\nname = \"m\"\nos = \"linux\"\n"
         ));
         assert!(load_fleet(dir.path()).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod settings_path_tests {
+    use super::*;
+
+    /// The probe cannot claim shared keyspace — it only reads paths beneath the
+    /// extensions root. A hand-written `settings_path` must be held to the same
+    /// rule, or the escape hatch becomes the way around the invariant.
+    #[test]
+    fn an_extension_may_not_claim_keyspace_it_does_not_own() {
+        for bad in [
+            "/org/gnome/desktop/interface/",
+            "/org/gnome/shell/",
+            // The extensions root itself: owning it means owning every other
+            // extension's settings.
+            "/org/gnome/shell/extensions/",
+            "/org/gnome/shell/extensions",
+        ] {
+            let b: Bundle = toml::from_str(&format!(
+                "gnome_extensions = [{{ uuid = \"a@x\", settings = \"s.dconf\", \
+                 settings_path = \"{bad}\" }}]\n"
+            ))
+            .unwrap();
+            assert!(
+                no_shared_keyspace(&b.gnome_extensions, "bundle 'a'").is_err(),
+                "`{bad}` is not one extension's to own"
+            );
+        }
+
+        let b: Bundle = toml::from_str(
+            "gnome_extensions = [{ uuid = \"a@x\", settings = \"s.dconf\", \
+             settings_path = \"/org/gnome/shell/extensions/a/\" }]\n",
+        )
+        .unwrap();
+        assert!(no_shared_keyspace(&b.gnome_extensions, "bundle 'a'").is_ok());
+
+        // Declaring no path at all is the ordinary case — the probe answers it.
+        let b: Bundle = toml::from_str("gnome_extensions = [\"a@x\"]\n").unwrap();
+        assert!(no_shared_keyspace(&b.gnome_extensions, "bundle 'a'").is_ok());
     }
 }

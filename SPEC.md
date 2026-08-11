@@ -158,6 +158,12 @@ gnome_extensions = [                        # optional; for THIS machine, unione
                                             #   without it and with nothing to read,
                                             #   temper warns and leaves the file
                                             #   alone rather than emptying it.
+                                            #   It must name a subtree BENEATH
+                                            #   /org/gnome/shell/extensions/ —
+                                            #   the root itself, or anything
+                                            #   wider, is keyspace the desktop
+                                            #   shares and no one extension's to
+                                            #   own. Rejected at load.
 brewfile = "brewfiles/chronos"   # optional; a Brewfile whose lines join the set
 retire_packages = ["brew \"foo\""]  # optional; packages that must NOT be installed.
                             #   Reported as drift every run and removed by
