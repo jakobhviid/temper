@@ -435,6 +435,11 @@ Three consequences follow, and they are the reason for the split:
   round trip. Ownership is matched **exactly** — a `setkey` on `a/b` does not
   take `a/bc` with it — because ownership is not a pattern.
 
+  An **`append`** step is the exception, and for the same reason: it declares a
+  *member* of a list, not the list. Its drift is already subset-shaped, and the
+  other members are the user's — the snapshot is the only thing recording them.
+  So the key stays captured, and one member's owner does not become the key's.
+
 **Two snapshots must not cover one key.** An extension's `settings` subtree sits
 *inside* `/org/gnome/shell/extensions/<uuid>/`, so a `[[machine.dconf]]` still
 rooted at `/org/gnome/shell/` covers it too — and then both files capture the

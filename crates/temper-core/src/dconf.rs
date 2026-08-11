@@ -412,6 +412,16 @@ pub fn setkey_owned(home: &Path, machine: &Machine, snap: &DconfSnapshot) -> Res
         if sk.backend != "dconf" {
             continue;
         }
+        // An `append` setkey declares a MEMBER of a list, not the list. Its
+        // drift is already subset-shaped ("the array contains the declared
+        // member"), so the key itself still belongs to the snapshot — that is
+        // the only thing recording the members temper did not put there.
+        // Treating it as owned dropped the whole key from the capture, so a
+        // hand-added keybinding was never recorded and a rebuilt machine lost
+        // it. Ownership of one member is not ownership of the key.
+        if sk.append {
+            continue;
+        }
         // Only keys inside THIS snapshot's subtree, expressed the way the dump
         // does: relative to the snapshot root.
         if let Some(rel) = sk.key.strip_prefix(&snap.path) {
@@ -645,6 +655,60 @@ pub fn restore(home: &Path, machine: &Machine, dry_run: bool) -> Result<Vec<Path
         journal.commit()?;
     }
     Ok(loaded)
+}
+
+#[cfg(test)]
+mod append_ownership_tests {
+    use crate::manifest::DconfSnapshot;
+
+    /// An `append` setkey owns a **member**, not the key.
+    ///
+    /// `setkey_owned` excludes owned keys from a capture, so the snapshot cannot
+    /// become a second owner of something a bundle declares. But an `append`
+    /// step declares only that the array *contains* its member — the rest are
+    /// the user's, and the snapshot is the only thing recording them. Dropping
+    /// the whole key meant a hand-added keybinding was never captured, so a
+    /// rebuilt machine lost it while temper reported success.
+    #[test]
+    fn an_append_setkey_does_not_own_the_whole_key() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let h = dir.path();
+        std::fs::create_dir_all(h.join("apps")).unwrap();
+        let os = if cfg!(target_os = "macos") { "mac" } else { "linux" };
+        std::fs::write(
+            h.join("temper.toml"),
+            format!("[[machine]]\nname = \"t\"\nos = \"{os}\"\napps = [\"a\"]\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            h.join("apps/a.toml"),
+            "[[step]]\n\
+             setkey = { backend = \"dconf\", key = \"/org/gnome/x/owned\", value = \"v\" }\n\n\
+             [[step]]\n\
+             setkey = { backend = \"dconf\", key = \"/org/gnome/x/list\", value = \"m\", append = true }\n",
+        )
+        .unwrap();
+
+        let ft = crate::manifest::load_fleet(h).unwrap();
+        let m = crate::machine::resolve(&ft, Some("t")).unwrap();
+        let snap = DconfSnapshot {
+            path: "/org/gnome/x/".into(),
+            file: "assets/x.dconf".into(),
+            strip: Vec::new(),
+            label: None,
+        };
+
+        let owned = super::setkey_owned(h, &m, &snap).unwrap();
+        assert!(
+            owned.contains(&"owned".to_string()),
+            "a plain setkey owns its key outright: {owned:?}"
+        );
+        assert!(
+            !owned.contains(&"list".to_string()),
+            "an `append` setkey must NOT take the whole key with it — the other \
+             members are the user's and nothing else records them: {owned:?}"
+        );
+    }
 }
 
 #[cfg(test)]
