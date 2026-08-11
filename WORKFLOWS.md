@@ -256,7 +256,12 @@ of the drift. You pick a direction and run what it prints:
   - converge machine→spec: `temper prune` (uninstall them, asks first);
   - absorb spec←machine: `temper reconcile` (interactively add/drop).
     or `temper reconcile --csw` to take the machine's state for every item
-    at once (see §5).
+    at once (see §5);
+  - or neither: `[ignore].<manager>` (fleet) / `[machine.ignore]` (this box).
+    An ignored package is not just unreported — it is **protected**, and `prune`
+    leaves it alone. That matters because `brew bundle cleanup` decides for
+    itself what to remove, so temper has to name the ignored packages in the
+    file it hands over rather than merely filtering them out of the report.
 - **GNOME extensions installed but not declared:** three answers, like packages —
 `temper reconcile` declares it for **this machine** (its own `gnome_extensions`
 list), `temper prune` uninstalls it (asks first), or
@@ -305,6 +310,12 @@ clear is both wrong and unactionable.
   a tap trusted on the machine but not declared → `temper reconcile` absorbs it
   into `[brew].trust` (or `[ignore].tap`), or `temper prune` `brew untrust`s it
   (the machine→spec mirror). `[ignore].tap` suppresses the extra either way.
+
+  All of that needs the spec to declare **at least one** tap somewhere. A folder
+  that never mentions taps has no opinion about them, so drift reports none and
+  `prune` untrusts none — the same opt-in a manager gets by having none of its
+  packages declared. Without it, `prune` on a tap-silent spec untrusts every tap
+  the machine has, including the ones its own formulae come from.
 
 This four-branch package fork is the heart of it (RIS emitted it at the moment of
 detection; temper prints it under Next steps, and in `--json` as `remediation`).
