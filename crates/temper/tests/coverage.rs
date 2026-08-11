@@ -260,7 +260,6 @@ fn every_folder_writing_verb_fires_the_repo_hook() {
         "cmd_configure",
         "cmd_undo",
         "cmd_snapshot",
-        "cmd_eq_import",
     ] {
         // A completeness test whose failure mode is "check fewer things" is the
         // defect this file exists to catch. The comment here used to say the

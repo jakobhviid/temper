@@ -81,14 +81,10 @@ trust = ["ublue-os/tap"]   # third-party taps to `brew trust` before converge/up
                             #   you never declare is never probed. A spec silent about
                             #   taps is not a spec asking for every tap to be untrusted.
 
-[eq_import]                 # optional; `temper eq-import` fetches speaker profiles
-repo = "https://github.com/…/pipewire-speaker-profiles"
-dest = "assets/speaker-eq"  # default; each <x>.calibrated.conf lands as <x>.conf
-
 [git]                       # optional; convenience for a GIT-backed home (no-op
                             #   on a non-git folder). Set via `temper configure set git.*`.
 remind      = true          # hint whenever any command finds the folder dirty (unless auto_commit)
-auto_commit = false         # commit right after reconcile/dump/snapshot/eq-import (auto message)
+auto_commit = false         # commit right after reconcile/dump/snapshot (auto message)
 auto_push   = false         # …and push
 auto_pull   = true          # `git pull` before a run; warn (never abort) if it can't
 auto_rebase = false         # when auto_pull runs, `--rebase` instead of `--ff-only`

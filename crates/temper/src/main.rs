@@ -251,16 +251,10 @@ enum Cmd {
         /// The temper-home to use. Omit to auto-discover and pick.
         dir: Option<String>,
     },
-    /// Fetch calibrated speaker profiles into the folder.
-    ///
-    /// Pull them from the configured repo (`[eq_import]` in temper.toml), ready
-    /// for the `speaker-eq` step. Folder-authoring — it writes into your config
-    /// folder, not a machine.
-    EqImport,
     /// Commit (and push) spec changes to the git-backed home.
     ///
     /// `git add -A && commit && push` in your temper-home, so the folder doesn't
-    /// drift after an `init`/`reconcile`/`snapshot`/`eq-import` or a hand edit. The commit
+    /// drift after an `init`/`reconcile`/`snapshot` or a hand edit. The commit
     /// message is generated from what changed unless you pass `-m`. Pulls
     /// `--ff-only` before pushing. A no-op if the home isn't a git repo.
     Save {
@@ -432,7 +426,6 @@ fn run(cli: Cli) -> Result<()> {
             yes,
             dry_run,
         }) => cmd_restore(machine, yes, dry_run, json)?,
-        Some(Cmd::EqImport) => cmd_eq_import(json)?,
         Some(Cmd::Save { message, no_push }) => cmd_save(message, no_push, json)?,
         Some(Cmd::Refresh { rebase }) => cmd_refresh(rebase, json)?,
         Some(Cmd::Status) => cmd_status(json)?,
@@ -1030,41 +1023,6 @@ fn save_and_report(target: &std::path::Path, json: bool) -> Result<()> {
     } else {
         println!("{} temper home set to {}", ui::green(ui::g_ok()), target.display());
     }
-    Ok(())
-}
-
-/// Folder-authoring: fetch calibrated speaker profiles into the folder.
-fn cmd_eq_import(json: bool) -> Result<()> {
-    let home = find_home_pulling()?;
-    let ft = load_fleet(&home)?;
-    let cfg = ft.eq_import.ok_or_else(|| {
-        anyhow::anyhow!(
-            "no [eq_import] in temper.toml — add `repo = \"...\"` (and optional `dest`) to import"
-        )
-    })?;
-    let written = temper_core::eq_import::run(&home, &cfg)?;
-    let paths: Vec<String> = written.iter().map(|p| p.display().to_string()).collect();
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({ "repo": cfg.repo, "imported": paths })
-        );
-    } else {
-        for p in &paths {
-            println!("{} imported {}", ui::green(ui::g_ok()), p);
-        }
-        println!(
-            "eq-import: {} profile(s) from {} → review, then run the `speaker-eq` step.",
-            paths.len(),
-            cfg.repo
-        );
-    }
-    let gc = manifest::effective_git(&ft.git, &None);
-    after_repo_change(
-        &home,
-        &gc,
-        &format!("eq-import: {} profile(s)", paths.len()),
-    );
     Ok(())
 }
 

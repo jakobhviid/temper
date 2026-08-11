@@ -6,8 +6,8 @@
 //! change before that was true.
 //!
 //! The struct list was hand-written and named 11 of the 19 structs that derive
-//! `Deserialize` — so `[brew].trust`, `[update].mode`, `[ui].icons`,
-//! `[eq_import]` and every nested assert shape (`contains_line`, `mode`,
+//! `Deserialize` — so `[brew].trust`, `[update].mode`, `[ui].icons`
+//! and every nested assert shape (`contains_line`, `mode`,
 //! `group`, `json_semantic`) were outside the guarantee. The list is derived
 //! from the source now, so a new struct joins it by existing.
 //!
@@ -136,8 +136,13 @@ fn every_parsed_field_is_documented_in_spec() {
     let spec = include_str!("../../../SPEC.md");
 
     let structs = deserializable_structs(src);
+    // A floor, not a count: it exists to catch the scrape silently matching
+    // nothing, which would make the whole test vacuous. Lower it only when a
+    // struct is deliberately deleted — never to make a red run green, because
+    // "the scrape stopped seeing them" and "there are fewer" look identical here
+    // and only one of them is fine.
     assert!(
-        structs.len() >= 19,
+        structs.len() >= 18,
         "the scrape found only {} deserializable structs — it has stopped seeing \
          them: {structs:?}",
         structs.len()

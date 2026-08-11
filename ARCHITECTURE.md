@@ -655,7 +655,7 @@ primitive, so the modifier is written only for exceptions.
 | `always` | install + update | default for `copy`/`template`/`setkey`; re-applied and drift-tracked |
 | `install` | install only | default for `seed`, `profile`, one-time `exec`; update skips (reloading whole-desktop dconf clobbers live tweaks, and re-opening System Settings for a declined `profile` would nag every run) |
 | `ensure` | install + update, **install-if-missing only** | the corrected "update installs a little": backfill `grove`/`amdl`/`pwtune` and the zsh tool set if absent, without upgrade-churn |
-| `manual` | never automated | only when explicitly invoked (`restore-dconf`, `speaker-eq`, `eq-import`) |
+| `manual` | never automated | only when explicitly invoked (`restore-dconf`, `speaker-eq`) |
 
 Enforcement steps that today re-run every `update` (git identity via
 `git config`, default shell via `chsh`) are `exec` with `run = always` + a drift
@@ -718,7 +718,7 @@ The recommended shape (app-first recipes, real files under `assets/`):
 
 ```
 <your-folder>/           a git repo, a synced cloud folder, or a USB copy
-  temper.toml            machines (name/os/role) + apps + loose pkgs + [vars] + [ignore] + [brew] + [eq_import]
+  temper.toml            machines (name/os/role) + apps + loose pkgs + [vars] + [ignore] + [brew] 
   apps/                  one file per app — the composable, code-free recipes
     shell.toml           copy/block/setkey/exec steps, os/role/when-gated
     ghostty.toml

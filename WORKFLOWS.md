@@ -624,20 +624,6 @@ shared spec and committing — after which every machine's `prune` enacts it. Th
 is why `reconcile --csw` refuses to absorb them from one box, and reports what it
 skipped instead of quietly widening its remit.
 
-## 11. Pull calibrated speaker profiles
-
-**When:** the upstream speaker-EQ repo has new profiles (needs `[eq_import]`).
-
-```sh
-temper eq-import             # clone the repo, land <x>.calibrated.conf → <x>.conf
-```
-
-Then apply via the `speaker-eq` step (which is `manual` — run it explicitly).
-This is folder-authoring: it writes *into* the folder, then you review + commit.
-*(RIS: `just eq-import`.)*
-
----
-
 ## Save spec changes to git (so the folder doesn't drift)
 
 > **Used to run `temper backup`?** It was split: its dconf half is now
@@ -645,7 +631,7 @@ This is folder-authoring: it writes *into* the folder, then you review + commit.
 > or `--csw` for all of them (§5). A machine that isn't in the folder at all
 > starts with `temper init` (§0). See the README's "If you used `temper backup`".
 
-`init`, `reconcile`, `snapshot-dconf`, and `eq-import` — and any hand edit — change the
+`init`, `reconcile` and `snapshot-dconf` — and any hand edit — change the
 temper-home *folder*, not a machine. If that folder is a git repo, temper helps
 you persist those changes so it doesn't silently drift:
 

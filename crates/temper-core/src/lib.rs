@@ -26,7 +26,6 @@ pub mod interface;
 pub mod ledger; // whole-desktop dconf snapshots: capture (filtered) + drift + restore
 pub mod discovery; // find the temper-home folder across any delivery backend
 pub mod drift; // assertions, exec-hooks, status-only reporting
-pub mod eq_import; // folder-authoring: pull calibrated speaker profiles into the folder
 pub mod git; // optional convenience: persist temper's own writes to a git home
 pub mod journal; // content-addressed, after-hash-guarded undo (amdl model)
 mod jsonc; // comment-preserving JSONC edits for the setkey(json) backend
