@@ -280,6 +280,11 @@ isolates the damage and names it (Principle #6). Only what actually lands is
 journaled, so a failed install never leaves an undo entry for something that was
 never there.
 
+**`undo` is the same shape backwards.** Its uninstall batches and then isolates
+too, and reports what it removed rather than what it attempted — a formula that
+has become another package's live dependency makes Homebrew refuse the whole
+invocation, and without the fallback that one item strands the entire revert.
+
 **Install and uninstall are a pair, in every provider.** `brew install`/
 `uninstall`, `flatpak install`/`uninstall`, `gext install`/`uninstall`,
 `rpm-ostree install`/`uninstall` — column 5 is just column 4 backwards, and a

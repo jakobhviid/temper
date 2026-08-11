@@ -116,10 +116,34 @@ enum Entry {
 /// Un-install packages this run installed. Best-effort per provider: one that
 /// fails must not strand the rest of the revert, and a provider whose tool is
 /// gone reports rather than errors.
-fn uninstall_packages(provider: &str, packages: &[String]) -> bool {
+fn uninstall_packages(provider: &str, packages: &[String]) -> usize {
     if packages.is_empty() {
-        return true;
+        return 0;
     }
+    // Batch, then isolate — the same shape the install side uses. One
+    // invocation for the usual case; on failure, one per item, because a batch
+    // that fails says nothing about WHICH item failed. Without it, a single
+    // formula that is now some other package's live dependency made Homebrew
+    // refuse the whole invocation and the entire set reported
+    // `could not un-install` (Principle #6: contain the damage and name it).
+    if run_uninstall(provider, packages) {
+        return packages.len();
+    }
+    let mut removed = 0;
+    for p in packages {
+        if run_uninstall(provider, std::slice::from_ref(p)) {
+            removed += 1;
+        } else {
+            eprintln!(
+                "{} could not un-install {p} ({provider})",
+                crate::ui::yellow(crate::ui::g_warn())
+            );
+        }
+    }
+    removed
+}
+
+fn run_uninstall(provider: &str, packages: &[String]) -> bool {
     let mut cmd = match provider {
         "gnome-extensions" => {
             let mut c = std::process::Command::new("gext");
@@ -459,14 +483,15 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
                 ));
                 continue;
             }
-            if uninstall_packages(provider, packages) {
-                reverted += packages.len();
-                cl.done(&format!("{provider}: {} package(s)", packages.len()));
+            let removed = uninstall_packages(provider, packages);
+            reverted += removed;
+            skipped += packages.len() - removed;
+            if removed == packages.len() {
+                cl.done(&format!("{provider}: {removed} package(s)"));
             } else {
-                skipped += packages.len();
                 cl.skipped(
-                    &format!("{provider}: {} package(s)", packages.len()),
-                    "could not un-install",
+                    &format!("{provider}: {} of {} package(s)", removed, packages.len()),
+                    "the rest could not be un-installed",
                 );
             }
             continue;
@@ -624,12 +649,24 @@ mod tests {
         assert!(matches!(back, Entry::PackagesInstalled { .. }));
     }
 
-    /// An unknown provider is refused rather than shelled out blindly.
+    /// An unknown provider is refused rather than shelled out blindly, and the
+    /// return value counts what was actually removed.
+    ///
+    /// The count is the point: a batch that fails is retried per item, so a
+    /// partial revert reports the part that happened rather than the whole set
+    /// as lost. One formula that is now another package's live dependency used
+    /// to make Homebrew refuse the invocation and strand everything with it.
     #[test]
     fn an_unknown_provider_is_not_uninstalled() {
-        assert!(!uninstall_packages("not-a-provider", &["x".to_string()]));
+        assert_eq!(uninstall_packages("not-a-provider", &["x".to_string()]), 0);
+        // Two items, still nothing removed — and no panic from the per-item
+        // retry path, which is where the isolate half runs.
+        assert_eq!(
+            uninstall_packages("not-a-provider", &["x".into(), "y".into()]),
+            0
+        );
         // …and an empty set is trivially fine, without running anything.
-        assert!(uninstall_packages("not-a-provider", &[]));
+        assert_eq!(uninstall_packages("not-a-provider", &[]), 0);
     }
 
     use super::*;
