@@ -117,8 +117,7 @@ fn a_failing_probe_is_reported_and_never_becomes_a_drop() {
         "a failed probe was read as 'nothing installed': {v}"
     );
 
-    // The whole point: --csw must find nothing to drop. This is the write path,
-    // and it is the one that commits and pushes.
+    // The whole point: --csw must find nothing to drop.
     let out = e
         .temper()
         .args(["reconcile", "--csw", "--json"])
@@ -133,6 +132,29 @@ fn a_failing_probe_is_reported_and_never_becomes_a_drop() {
              of a probe that failed: {v}"
         );
     }
+
+    // …and then actually run the write. The preview is not the dangerous half:
+    // `--csw --yes` is what edits the Brewfile and the machine block, and what
+    // `after_repo_change` then commits and (with auto_push) sends to the fleet.
+    // Asserting on a preview would leave the writing path untested, which is the
+    // shape of "covered the safe variant of a risky operation".
+    let before_bf = fs::read_to_string(e.home.path().join("brewfiles/t")).unwrap();
+    let before_tt = fs::read_to_string(e.home.path().join("temper.toml")).unwrap();
+    e.temper()
+        .args(["reconcile", "--csw", "--yes", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(e.home.path().join("brewfiles/t")).unwrap(),
+        before_bf,
+        "a failed probe emptied the Brewfile — this is the path that reaches the \
+         whole fleet through auto_commit/auto_push"
+    );
+    assert_eq!(
+        fs::read_to_string(e.home.path().join("temper.toml")).unwrap(),
+        before_tt,
+        "…and the machine block must be untouched too"
+    );
 }
 
 /// The control: when the tool answers, the same folder behaves normally. Without
