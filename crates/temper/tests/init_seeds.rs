@@ -45,19 +45,30 @@ case "$1 $2" in
   "tap")            echo user/tap ;;
   "trust --json")   echo '{"taps":["user/tap"]}' ;;
   "bundle cleanup")
-      # The dry listing: with an empty declared set every installed thing is an
-      # orphan, which is what a seed wants to hear.
-      echo "Would uninstall formulae:"
-      echo "jq"
-      echo "ripgrep"
-      echo "ghostty"
-      echo "Would untap:"
-      echo "user/tap"
-      # …and it exits NON-ZERO to say it found them, as the real one does. A
-      # fake that exits 0 here agrees with whatever the caller assumes about the
-      # exit code, which is how a regression reading it as failure passed a full
-      # suite.
-      exit 1
+      # Two callers, two contracts — and this fake used to answer only one of
+      # them, exiting 1 unconditionally. Real `brew bundle cleanup --force`
+      # succeeds with 0; a fake harsher than the tool teaches the next reader the
+      # wrong contract, and would fail spuriously the moment a seeding path
+      # reaches the executor.
+      case " $* " in
+        *" --force "*)
+            exit 0
+            ;;
+        *)  # The dry listing: with an empty declared set every installed thing
+            # is an orphan, which is what a seed wants to hear.
+            echo "Would uninstall formulae:"
+            echo "jq"
+            echo "ripgrep"
+            echo "ghostty"
+            echo "Would untap:"
+            echo "user/tap"
+            # …and it exits NON-ZERO to say it found them, as the real one does.
+            # A fake that exits 0 here agrees with whatever the caller assumes
+            # about the exit code, which is how a regression reading it as
+            # failure passed a full suite.
+            exit 1
+            ;;
+      esac
       ;;
   *) : ;;
 esac

@@ -285,3 +285,89 @@ fn the_stub_helper_writes_a_working_executable() {
     assert!(e.log("thing").contains("an-argument"), "argv was not recorded");
     assert!(Path::new(&e.bin.path().join("thing")).exists());
 }
+
+/// A converged machine is warned about nothing.
+///
+/// `install --packages-only` names what `undo` could not take back — and it keyed
+/// off "does the spec declare any", so a machine already holding all three of its
+/// declared taps was told its tap-trust was unrevertible while the run was about
+/// to touch nothing. The step path is careful about exactly this (an in-sync
+/// `sysfile` is not listed) and this path was not.
+///
+/// This replaces a source scrape that asserted `packages_only_unrevertible`'s
+/// body *contained the string* `trusted_taps`. That passes if the name appears in
+/// a comment, and fails if the code is refactored to call a correctly-behaved
+/// wrapper — it was a proxy for a claim that is directly observable.
+#[test]
+fn a_converged_machine_is_warned_about_nothing_it_will_not_do() {
+    let e = Env::new();
+    // Everything the spec declares is already true of this machine: the tap is
+    // trusted, the formula installed, the extension enabled.
+    e.stub(
+        "brew",
+        "case \"$1 $2\" in \
+         \"trust --json\") echo '{\"taps\":[\"a/keep\"]}' ;; \
+         \"list --formula\") echo jq ;; \
+         esac",
+    );
+    e.stub("gnome-extensions", "echo keep@x");
+    e.stub("gext", "");
+    e.spec(&format!(
+        "[brew]\ntrust = [\"a/keep\"]\n\n\
+         [[machine]]\nname = \"t\"\nos = \"{}\"\n\
+         packages = [\"brew \\\"jq\\\"\"]\ngnome_extensions = [\"keep@x\"]\n",
+        os()
+    ));
+
+    let out = e
+        .temper()
+        .args(["install", "--packages-only", "--dry-run", "--json"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
+        panic!(
+            "install did not emit one document ({err}):\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    });
+    let warned = v["unrevertible"].as_array().cloned().unwrap_or_default();
+    assert!(
+        warned.is_empty(),
+        "a converged machine was warned that {} could not be taken back, on a run \
+         that changes nothing: {v}",
+        warned.len()
+    );
+}
+
+/// The control: when the run *would* change one of them, the warning is owed.
+/// Without this, the assertion above is satisfied by never warning at all.
+#[test]
+fn a_tap_this_run_will_trust_is_named_as_unrevertible() {
+    let e = Env::new();
+    // The declared tap is NOT yet trusted, so this run will trust it.
+    e.stub(
+        "brew",
+        "case \"$1 $2\" in \
+         \"trust --json\") echo '{\"taps\":[]}' ;; \
+         \"list --formula\") echo jq ;; \
+         esac",
+    );
+    e.spec(&format!(
+        "[brew]\ntrust = [\"a/keep\"]\n\n\
+         [[machine]]\nname = \"t\"\nos = \"{}\"\npackages = [\"brew \\\"jq\\\"\"]\n",
+        os()
+    ));
+
+    let out = e
+        .temper()
+        .args(["install", "--packages-only", "--dry-run", "--json"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let warned = v["unrevertible"].as_array().cloned().unwrap_or_default();
+    assert!(
+        !warned.is_empty(),
+        "this run will trust a tap that `undo` cannot untrust, and said nothing: {v}"
+    );
+}

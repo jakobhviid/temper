@@ -2127,43 +2127,6 @@ mod revertibility_tests {
         toml::from_str(src).unwrap()
     }
 
-    /// What `undo` cannot take back is named, and everything else is silent.
-    ///
-    /// `install --packages-only` names only what this run would actually change.
-    ///
-    /// It keyed off "does the spec declare any", so a converged machine
-    /// declaring three taps was warned that its tap-trust could not be taken
-    /// back while the run was about to touch nothing. The step path is careful
-    /// about exactly this — an in-sync `sysfile` is not listed — and this path
-    /// was not.
-    #[test]
-    fn nothing_to_do_means_nothing_to_warn_about() {
-        let src = include_str!("plan.rs");
-        let body = {
-            let start = src
-                .find("fn packages_only_unrevertible(")
-                .expect("packages_only_unrevertible");
-            &src[start..][..src[start..].find("\n}").expect("fn end")]
-        };
-        // The three flags must be computed from a DRIFT question, not from the
-        // declared list being non-empty.
-        for (flag, from) in [
-            ("untrusted", "trusted_taps"),
-            ("remotes_to_add", "remotes_missing"),
-            ("switches_to_flip", "gext_enable_drift"),
-        ] {
-            assert!(
-                body.contains(from),
-                "`{flag}` must come from `{from}` — asking whether the spec \
-                 declares any warns about work that is not going to happen"
-            );
-        }
-        assert!(
-            !body.contains("effective_extensions(home, machine)\n"),
-            "the bare declared list is not the question"
-        );
-    }
-
     /// AGENTS.md question 7: a run whose only changes were unrevertible reverts
     /// nothing while reporting success, and the user finds out when the revert
     /// turns out to be a no-op. Each case here has a real reason, which matters
