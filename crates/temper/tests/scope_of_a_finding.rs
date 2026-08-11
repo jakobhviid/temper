@@ -7,34 +7,70 @@
 //! one it silently did nothing, every converge put the extension back, and the
 //! only way out was a hand edit nothing pointed you at.
 //!
-//! `gnome-extensions` is absent from this host, so drift reports nothing for it
-//! and the assertion would be vacuous. rpm-ostree is here, which makes the
-//! Linux case the one with teeth; the mechanism is shared.
+//! rpm-ostree is the case with teeth, and it is **faked** here rather than
+//! required. This test used to return early unless the host had a real
+//! `rpm-ostree` — so on CI, which is `ubuntu-latest`, the one test guarding the
+//! defect the whole scope model exists to prevent was a green no-op. Its own
+//! comment said "a vacuous pass is worse than an honest skip" while being one.
 
 use std::fs;
 
 use assert_cmd::Command;
 use tempfile::TempDir;
 
-/// Skip where the probe cannot answer — the finding would not be emitted at all,
-/// and a vacuous pass is worse than an honest skip.
-fn rpm_ostree_present() -> bool {
-    std::process::Command::new("rpm-ostree")
-        .arg("--version")
+/// An `rpm-ostree` that reports a booted deployment layering nothing, so a
+/// declared package reads as genuinely missing.
+///
+/// `--version` answers because `have()` gates the whole provider on it, and
+/// `status --json` carries the shape `requested_from_status` parses: one booted
+/// deployment, no `requested-packages`.
+fn fake_rpm_ostree(dir: &std::path::Path) {
+    let p = dir.join("rpm-ostree");
+    fs::write(
+        &p,
+        r#"#!/bin/sh
+case "$1 $2" in
+  "status --json") echo '{"deployments":[{"booted":true,"requested-packages":[]}]}' ;;
+  *) : ;;
+esac
+exit 0
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+/// `drift --json` against a folder, with the fake on PATH.
+fn drift(h: &std::path::Path, fake_home: &std::path::Path, state: &std::path::Path, bin: &std::path::Path) -> serde_json::Value {
+    let out = Command::cargo_bin("temper")
+        .unwrap()
+        .args(["drift", "--json"])
+        .env("TEMPER_DIR", h)
+        .env("HOME", fake_home)
+        .env("XDG_CONFIG_HOME", fake_home.join(".config"))
+        .env("TEMPER_STATE_DIR", state)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .unwrap();
+    serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "drift did not emit one document ({e}):\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    })
 }
 
 #[test]
 fn a_bundle_declared_item_names_its_file_not_a_verb_that_cannot_act() {
-    if !cfg!(target_os = "linux") || !rpm_ostree_present() {
-        eprintln!("skipped: needs rpm-ostree");
-        return;
-    }
     let home = TempDir::new().unwrap();
     let fake_home = TempDir::new().unwrap();
     let state = TempDir::new().unwrap();
+    let bin = TempDir::new().unwrap();
+    fake_rpm_ostree(bin.path());
     let h = home.path();
 
     fs::create_dir_all(h.join("apps")).unwrap();
@@ -50,15 +86,7 @@ fn a_bundle_declared_item_names_its_file_not_a_verb_that_cannot_act() {
     )
     .unwrap();
 
-    let out = Command::cargo_bin("temper")
-        .unwrap()
-        .args(["drift", "--json"])
-        .env("TEMPER_DIR", h)
-        .env("HOME", fake_home.path())
-        .env("TEMPER_STATE_DIR", state.path())
-        .output()
-        .unwrap();
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let v = drift(h, fake_home.path(), state.path(), bin.path());
     let item = v["items"]
         .as_array()
         .unwrap()
@@ -80,15 +108,7 @@ fn a_bundle_declared_item_names_its_file_not_a_verb_that_cannot_act() {
          rpm_ostree = [\"temper-test-not-layered-anywhere\"]\n",
     )
     .unwrap();
-    let out = Command::cargo_bin("temper")
-        .unwrap()
-        .args(["drift", "--json"])
-        .env("TEMPER_DIR", h)
-        .env("HOME", fake_home.path())
-        .env("TEMPER_STATE_DIR", state.path())
-        .output()
-        .unwrap();
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let v = drift(h, fake_home.path(), state.path(), bin.path());
     let item = v["items"]
         .as_array()
         .unwrap()

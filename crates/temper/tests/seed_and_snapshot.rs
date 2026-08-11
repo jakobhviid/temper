@@ -21,8 +21,59 @@ fn temper(home: &Path, fake_home: &Path, state: &Path) -> Command {
     let mut c = Command::cargo_bin("temper").unwrap();
     c.env("TEMPER_DIR", home)
         .env("HOME", fake_home)
+        // `dconf::user_db()` reads XDG_CONFIG_HOME *before* HOME, and returns
+        // nothing at all when DCONF_PROFILE is set — so pinning HOME alone
+        // leaves the answer to whatever session runs the suite.
+        .env("XDG_CONFIG_HOME", fake_home.join(".config"))
+        .env_remove("DCONF_PROFILE")
+        // Anything `with_dconf` installed goes first; the rest is for /bin/sh.
+        .env(
+            "PATH",
+            format!("{}:/usr/bin:/bin", fake_home.join("bin").display()),
+        )
         .env("TEMPER_STATE_DIR", state);
     c
+}
+
+/// Give this fake home a working dconf: a database so the observability guard
+/// passes, and a `dconf` that answers the three verbs temper drives it with.
+///
+/// Without this, every dconf assertion in this file was conditional on the
+/// developer having a desktop session — two of them said nothing at all on a
+/// runner, while still reporting as passing tests.
+fn with_dconf(fake_home: &Path) {
+    let db = fake_home.join(".config/dconf");
+    fs::create_dir_all(&db).unwrap();
+    fs::write(db.join("user"), b"\0").unwrap();
+
+    let bin = fake_home.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let p = bin.join("dconf");
+    // `load` and `reset` record that they were asked, so a test can tell a
+    // preview from a write. `dump` answers with one key so a capture has
+    // something to write and an empty file means it never ran.
+    fs::write(
+        &p,
+        format!(
+            r#"#!/bin/sh
+log={}
+case "$1" in
+  dump)  echo '[/]'; echo "k='v'" ;;
+  load)  cat > /dev/null; echo "load $2" >> "$log" ;;
+  reset) echo "reset $2" >> "$log" ;;
+  *) : ;;
+esac
+exit 0
+"#,
+            fake_home.join("dconf-calls").display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    }
 }
 
 /// A machine with one declared, labelled dconf snapshot.
@@ -279,14 +330,27 @@ fn restore_dry_run_never_journals() {
     fs::create_dir_all(home.path().join("assets")).unwrap();
     fs::write(home.path().join("assets/shell.dconf"), "[/]\nk='v'\n").unwrap();
 
-    // On a dconf host this previews; without dconf it fails loudly rather than
-    // pretending. Either way a dry run must leave no undo entry behind.
-    let _ = temper(home.path(), fake_home.path(), state.path())
+    with_dconf(fake_home.path());
+
+    // The exit status is the point, not decoration: discarding it let this pass
+    // on a host with no dconf, where `restore` bails at the observability guard
+    // long before any journal code — so "no journal was written" was true for
+    // the wrong reason and proved nothing about dry-run.
+    temper(home.path(), fake_home.path(), state.path())
         .args(["--json", "restore", "--dry-run"])
-        .assert();
+        .assert()
+        .success();
+
     assert!(
         !state.path().join("runs").exists(),
         "a dry run must never journal"
+    );
+    // …and it must not have touched live dconf either, which only an observation
+    // of the child can settle.
+    assert!(
+        !fake_home.path().join("dconf-calls").exists(),
+        "a dry run ran dconf: {}",
+        fs::read_to_string(fake_home.path().join("dconf-calls")).unwrap_or_default()
     );
 }
 
@@ -297,15 +361,23 @@ fn a_labelled_snapshot_is_named_in_drift_output() {
     let state = TempDir::new().unwrap();
     home_with_snapshot(home.path());
 
-    // No snapshot file written yet. On a dconf host that is real drift ("never
-    // captured"); off one it degrades silently. Either way drift must succeed,
-    // and when it does speak it uses the label, not a raw dconf path.
+    with_dconf(fake_home.path());
+
+    // No snapshot file written yet, and dconf is readable — so this is real
+    // drift, and the finding must appear. Guarding the assertion behind `if
+    // out.contains("dconf-uncaptured")` meant the whole check evaporated on any
+    // host without a desktop session, which is every CI runner.
     let assert = temper(home.path(), fake_home.path(), state.path())
         .args(["--json", "drift"])
         .assert()
         .success();
     let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    if out.contains("dconf-uncaptured") {
-        assert!(out.contains("dconf/shell"), "label not used: {out}");
-    }
+    assert!(
+        out.contains("dconf-uncaptured"),
+        "a declared snapshot that was never captured is drift: {out}"
+    );
+    assert!(
+        out.contains("dconf/shell"),
+        "the label names the snapshot, not a raw dconf path: {out}"
+    );
 }
