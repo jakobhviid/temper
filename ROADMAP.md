@@ -2,8 +2,9 @@
 
 **Bugs** — behaviour that is wrong rather than unbuilt — then the **scope-model
 gaps** (each a filled ⚠ or ❌ in the feature matrix), what's deliberately **not**
-temper's job, one **restructuring** weighed and declined, the macOS claims only a
-Mac can settle, and the migration-verification gap. Each item has why it's
+temper's job, the **composition** with a whole-machine updater, one
+**restructuring** weighed and declined, the macOS claims only a Mac can settle,
+and the migration-verification gap. Each item has why it's
 parked, the current mitigation, and enough of a sketch to act on cold.
 
 **Nothing shipped stays in this file.** A roadmap that inventories finished work
@@ -106,6 +107,60 @@ the worst candidate to shape a seam around, because every hard case lives there.
 — and `sysfile`/`exec`, which mutate root-owned/arbitrary state. dconf *is*
 journaled (values round-trip cleanly) — per key for `setkey(dconf)`, and per
 subtree for `restore-dconf`.
+
+---
+
+## Composing with a whole-machine updater (`update` without the package half)
+
+A whole-machine updater like `topgrade` upgrades every manager temper declares —
+brew, cask, flatpak, rpm-ostree, mas, vscode, gnome-extensions — plus dozens
+temper has no provider for, and on an image-based host it is the upgrade path the
+OS blesses. It has no notion of a declaration, so it cannot converge config,
+report drift, or revert a run. That is a clean seam and it points one way: **the
+updater owns versions, temper owns declarations**, with the updater as the entry
+point and temper as one of its steps.
+
+What temper lacks is an invocation shaped for a caller that has already done the
+packages. Parked because three of the four answers below are fleet-behaviour
+calls rather than code; the mitigation is a folder-side `exec` step that runs the
+updater from inside a converge, which is the opposite edge and cannot coexist
+with this (see below).
+
+- **Skip the upgrade, keep the trust.** The brew/flatpak upgrade is the caller's
+  job; tap-trust is not — brew silently skips formulae from an untrusted tap, so
+  dropping the trust step leaves the *caller's* `brew upgrade` quietly
+  incomplete (#6). The mirror of `install --packages-only` in the existing
+  vocabulary is `update --config-only`. Naming the flag for one caller
+  (`--topgrade`) reads well at the call site and breaks #13 the moment a second
+  updater exists: the engine is not supposed to know who is calling.
+  Recommendation — ship the contract as the flag, and let a caller-named preset
+  be sugar if it is wanted.
+- **"Leaves no barriers" is a contract, not a flag name.** It means: never read
+  stdin, never block on a human, and announce every skip that follows (#6, and
+  each new human-facing line needs its `!json` guard). Four places can block —
+  sudo acquisition for casks needing root, the version-skew self-update prompt
+  (`update.mode`), a git push whose credential or passphrase prompt goes to the
+  tty, and an `exec` that prompts (already a PATTERNS anti-pattern). Each needs a
+  decided answer: pre-authorized, `off`, or reported-and-skipped. A step skipped
+  for want of a password is a finding, not a silent pass.
+- **The opposite edge has to be dropped, not left as a fallback.** A folder-side
+  recipe that calls the updater from an `exec` step is a *soft* dependency
+  (`when = { binary = … }`), which makes keeping it look free. It is not: with one
+  user-owned updater config, `temper update` → `exec` → updater → `temper update`
+  recurses, and a throttle stamp cannot break the loop, because the stamp is
+  written after the sweep the inner run is still inside. `--config-only` does not
+  help either — the recursion goes through the `exec`, not the packages.
+- **The invocation itself is recipe-side.** On an image-based host the
+  distribution's updater config lives under `/usr`, which is image content, so
+  the entry that calls temper belongs in a user-owned config that temper deploys
+  with `copy`. Bootstrapping it through the folder is not a cycle: nothing calls
+  temper until the config is in place.
+
+Unaffected either way: `drift`, because temper declares presence and never a
+version, so a version moved by the updater was never drift; and `undo`, because
+config writes are journaled like any other while the package half belongs to the
+caller and is unjournaled on both sides of the seam — which is a plan-time
+sentence, not a footnote (#8).
 
 ---
 
