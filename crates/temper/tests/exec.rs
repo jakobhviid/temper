@@ -323,6 +323,18 @@ fn one_reason_is_printed_once_however_many_steps_share_it() {
     for n in ["one.sh", "two.sh", "three.sh"] {
         assert!(text.contains(n), "step `{n}` is not named:\n{text}");
     }
+    // A blank line separates the rows from the legend. Dimmed and outdented was
+    // not enough on its own: sitting directly under the last row, the legend
+    // read as one more row, which is the confusion the legend exists to remove.
+    let lines: Vec<&str> = text.lines().collect();
+    let legend = lines
+        .iter()
+        .position(|l| l.contains(reason))
+        .expect("the legend line");
+    assert!(
+        legend > 0 && lines[legend - 1].trim().is_empty(),
+        "the legend must be separated from the rows by a blank line:\n{text}"
+    );
 }
 
 /// Two different primitives are two different reasons, so both are printed —

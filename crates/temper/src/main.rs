@@ -1054,6 +1054,10 @@ fn print_unrevertible(items: &[(String, &'static str)], cannot: &str) {
             seen.push(why);
         }
     }
+    // A blank line first. Dimmed and outdented was not enough separation on its
+    // own — the legend sat directly under the last row and read as another one,
+    // which is the thing being fixed rather than a smaller version of it.
+    println!();
     for why in seen {
         println!("    {}", ui::dim(why));
     }
