@@ -142,59 +142,58 @@ pub fn probe_seeding() -> Result<Installed> {
     probe_scoped(&[], true)
 }
 
+/// How each manager is enumerated: the tool, and the argv that lists what it has.
+///
+/// Exhaustive, so a manager added later cannot be silently unprobed — and an
+/// unprobed manager is worse than it sounds: `missing()` only considers managers
+/// that answered, so its declared packages are never reported missing and never
+/// installed. Silent, green, and nothing on the machine.
+fn probe_argv(m: Manager) -> (&'static str, &'static [&'static str]) {
+    match m {
+        Manager::Brew => ("brew", &["list", "--formula"]),
+        Manager::Cask => ("brew", &["list", "--cask"]),
+        Manager::Tap => ("brew", &["tap"]),
+        // BOTH scopes count as installed, so a declared app installed
+        // system-wide is not reported missing. Which scope it is in only matters
+        // for *removal* — see `flatpak_user_apps`.
+        Manager::Flatpak => ("flatpak", &["list", "--app", "--columns=application"]),
+        Manager::Mas => ("mas", &["list"]),
+        Manager::Vscode => ("code", &["--list-extensions"]),
+    }
+}
+
 fn probe_scoped(effective: &[Pkg], seed: bool) -> Result<Installed> {
     let mut managers: HashSet<Manager> = effective.iter().map(|p| p.manager).collect();
     if seed {
-        managers.extend([
-            Manager::Brew,
-            Manager::Cask,
-            Manager::Tap,
-            Manager::Flatpak,
-            Manager::Mas,
-        ]);
+        // Everything except vscode — Settings Sync stays the sole registrar of
+        // those extensions, and `init` adopting them wholesale is an ownership
+        // temper declines (see `probe_seeding`).
+        managers.extend(
+            Manager::ALL
+                .iter()
+                .copied()
+                .filter(|m| *m != Manager::Vscode),
+        );
     }
     let mut inst = Installed::default();
 
-    // `have()` answers "is the tool here", never "did it work". A tool that is
-    // present and fails is the dangerous case: its empty stdout used to land as
-    // an empty installed-set, which `probed()` reports as a real answer, and
-    // every drop path then reads as "the machine has none of these, delete them
-    // from the spec".
-    let ask = |m: Manager, inst: &mut Installed, cmd: &str, args: &[&str]| -> Result<()> {
+    for &m in Manager::ALL {
+        if !managers.contains(&m) {
+            continue;
+        }
+        let (cmd, args) = probe_argv(m);
+        if !have(cmd) {
+            continue; // the tool is absent — never asked, so nothing to report
+        }
+        // `have()` answers "is the tool here", never "did it work". A tool that
+        // is present and fails is the dangerous case: its empty stdout used to
+        // land as an empty installed-set, which `probed()` reports as a real
+        // answer, and every drop path then reads as "the machine has none of
+        // these, delete them from the spec".
         match run_lines_opt(cmd, args)? {
             Some(lines) => inst.set(m, normalize(m, lines)),
             None => inst.unavailable(m),
         }
-        Ok(())
-    };
-
-    if have("brew") {
-        if managers.contains(&Manager::Brew) {
-            ask(Manager::Brew, &mut inst, "brew", &["list", "--formula"])?;
-        }
-        if managers.contains(&Manager::Cask) {
-            ask(Manager::Cask, &mut inst, "brew", &["list", "--cask"])?;
-        }
-        if managers.contains(&Manager::Tap) {
-            ask(Manager::Tap, &mut inst, "brew", &["tap"])?;
-        }
-    }
-    if managers.contains(&Manager::Flatpak) && have("flatpak") {
-        // BOTH scopes count as installed, so a declared app installed
-        // system-wide is not reported missing. Which scope it is in only
-        // matters for *removal* — see `flatpak_user_apps`.
-        ask(
-            Manager::Flatpak,
-            &mut inst,
-            "flatpak",
-            &["list", "--app", "--columns=application"],
-        )?;
-    }
-    if managers.contains(&Manager::Mas) && have("mas") {
-        ask(Manager::Mas, &mut inst, "mas", &["list"])?;
-    }
-    if managers.contains(&Manager::Vscode) && have("code") {
-        ask(Manager::Vscode, &mut inst, "code", &["--list-extensions"])?;
     }
     Ok(inst)
 }
