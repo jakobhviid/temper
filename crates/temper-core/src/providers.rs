@@ -862,6 +862,29 @@ pub fn upgrade(verbose: bool) -> Result<()> {
 /// dependency-aware `brew bundle cleanup --force` against the effective
 /// Brewfile (so a kept package's transitive deps aren't removed); flatpak
 /// extras are uninstalled by id. VM-verified.
+/// The `brew bundle cleanup` type flag for a manager, or `None` where cleanup is
+/// not how it is removed.
+///
+/// Exhaustive because the consequence is a silent cap: naming any type flag
+/// turns the unnamed ones **off**, so a manager missing from this list is one
+/// `cleanup` will not touch — previewed, confirmed, and quietly skipped. That is
+/// the same failure the explicit flags were introduced to prevent, and it was a
+/// hand-written list of five.
+fn cleanup_flag(m: Manager) -> Option<&'static str> {
+    match m {
+        Manager::Brew => Some("--formula"),
+        Manager::Cask => Some("--cask"),
+        Manager::Tap => Some("--tap"),
+        Manager::Mas => Some("--mas"),
+        Manager::Vscode => Some("--vscode"),
+        // Removed by an explicit `flatpak uninstall`, scoped to the user
+        // installation — brew's flatpak cleanup extension is not what temper
+        // uses, and passing a flag for it would hand brew a removal temper
+        // reports on itself.
+        Manager::Flatpak => None,
+    }
+}
+
 /// `[ignore]` entries rendered as Brewfile tokens, so `brew bundle cleanup`
 /// treats them as things that may stay.
 ///
@@ -940,13 +963,8 @@ pub fn prune_apply(
         // it. Note this must cover EVERY type present — naming one type turns
         // the others off.
         let mut flags: Vec<&str> = Vec::new();
-        for (m, flag) in [
-            (Manager::Brew, "--formula"),
-            (Manager::Cask, "--cask"),
-            (Manager::Tap, "--tap"),
-            (Manager::Mas, "--mas"),
-            (Manager::Vscode, "--vscode"),
-        ] {
+        for &m in Manager::ALL {
+            let Some(flag) = cleanup_flag(m) else { continue };
             if effective.iter().any(|p| p.manager == m) {
                 flags.push(flag);
             }
@@ -1765,6 +1783,37 @@ pub fn rpm_ostree_requested() -> Option<Vec<String>> {
 mod converge_dispatch_tests {
     use super::{converge_via, ConvergeVia};
     use crate::packages::Manager;
+
+    /// Every manager brew can clean has a type flag, and the one it cannot is
+    /// removed another way.
+    ///
+    /// Naming any type flag turns the unnamed ones **off**, so a manager missing
+    /// from `cleanup_flag` is one `brew bundle cleanup` will not touch —
+    /// previewed to the user, confirmed by them, and quietly skipped. That is
+    /// precisely the silent cap the explicit flags were introduced to prevent.
+    #[test]
+    fn every_manager_is_either_cleaned_by_brew_or_removed_another_way() {
+        use super::cleanup_flag;
+        for &m in Manager::ALL {
+            match converge_via(m) {
+                // Anything that rides `brew bundle` on the way in must be
+                // named on the way out, or cleanup silently spares it.
+                ConvergeVia::BrewBundle | ConvergeVia::Mas => assert!(
+                    cleanup_flag(m).is_some(),
+                    "`{}` is installed through brew but has no cleanup flag",
+                    m.as_str()
+                ),
+                // flatpak is uninstalled explicitly, scoped to the user
+                // installation, so handing brew a flag for it would give away a
+                // removal temper reports on itself.
+                ConvergeVia::Flatpak => assert!(
+                    cleanup_flag(m).is_none(),
+                    "`{}` is removed explicitly and must not be handed to cleanup",
+                    m.as_str()
+                ),
+            }
+        }
+    }
 
     /// Every manager converges by some route, and each route has packages.
     ///
