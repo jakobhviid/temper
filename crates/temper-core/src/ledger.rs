@@ -197,20 +197,44 @@ fn refuse_catastrophic(p: &Path) -> Result<()> {
             p.display()
         ))
     };
-    if p.parent().is_none() {
-        return bad("it is the filesystem root");
+    // `..` first, because it defeats every check below. These are all lexical —
+    // `components()` keeps `..` and `starts_with` does no normalisation — while
+    // the kernel resolves it: `/etc/../..` passed all four tests and named the
+    // filesystem root, the very thing the first one refuses.
+    if p.components().any(|c| c == std::path::Component::ParentDir) {
+        return bad("it contains a `..` component, so what it names depends on \
+                    where it is resolved from");
     }
-    // `/etc`, `/usr`, `/home` … one component below the root.
-    if p.is_absolute() && p.components().count() <= 2 {
-        return bad("it is a top-level directory");
+
+    // Compare resolved forms too. `$HOME` can be a symlink to the real home
+    // (`/home/jakob` → `/var/home/jakob` on an ostree system), and then the
+    // literal comparisons below both miss: the spec's path and the environment's
+    // spell the same directory differently.
+    let real = |q: &Path| q.canonicalize().unwrap_or_else(|_| q.to_path_buf());
+    let pr = real(p);
+
+    for candidate in [p, pr.as_path()] {
+        if candidate.parent().is_none() {
+            return bad("it is the filesystem root");
+        }
+        // `/etc`, `/usr`, `/home` … one component below the root.
+        if candidate.is_absolute() && candidate.components().count() <= 2 {
+            return bad("it is a top-level directory");
+        }
     }
+
     if let Ok(home) = std::env::var("HOME") {
         let home = Path::new(&home);
-        if p == home {
-            return bad("it is your home directory");
-        }
-        if home.starts_with(p) {
-            return bad("it contains your home directory");
+        let hr = real(home);
+        for h in [home, hr.as_path()] {
+            for candidate in [p, pr.as_path()] {
+                if candidate == h {
+                    return bad("it is your home directory");
+                }
+                if h.starts_with(candidate) {
+                    return bad("it contains your home directory");
+                }
+            }
         }
     }
     Ok(())
@@ -306,6 +330,15 @@ mod tests {
             &home,
             // A parent of the home directory.
             Path::new(&home).parent().unwrap().to_str().unwrap(),
+            // Spelled with `..`, which every check here is lexical about while
+            // the kernel is not. `/etc/../..` named the filesystem root and
+            // passed all four tests — including the one that refuses the root.
+            &format!("{home}/.."),
+            &format!("{home}/../.."),
+            "/etc/../..",
+            "/usr/../etc",
+            // A relative escape, for the same reason.
+            "../../..",
         ] {
             assert!(
                 super::refuse_catastrophic(Path::new(p)).is_err(),
