@@ -113,7 +113,7 @@ fn a_failing_probe_is_reported_and_never_becomes_a_drop() {
     assert!(
         !items
             .iter()
-            .any(|i| i["kind"] == "package" && i["status"] == "missing"),
+            .any(|i| i["kind"] == "vscode-package" && i["status"] == "missing"),
         "a failed probe was read as 'nothing installed': {v}"
     );
 
@@ -154,7 +154,7 @@ fn a_working_probe_still_reports_missing_packages() {
     let items = v["items"].as_array().unwrap();
     let missing: Vec<&str> = items
         .iter()
-        .filter(|i| i["kind"] == "package" && i["status"] == "missing")
+        .filter(|i| i["kind"] == "vscode-package" && i["status"] == "missing")
         .map(|i| i["target"].as_str().unwrap())
         .collect();
     assert_eq!(

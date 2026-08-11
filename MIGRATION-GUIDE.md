@@ -198,9 +198,17 @@ working. Update at your leisure, except the `--json` kinds.
 | kind `rpm` | `rpm-ostree` | as above |
 | kind `trust` / `trust-extra` | `brew-trust` / `brew-trust-extra` | flatpak remotes and apt keys are also "trust" |
 | kind `extension` / `extension-extra` | `gnome-extension` / `gnome-extension-extra` | as above |
+| kind `package` / `package-extra` | `brew-package` / `flatpak-package` / `mas-package` / `vscode-package` (+ `-extra`) | one kind for three providers meant none of them could be answered for on its own |
 
 The `[brew].trust` **table** is unchanged: `trust` is already namespaced by
 `[brew]`, so it does not carry the collision the bare kind name did.
+
+The package split follows the same rule as the rest of #13: `brew`, `cask` and
+`brew-tap` converge through one `brew bundle` and are **one** provider, so they
+share `brew-package`. `flatpak` and `mas` are their own. `vscode` gets a kind
+without being a managed provider — Settings Sync stays the sole registrar of
+those extensions, and naming the kind makes the ownership temper declines
+explicit rather than implicit.
 
 **Not aliased:** the `Finding.kind` values above. If you parse `temper drift
 --json`, they are renamed fields rather than aliases — `.items[].kind`, and the

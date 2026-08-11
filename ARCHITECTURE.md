@@ -227,7 +227,10 @@ The table is also **data**, in `interface.rs`: each provider records how it
 answers each column, and tests hold that against the finding registry —
 a provider claiming it can prune must have a kind that actually names `temper
 prune`, claiming reconcile requires a machine scope to write to, and a declined
-column must carry a reason. That is the feature-level version of "advice is a
+column must carry a reason. **A kind belongs to exactly one provider** — while
+brew, flatpak and mas shared one `package` kind, each inherited the others'
+answers, so no provider could be answered for on its own and a new row with those
+kinds and every column `Yes` passed the whole suite with no code behind it. That is the feature-level version of "advice is a
 mutation" (Principle #8), which nothing was checking: the finding registry made a
 missing *finding* answer loud, while a *provider* could still claim a capability
 with nothing behind it.

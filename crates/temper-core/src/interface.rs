@@ -92,7 +92,7 @@ const NO_RESIDUE: &str =
 pub const PROVIDERS: &[ProviderSpec] = &[
     ProviderSpec {
         name: "brew",
-        kinds: &["package", "package-extra"],
+        kinds: &["brew-package", "brew-package-extra"],
         fleet_scope: Col::Yes,
         machine_scope: Col::Yes,
         observe: Col::Yes,
@@ -122,7 +122,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
     },
     ProviderSpec {
         name: "flatpak",
-        kinds: &["package", "package-extra"],
+        kinds: &["flatpak-package", "flatpak-package-extra"],
         fleet_scope: Col::Yes,
         machine_scope: Col::Yes,
         observe: Col::Yes,
@@ -170,7 +170,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
     },
     ProviderSpec {
         name: "mas",
-        kinds: &["package", "package-extra"],
+        kinds: &["mas-package", "mas-package-extra"],
         fleet_scope: Col::Yes,
         machine_scope: Col::Yes,
         observe: Col::Yes,
@@ -388,6 +388,32 @@ mod tests {
                  missing from it reads as one that does not exist",
                 p.name
             );
+        }
+    }
+
+    /// No kind belongs to two providers.
+    ///
+    /// The doc comment on `ProviderSpec.kinds` has always said this; nothing
+    /// checked it, and brew, flatpak and mas all declared `package` /
+    /// `package-extra`. Two consequences, both bad. A per-provider capability
+    /// answer was inexpressible — every provider inherited every other's, so
+    /// giving flatpak an honest one meant contradicting brew's. And the
+    /// cross-check became satisfiable by declaration alone: a `ProviderSpec` for
+    /// `apt` with those kinds and every column `Yes` passed the whole suite with
+    /// no apt code anywhere, because *brew's* kind named the verbs.
+    #[test]
+    fn a_kind_belongs_to_exactly_one_provider() {
+        let mut seen: std::collections::BTreeMap<&str, &str> = Default::default();
+        for p in PROVIDERS {
+            for k in p.kinds {
+                if let Some(other) = seen.insert(k, p.name) {
+                    panic!(
+                        "kind `{k}` is claimed by both `{other}` and `{}` — a shared \
+                         kind means neither can be answered for on its own",
+                        p.name
+                    );
+                }
+            }
         }
     }
 

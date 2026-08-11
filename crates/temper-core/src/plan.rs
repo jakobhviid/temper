@@ -694,15 +694,64 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
             why: "drop the `needs` if the dependency is genuinely not wanted",
         }],
     },
-    // ---- Packages: all four cells. ----------------------------------------
+    // ---- Packages: all four cells, per PROVIDER. ---------------------------
+    //
+    // One `package` kind for brew, flatpak and mas made a per-provider answer
+    // inexpressible: `interface.rs` requires that a provider claiming `prune`
+    // has a kind naming `temper prune`, so with the kind shared, every provider
+    // inherited every other provider's answer. Three of them could satisfy the
+    // cross-check on one provider's code — and giving one an honest, different
+    // answer was impossible. Principle #13's "the family always gets a second
+    // member" applied to a family that already had three.
+    //
+    // brew/cask/brew-tap are ONE provider (they converge through `brew bundle`
+    // together), so they share a kind. vscode is deliberately not a provider —
+    // see `interface::PROVIDERS` — but its findings still need a registered
+    // kind, and having one makes the ownership it declines explicit.
     KindSpec {
-        name: "package",
+        name: "brew-package",
         detects: Detects::Missing,
         converge: &[Answer::Verb("temper install --packages-only")],
         absorb: &[Answer::Verb("temper reconcile")],
     },
     KindSpec {
-        name: "package-extra",
+        name: "brew-package-extra",
+        detects: Detects::Extra,
+        converge: &[Answer::Verb("temper prune")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "flatpak-package",
+        detects: Detects::Missing,
+        converge: &[Answer::Verb("temper install --packages-only")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "flatpak-package-extra",
+        detects: Detects::Extra,
+        converge: &[Answer::Verb("temper prune")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "mas-package",
+        detects: Detects::Missing,
+        converge: &[Answer::Verb("temper install --packages-only")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "mas-package-extra",
+        detects: Detects::Extra,
+        converge: &[Answer::Verb("temper prune")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "vscode-package",
+        detects: Detects::Missing,
+        converge: &[Answer::Verb("temper install --packages-only")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "vscode-package-extra",
         detects: Detects::Extra,
         converge: &[Answer::Verb("temper prune")],
         absorb: &[Answer::Verb("temper reconcile")],
@@ -1002,10 +1051,26 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
     let absorbs = |c: &str| absorb.contains(c);
 
     let drifted = |kinds: &[&str]| items.iter().any(|f| !f.ok && kinds.contains(&f.kind));
-    let extra_pkg = drifted(&["package-extra"]);
+    let extra_pkg = drifted(&[
+        "brew-package-extra",
+        "flatpak-package-extra",
+        "mas-package-extra",
+        "vscode-package-extra",
+    ]);
     let trust_extra = drifted(&["brew-trust-extra"]);
     let dconf_capture = drifted(&["dconf-key", "dconf-extra", "dconf-uncaptured"]);
-    let pkg_capture = drifted(&["package", "package-extra", "brew-trust", "brew-trust-extra"]);
+    let pkg_capture = drifted(&[
+        "brew-package",
+        "brew-package-extra",
+        "flatpak-package",
+        "flatpak-package-extra",
+        "mas-package",
+        "mas-package-extra",
+        "vscode-package",
+        "vscode-package-extra",
+        "brew-trust",
+        "brew-trust-extra",
+    ]);
     let ext_capture = drifted(&["gnome-extension", "gnome-extension-extra"]);
 
     let mut out = Vec::new();
@@ -1197,7 +1262,7 @@ pub fn run_drift(
         for p in packages::missing(&effective, &installed) {
             findings.push(Finding {
                 app: "packages".into(),
-                kind: "package",
+                kind: package_kind(p.manager, false),
                 target: format!("{} {}", p.manager.as_str(), p.name),
                 ok: false,
                 status: "missing".into(),
@@ -1231,7 +1296,7 @@ pub fn run_drift(
             };
             findings.push(Finding {
                 app: "packages".into(),
-                kind: "package-extra",
+                kind: package_kind(m, true),
                 target,
                 ok: false,
                 status: "extra".into(),
@@ -1241,7 +1306,7 @@ pub fn run_drift(
         for (m, name) in providers::brew_extras(&effective, ignore)? {
             findings.push(Finding {
                 app: "packages".into(),
-                kind: "package-extra",
+                kind: package_kind(m, true),
                 target: format!("{} {}", m.as_str(), name),
                 ok: false,
                 status: "extra".into(),
@@ -2142,6 +2207,26 @@ mod prune_plan_tests {
 ///
 /// Each of the three is gated independently: a machine that declares no
 /// packages still prunes its extension extras, because `drift` reports them.
+/// The `Finding.kind` for a package manager, per **provider** rather than per
+/// manager: brew, cask and brew-tap converge through one `brew bundle` and are
+/// one provider, so they share a kind.
+///
+/// Literal strings, because the completeness scrape reads source for them — a
+/// `format!`-built kind is invisible to it (PATTERNS, "Adding a provider").
+fn package_kind(m: packages::Manager, extra: bool) -> &'static str {
+    use packages::Manager::*;
+    match (m, extra) {
+        (Brew | Cask | Tap, false) => "brew-package",
+        (Brew | Cask | Tap, true) => "brew-package-extra",
+        (Flatpak, false) => "flatpak-package",
+        (Flatpak, true) => "flatpak-package-extra",
+        (Mas, false) => "mas-package",
+        (Mas, true) => "mas-package-extra",
+        (Vscode, false) => "vscode-package",
+        (Vscode, true) => "vscode-package-extra",
+    }
+}
+
 /// Whether the spec expresses an opinion about tap-trust at all.
 ///
 /// The opt-in every other provider has, and the one tap-trust never got: "a
@@ -2507,7 +2592,7 @@ mod remediation_tests {
 
     #[test]
     fn missing_and_extra_offer_both_directions() {
-        let items = vec![f("package", false), f("package-extra", false)];
+        let items = vec![f("brew-package", false), f("brew-package-extra", false)];
         let cmds: Vec<String> = remediations(&items)
             .iter()
             .map(|r| r.command.clone())
@@ -2557,8 +2642,21 @@ mod remediation_tests {
         // Kinds the scrape structurally cannot see, listed explicitly rather than
         // by making the pattern-matching cleverer (which would rot):
         //   - assertion kinds come from `drift::kind`, which returns bare literals;
-        //   - the dconf pair is chosen by a conditional, not a `kind: "…"` literal.
+        //   - the dconf pair is chosen by a conditional, not a `kind: "…"` literal;
+        //   - the package kinds come from `package_kind`, a match on the manager,
+        //     so they are literals the scrape cannot see next to a `kind:`. The
+        //     match is exhaustive over `Manager`, which is the stronger guarantee
+        //     anyway: adding a manager forces a kind, and listing them here
+        //     forces that kind to be registered.
         for k in [
+            "brew-package",
+            "brew-package-extra",
+            "flatpak-package",
+            "flatpak-package-extra",
+            "mas-package",
+            "mas-package-extra",
+            "vscode-package",
+            "vscode-package-extra",
             "dconf-key",
             "dconf-extra",
             "absent",
@@ -2733,7 +2831,7 @@ mod remediation_tests {
 
     #[test]
     fn all_in_sync_yields_no_remediation() {
-        let items = vec![f("copy", true), f("package", true)];
+        let items = vec![f("copy", true), f("brew-package", true)];
         assert!(remediations(&items).is_empty());
     }
 }
