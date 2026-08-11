@@ -856,20 +856,24 @@ pub fn upgrade(verbose: bool) -> Result<()> {
 /// cleanup matches on the id, and no name is available here anyway.
 fn ignored_brewfile_lines(ignore: &crate::manifest::Ignore) -> Vec<String> {
     let mut out = Vec::new();
-    for name in &ignore.brew {
-        out.push(format!("brew \"{name}\""));
-    }
-    for name in &ignore.cask {
-        out.push(format!("cask \"{name}\""));
-    }
-    for name in &ignore.tap {
-        out.push(format!("tap \"{name}\""));
-    }
-    for id in &ignore.mas {
-        out.push(format!("mas \"{id}\", id: {id}"));
-    }
-    for name in &ignore.vscode {
-        out.push(format!("vscode \"{name}\""));
+    // Driven from `Manager::ALL` and the exhaustive `ignore_list`, rather than a
+    // sequence of `for` loops over named fields. The compiler checks a match and
+    // checks nothing about the loops — so a manager added later would silently
+    // lose its ignore protection here, which is the exact bug this function was
+    // written to fix, one variant later.
+    for &m in Manager::ALL {
+        if m == Manager::Flatpak {
+            continue; // not a Brewfile type; flatpak extras are removed separately
+        }
+        for name in crate::packages::ignore_list(ignore, m) {
+            out.push(match m {
+                // mas is keyed by its numeric id — that is what `match_name`
+                // yields and what `[ignore].mas` holds, and cleanup matches on
+                // it, so the id stands in for the display name too.
+                Manager::Mas => format!("mas \"{name}\", id: {name}"),
+                other => format!("{} \"{name}\"", other.as_str()),
+            });
+        }
     }
     out
 }

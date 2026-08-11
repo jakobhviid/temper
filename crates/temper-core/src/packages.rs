@@ -225,7 +225,25 @@ impl Installed {
     }
 }
 
-fn ignore_list(ignore: &Ignore, m: Manager) -> &[String] {
+/// Every manager, so a caller can iterate them instead of listing them.
+///
+/// A hand-written enumeration is how `prune`'s ignore protection came to cover
+/// five of six managers and nobody noticed: the compiler checks a `match`, and
+/// checks nothing about a sequence of `for` loops.
+impl Manager {
+    pub const ALL: &'static [Manager] = &[
+        Manager::Brew,
+        Manager::Cask,
+        Manager::Tap,
+        Manager::Flatpak,
+        Manager::Mas,
+        Manager::Vscode,
+    ];
+}
+
+/// The `[ignore]` list for a manager. Exhaustive, so a new manager cannot be
+/// added without answering this.
+pub fn ignore_list(ignore: &Ignore, m: Manager) -> &[String] {
     match m {
         Manager::Brew => &ignore.brew,
         Manager::Cask => &ignore.cask,
@@ -271,6 +289,58 @@ pub fn extras(declared: &[Pkg], installed: &Installed, ignore: &Ignore) -> Vec<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Manager::ALL` really is all of them.
+    ///
+    /// The `match` below is exhaustive, so adding a variant stops this
+    /// compiling until it is handled — and the count then forces `ALL` to be
+    /// updated too. Together that makes every `for &m in Manager::ALL` loop
+    /// complete by construction, which is what `prune`'s ignore protection
+    /// depends on: it enumerated five of six managers by hand, and the compiler
+    /// checks a match while checking nothing about a sequence of `for` loops.
+    #[test]
+    fn manager_all_lists_every_variant() {
+        fn seen(m: Manager) -> u8 {
+            match m {
+                Manager::Brew => 0,
+                Manager::Cask => 1,
+                Manager::Tap => 2,
+                Manager::Flatpak => 3,
+                Manager::Mas => 4,
+                Manager::Vscode => 5,
+            }
+        }
+        let mut marks: Vec<u8> = Manager::ALL.iter().map(|m| seen(*m)).collect();
+        marks.sort_unstable();
+        assert_eq!(
+            marks,
+            (0..=5).collect::<Vec<u8>>(),
+            "Manager::ALL is missing a variant or repeats one"
+        );
+    }
+
+    /// Every manager's `[ignore]` list is reachable, so nothing can be ignored
+    /// in the spec and pruned anyway.
+    #[test]
+    fn every_manager_has_a_reachable_ignore_list() {
+        let ignore = Ignore {
+            brew: vec!["b".into()],
+            cask: vec!["c".into()],
+            tap: vec!["t".into()],
+            flatpak: vec!["f".into()],
+            mas: vec!["m".into()],
+            vscode: vec!["v".into()],
+            ..Default::default()
+        };
+        for &m in Manager::ALL {
+            assert_eq!(
+                ignore_list(&ignore, m).len(),
+                1,
+                "`{}` has no reachable ignore list",
+                m.as_str()
+            );
+        }
+    }
 
     #[test]
     fn parse_tokens() {

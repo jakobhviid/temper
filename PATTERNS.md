@@ -128,8 +128,17 @@ In order, because each step is checked by the one after it:
 What the tests will catch for you: an unregistered kind, a kind missing a
 direction, a verb your registry names that drift never offers, a plan field that
 misses an aggregation point, a prune list that is not counted, a provider
-claiming a capability with nothing behind it, and a provider missing from the
-matrix. What they cannot catch is scope — whether the thing you wrote to belongs
+claiming a capability with nothing behind it, a provider missing from the matrix
+(and a matrix row with no provider), a schema field missing from SPEC, a doc
+teaching a verb that is only an alias, a `--json` verb emitting anything but one
+document, and a doc that never made it into `--llm`.
+
+**Prefer a `match` to a list of `for` loops.** The compiler checks the first and
+nothing at all about the second, so anywhere a new manager, kind or provider must
+be handled, drive it from an exhaustive match (`Manager::ALL` + `ignore_list`,
+`drift::ASSERT_KINDS`, `package_kind`) rather than writing the members out. Every
+by-hand enumeration in this codebase has eventually been one member short —
+`prune`'s ignore protection covered five managers of six, and nobody noticed. What they cannot catch is scope — whether the thing you wrote to belongs
 to this machine — which is why that is question 3 in AGENTS.md rather than a test.
 
 ## Anti-patterns (reach for the primitive instead)
