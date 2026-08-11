@@ -10,8 +10,12 @@ folder, not just author one.
 
 The mental model: a machine has a **declared spec** (the folder) and a **live
 state**. Every loop either converges the machine toward the spec
-(**machine→spec**) or absorbs the machine's reality into the spec
+(**spec→machine**) or absorbs the machine's reality into the spec
 (**spec←machine**). `drift` shows the gap and names both directions.
+
+The spec is always written on the left and the arrow shows which way the state
+moves, so the two are told apart at a glance rather than by remembering which
+word came first.
 
 **How Jakob works it (the short version):** `drift` is the hub — run it, read the
 **Next steps**, run the command it names. Absorbing an ad-hoc change goes through
@@ -253,7 +257,7 @@ of the drift. You pick a direction and run what it prints:
 > hook and it becomes measurable.
 
 - **Packages installed but not declared (extras):** decide the direction —
-  - converge machine→spec: `temper prune` (uninstall them, asks first);
+  - converge spec→machine: `temper prune` (uninstall them, asks first);
   - absorb spec←machine: `temper reconcile` (interactively add/drop).
     or `temper reconcile --csw` to take the machine's state for every item
     at once (see §5);
@@ -334,7 +338,7 @@ clear is both wrong and unactionable.
   (brew silently skips its formulae) → `temper install`/`update` re-trusts it;
   a tap trusted on the machine but not declared → `temper reconcile` absorbs it
   into `[brew].trust` (or `[ignore].tap`), or `temper prune` `brew untrust`s it
-  (the machine→spec mirror). `[ignore].tap` suppresses the extra either way.
+  (the spec→machine mirror). `[ignore].tap` suppresses the extra either way.
 
   All of that needs the spec to declare **at least one** tap somewhere. A folder
   that never mentions taps has no opinion about them, so drift reports none and
@@ -754,14 +758,14 @@ so rather than naming a command that cannot work.
 
 | You want… | Direction | Command |
 |---|---|---|
-| Machine to match the spec (packages) | machine→spec | `install --packages-only` / `prune` |
-| Machine to match the spec (config) | machine→spec | `install` |
+| Machine to match the spec (packages) | spec→machine | `install --packages-only` / `prune` |
+| Machine to match the spec (config) | spec→machine | `install` |
 | Spec to match the machine (per item) | spec←machine | `reconcile` |
 | Spec to match the machine (everything) | spec←machine | `reconcile --csw` |
 | Desktop captured into the spec (wholesale) | spec←machine | `snapshot-dconf` |
 | Desktop reset to the snapshot | spec→machine | `restore-dconf` |
-| A file a dropped step left behind | machine→spec | `prune` |
-| Something gone for good, everywhere | machine→spec | `retire` / `retire_packages`, then `prune` |
+| A file a dropped step left behind | spec→machine | `prune` |
+| Something gone for good, everywhere | spec→machine | `retire` / `retire_packages`, then `prune` |
 | A machine that isn't in the folder yet | spec←machine | `init` (once) |
 | Undo the last change | — | `undo` |
 

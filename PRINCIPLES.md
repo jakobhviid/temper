@@ -106,6 +106,8 @@ terminal mid-run, any of those reads as temper's verdict on the whole converge �
 and on stdout it corrupts `--json`. So a child's output is captured and only
 temper speaks: a live region while working, a `✓` only for what actually changed,
 warnings and errors always, one summary at the end. Silence means converged.
+(`INTERNALS.md` carries the mechanism — one door for every child, and why a
+prompt is not chatter.)
 
 What temper says is the **effect**, never the invocation: how many packages
 changed version, how many commits landed, whether the remote actually moved — and
@@ -156,25 +158,21 @@ its config folder with `git` or any sync client — it operates on *a folder wit
 manifest*, however that folder arrived. (An `exec` step may still shell out to
 `git`/`curl` for a specific job — that's work, not folder management.)
 
-## 10. Replicate all of ReinstallScripts; know the two things that are genuinely elsewhere
+## 10. The acceptance bar is a real workload, not a feature list
 
-ReinstallScripts is the proven acceptance spec — **every RIS recipe gets a temper
-equivalent**, and "temper does it differently on purpose" is only legitimate once
-the difference is proven at least as good on a real machine. Exactly two RIS jobs
-live *outside* the temper binary, for a real reason, not a scope preference — and
-both are still delivered:
+temper generalizes a working ~3,900-line bash repo that provisioned one real
+fleet. That repo is the acceptance spec: **every recipe it had gets a temper
+equivalent**, and "temper does it differently on purpose" is legitimate only once
+the difference is proven at least as good on a real machine.
 
-- **Bootstrap** — runs *before* the tap (and temper) exists (the paradox), so it
-  stays a companion script, exactly as RIS uses `bootstrap.sh`.
-- **Building the host image** — a different *artifact*, being spun out to its own
-  repo (Stacks). temper *configures* a machine on top of that image; it never
-  builds one. A *live* layering that is neither image nor bootstrap (`rpm-ostree`
-  of proton-vpn) *is* in scope, as a converge provider that emits a reboot signal.
+The discipline cuts both ways, and the second half is the one that gets forgotten:
+do not grow *past* the proven set, and do not quietly drop a proven recipe because
+it is awkward. A feature nothing real asked for is speculation; a recipe dropped
+without a replacement is a regression wearing the word "scope".
 
-Everything else RIS does is temper's job — including `eq-import`, now built as
-its own verb (it writes *into* the folder — authoring, the one labelled #9
-exception). Scope discipline means not growing *past* RIS, never dropping a
-proven RIS recipe.
+Two jobs genuinely live outside the binary for reasons that are not preference —
+`ROADMAP.md` names them and says why. They are still delivered; "outside the
+binary" is not "not done".
 
 ## 11. Scope decides the verb set
 

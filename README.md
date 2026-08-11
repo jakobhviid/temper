@@ -7,12 +7,13 @@ revert what it changed.
 
 The **tool** is public and identical for everyone. Your **spec** is a folder
 *you* bring, however you like — a git repo, a synced Nextcloud/Dropbox folder, a
-USB stick. temper never manages that folder; it only reads it.
+USB stick. How that folder gets to a machine is never temper's business: it
+requires no particular host, client or layout, just a manifest it can find.
 
 ```sh
 temper drift      # what's out of sync on this machine (read-only)
 temper install    # converge the machine to the spec
-temper undo        # revert the last run
+temper undo       # revert the last run
 ```
 
 ## Why temper
