@@ -133,6 +133,23 @@ claiming a capability with nothing behind it, a provider missing from the matrix
 teaching a verb that is only an alias, a `--json` verb emitting anything but one
 document, and a doc that never made it into `--llm`.
 
+**When you add a check, ask which sibling field and which other scope have the
+same shape.** The gap is never in the thing you were thinking about; it is one
+step sideways. On this branch, three separate defects were the *other half* of a
+fix that had just been made: duplicate uuids rejected on a machine and not on a
+bundle, `retire` validated and `retire_packages` not, subtree ownership matched
+by prefix while key ownership was carefully exact. The schema is small enough to
+enumerate — `[[machine]]` and `apps/<name>.toml` carry the same lists on
+purpose — so the question has an answer every time, and asking it costs a minute.
+
+The same applies to tests. **Assert the effect, not the plan**, especially where
+the plan is convenient and the effect is not: a preview needs no fixture, no
+sacrificial file and no observable fake, so it is where a test naturally settles.
+Three of this branch's guards stopped at the preview, and they were the three
+covering its worst defects — spec deletion, tap-untrust, and the `--json`
+contract. The pull toward the weaker assertion is strongest exactly where the
+operation is riskiest.
+
 **A fake tool must be able to disagree with you.** Where a test stands a script
 in for `brew`/`gext`/`code`, copy the real tool's *contract*, not the shape the
 code under test happens to expect — exit codes especially. `brew bundle cleanup`
