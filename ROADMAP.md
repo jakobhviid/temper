@@ -70,9 +70,12 @@ in it.
   rather than removed, which covers the case that matters.
 - **`profile`** is the weakest row and is honestly scored: no machine scope, a
   GUI-gated apply, no prune, no reconcile, no ignore, not revertible, no
-  residue story. It also has **no `ProviderSpec`**, so none of that is checked
-  by a test — the matrix→table check runs one way only. Giving it a row in
-  `interface.rs` would fail immediately, which is the argument for doing it.
+  residue story. It now carries a `ProviderSpec` saying so in seven written
+  reasons, so those answers are held to the registry like everyone else's rather
+  than being prose nothing checks. Its `observe` column is genuinely ✅ —
+  `system_profiler` reads the installed set across both scopes without MDM or
+  root — which is why drift on a profile is real even though nothing else about
+  it is.
 
 **The provider trait is half built.** `interface.rs` records each provider's
 eleven answers as data and cross-checks them against the finding registry, so a

@@ -256,6 +256,35 @@ pub const PROVIDERS: &[ProviderSpec] = &[
              nothing tracks what a snapshot owned",
         ),
     },
+    ProviderSpec {
+        name: "profile",
+        kinds: &["profile"],
+        // The weakest row in the matrix, scored honestly. It had no entry at
+        // all, so ARCHITECTURE could say whatever it liked about it and nothing
+        // checked: `every_provider_is_in_the_architecture_matrix` runs code→doc
+        // only, and a doc row with no provider behind it is invisible to it.
+        fleet_scope: Col::Yes,
+        machine_scope: Col::No(
+            "a .mobileconfig is declared in a bundle; there is no per-machine \
+             profile list, so nothing can be reconciled into one",
+        ),
+        // Reading what is installed needs neither MDM nor root, so this half is
+        // real: `system_profiler` across the user and device scopes.
+        observe: Col::Yes,
+        install: Col::No(
+            "apply is a System Settings dialog the user approves, so it cannot \
+             converge unattended or headless",
+        ),
+        prune: Col::No("nothing removes an installed profile — that is a GUI action too"),
+        reconcile: Col::No("no machine scope to absorb into, and no export of an installed profile"),
+        ignore: Col::No("no extras direction exists, so there is nothing to silence"),
+        revertible: Col::No("approval is the user's click; temper cannot un-approve it"),
+        residue: Col::No(
+            "an installed profile outlives the declaration and nothing enumerates \
+             what temper put there — the file ledger covers deployed files, not \
+             system profiles",
+        ),
+    },
 ];
 
 pub fn spec(name: &str) -> Option<&'static ProviderSpec> {
@@ -374,6 +403,34 @@ mod tests {
     /// missing from it reads as one that does not exist. Docs are compiled into
     /// `--llm`, so a stale matrix does not merely read wrong — it misleads every
     /// agent that builds a spec from it (AGENTS.md).
+    /// …and the reverse: a matrix row with no provider behind it.
+    ///
+    /// The check above runs code→doc only, so `profile` sat in the table for a
+    /// long time with nothing asserting any of its cells. A doc row is a claim;
+    /// a claim wants an owner.
+    #[test]
+    fn every_matrix_row_has_a_provider() {
+        let doc = include_str!("../../../ARCHITECTURE.md");
+        let start = doc.find("### Where each feature stands").expect("matrix section");
+        for line in doc[start..].lines().skip_while(|l| !l.starts_with("| `")) {
+            if !line.starts_with("| `") {
+                break; // end of the table
+            }
+            let name = line
+                .trim_start_matches("| `")
+                .split('`')
+                .next()
+                .unwrap_or_default();
+            // Rows that name several providers at once (`brew` / `cask` / …) are
+            // keyed by the first, which is the one with the spec.
+            assert!(
+                spec(name).is_some(),
+                "ARCHITECTURE's matrix has a row for `{name}` that no ProviderSpec \
+                 answers for — nothing checks any of its eleven cells"
+            );
+        }
+    }
+
     #[test]
     fn every_provider_is_in_the_architecture_matrix() {
         let doc = include_str!("../../../ARCHITECTURE.md");
