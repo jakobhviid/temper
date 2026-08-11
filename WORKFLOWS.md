@@ -153,11 +153,11 @@ passes, costs no prompt at all, because that work won't happen.
 > of promising a quiet run it can't deliver — `Defaults timestamp_type=tty` in sudoers
 > is the fix. Steps temper escalates *itself* (`sysfile`) are unaffected, since temper
 > is the parent. Homebrew asks per cask, and
-because sudo's timestamp expires (5 min by default) during the multi-GB downloads
-in between, a big converge used to prompt over and over, hours apart. temper now
-checks up front whether this run will touch any such package, names them, and
-asks **once** before anything downloads — then holds the timestamp open for the
-rest of the run. Nothing to ask for means no prompt at all: a converged machine,
+and sudo's timestamp expires (5 min by default) during the multi-GB downloads in
+between, so a big converge would otherwise prompt over and over, hours apart.
+temper checks up front whether this run will touch any such package, names them,
+and asks **once** before anything downloads — then holds the timestamp open for
+the rest of the run. Nothing to ask for means no prompt at all: a converged machine,
 a spec with no pkg-based casks, and every read-only verb stay password-free, and
 so does `--dry-run`. Set `TEMPER_NO_SUDO_KEEPALIVE=1` to opt out (you'll get
 Homebrew's per-cask prompts back). App Store prompts are Apple's own and can't be

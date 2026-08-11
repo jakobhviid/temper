@@ -121,8 +121,6 @@ If temper applies it, `drift` can check it — including things pushed to `exec`
 absent, mode, contains-line, not-member, executable-resolves,
 json-semantic, shell). Enforcement that re-runs every `update` (git identity,
 default shell) uses `run = always` + a drift hook so it stays checkable.
-This principle is what the sanity-check added — the first draft silently dropped
-a third of `just drift`'s value.
 
 The converse matters as much: **nothing is *reported* without a resolution
 story.** Items temper can't repair are still drift-*reported* as **status-only**,

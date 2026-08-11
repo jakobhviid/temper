@@ -1,10 +1,12 @@
 # temper — Architecture
 
-> **Status: design, sanity-checked.** Drafted from the design conversation,
-> then checked against the **entire** ReinstallScripts repo (Mac tree, the
-> 1,399-line Linux justfile, and the Linux libs + `install-bazzite.sh`) on
-> 2026-07-27. The gaps that pass surfaced are folded in below. Still design, not
-> code — but no longer un-vetted.
+> **This describes the shipped software.** Where a capability is partial or
+> absent the feature matrix below says so per column, and `ROADMAP.md` carries
+> the parked items — read those two together before concluding temper does
+> something. The model here was checked against the **entire** ReinstallScripts
+> repo (Mac tree, the 1,399-line Linux justfile, the Linux libs and
+> `install-bazzite.sh`), which is where several of the gaps in the matrix come
+> from.
 
 ## What temper is
 

@@ -115,6 +115,23 @@ a hand-maintained `strip` list that silently rotted whenever you forgot an entry
 | a key you want **always absent** | the absence primitive, not a captured value |
 | genuinely machine-specific live state | a narrowly-rooted `[[machine.dconf]]`, still supported |
 
+You need `settings_path` only where the extension is **not installed on the box
+you are editing from** — there is no schema to read there, so temper says so and
+leaves the file alone rather than emptying it. Read the subtree off a machine
+that does have it:
+
+```sh
+grep -ho 'path="[^"]*"' ~/.local/share/gnome-shell/extensions/<uuid>/schemas/*.gschema.xml
+```
+
+**Capture writes only files this machine owns.** An extension's settings inherit
+the scope of whatever declared it, so one declared in a shared bundle has a
+group-scope file: `snapshot-dconf` names and skips it, and `reconcile` reports
+its keys without offering to absorb them. Pass `--include-shared` to author the
+group's settings from one box deliberately. Restore and drift are unrestricted —
+a shared file is meant to be applied to and compared against every machine that
+composes the bundle.
+
 **`strip` keeps only part of its ownership job.** Any dconf key a `setkey` step
 declares is excluded from capture and from drift automatically, and a capture
 reports how many it left out. A `strip` entry naming exactly that key is
