@@ -902,23 +902,44 @@ fn reject_bad_dconf_paths(ft: &TemperToml) -> Result<()> {
 /// than at the end of a converge.
 fn reject_bad_retire(ft: &TemperToml) -> Result<()> {
     for m in &ft.machine {
-        for r in &m.retire {
-            let t = r.trim();
-            if t.is_empty() {
-                anyhow::bail!(
-                    "machine '{}' has an empty `retire` entry — it matches nothing \
-                     and would be silently ignored",
-                    m.name
-                );
-            }
-            if matches!(t, "/" | "~" | "~/") {
-                anyhow::bail!(
-                    "machine '{}' declares `retire = [\"{t}\"]` — temper will not \
-                     remove your home directory or the filesystem root",
-                    m.name
-                );
-            }
+        validate_retire(&m.retire, &m.retire_packages, &format!("machine '{}'", m.name))?;
+    }
+    Ok(())
+}
+
+/// Both retirement lists, at either scope.
+///
+/// `retire_packages` was the forgiving one: `run_prune` parsed each token with
+/// `if let Ok(..)` and skipped what did not parse, so a typo retired nothing,
+/// reported nothing and looked exactly like it had worked. `packages` errors on
+/// the same token, naming it — the two fields disagreed about whether a
+/// malformed Brewfile line is a mistake.
+pub fn validate_retire(paths: &[String], tokens: &[String], whose: &str) -> Result<()> {
+    for r in paths {
+        let t = r.trim();
+        if t.is_empty() {
+            anyhow::bail!(
+                "{whose} has an empty `retire` entry — it matches nothing and \
+                 would be silently ignored"
+            );
         }
+        if matches!(t, "/" | "~" | "~/") {
+            anyhow::bail!(
+                "{whose} declares `retire = [\"{t}\"]` — temper will not remove \
+                 your home directory or the filesystem root"
+            );
+        }
+    }
+    for token in tokens {
+        if token.trim().is_empty() {
+            anyhow::bail!(
+                "{whose} has an empty `retire_packages` entry — it matches nothing \
+                 and would be silently ignored"
+            );
+        }
+        crate::packages::parse(token).with_context(|| {
+            format!("{whose} has a `retire_packages` entry that is not a package token")
+        })?;
     }
     Ok(())
 }
@@ -975,7 +996,9 @@ pub fn load_bundle(home: &Path, name: &str) -> Result<Bundle> {
         std::fs::read_to_string(&p).with_context(|| format!("reading bundle {}", p.display()))?;
     match toml::from_str::<Bundle>(&s) {
         Ok(b) => {
-            no_duplicate_uuids(&b.gnome_extensions, &format!("bundle '{name}'"))?;
+            let whose = format!("bundle '{name}'");
+            no_duplicate_uuids(&b.gnome_extensions, &whose)?;
+            validate_retire(&b.retire, &b.retire_packages, &whose)?;
             Ok(b)
         }
         Err(e) => {
@@ -1569,6 +1592,25 @@ mod tests {
                 "`retire = [{ok:?}]` is an ordinary target"
             );
         }
+
+        // `retire_packages` is the same declaration in a different shape, and
+        // was the forgiving one: `run_prune` skipped what would not parse, so a
+        // typo retired nothing and said nothing. `packages` errors on the very
+        // same token.
+        for bad in ["", "totally not a token", "brew missing-quotes"] {
+            assert!(
+                super::validate_retire(&[], &[bad.to_string()], "machine 't'").is_err(),
+                "`retire_packages = [{bad:?}]` must be rejected"
+            );
+        }
+        assert!(
+            super::validate_retire(&[], &["brew \"old\"".to_string()], "machine 't'").is_ok()
+        );
+
+        // Both fields exist on a bundle too, and the check is shared — the
+        // adjacent scope is where the first version of this stopped.
+        let b: Bundle = toml::from_str("retire_packages = [\"nonsense\"]").unwrap();
+        assert!(super::validate_retire(&b.retire, &b.retire_packages, "bundle 'a'").is_err());
     }
 
     /// A dconf subtree must start and end with `/`.
