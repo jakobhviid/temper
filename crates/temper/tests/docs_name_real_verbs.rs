@@ -111,3 +111,50 @@ fn every_documented_command_is_a_canonical_verb() {
          still works, which is exactly why nothing else catches this: {bad:#?}"
     );
 }
+
+/// Every doc in the repo is either compiled into `--llm` or explicitly exempt.
+///
+/// AGENTS.md: the operating documents "are **compiled into `temper --llm`**" —
+/// that guide is how humans *and* LLMs learn to author a folder. A doc added
+/// without an `include_str!` is invisible to every downstream agent, and nothing
+/// would say so. The exemption list is short and each entry has a reason, so
+/// adding a doc forces the choice rather than defaulting to "forgotten".
+#[test]
+fn every_doc_is_embedded_in_the_llm_guide_or_exempt() {
+    let main_rs = include_str!("../src/main.rs");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("repo root");
+
+    // Instructions for people (and agents) *working on temper*, not for anyone
+    // authoring a folder — so they deliberately do not ride `--llm`.
+    let exempt = ["AGENTS.md", "CLAUDE.md"];
+
+    let mut missing = Vec::new();
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&root).expect("read repo root") {
+        let path = entry.expect("dir entry").path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.ends_with(".md") {
+            continue;
+        }
+        seen += 1;
+        if exempt.contains(&name) {
+            continue;
+        }
+        if !main_rs.contains(&format!("{name}\")")) {
+            missing.push(name.to_string());
+        }
+    }
+    assert!(seen >= 8, "only found {seen} docs — the scan is not seeing the root");
+    missing.sort();
+    assert!(
+        missing.is_empty(),
+        "these docs are not compiled into `temper --llm`, so nothing reading that \
+         guide can see them — embed them, or add them to `exempt` with a reason: \
+         {missing:?}"
+    );
+}
