@@ -40,7 +40,10 @@ So a change to behaviour ships with the doc change **in the same commit**:
 - **Touched the schema** (a serde struct / manifest field / allowed value /
   `deny_unknown_fields`, a `setkey` backend, a primitive)? Update **`SPEC.md`** —
   it is the **parser-of-record** and must match the serde structs *exactly*,
-  including the "Not in the schema" list. Add/adjust a worked example.
+  including the "Not in the schema" list. Add/adjust a worked example. A test
+  scrapes the structs and fails on a field SPEC does not name, so this half is
+  mechanical; the worked example and the "Not in the schema" list are still
+  yours.
 - **Added/changed/removed a verb, flag, or its behaviour**? Update the clap
   help (it renders into `--llm`), **`WORKFLOWS.md`** (the operating loops), and
   the **`README.md`** if it changes what the tool is or how you start.
