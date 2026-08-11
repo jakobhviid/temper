@@ -129,7 +129,8 @@ gnome_extensions = [                        # optional; for THIS machine, unione
     { uuid = "gravatar@dsheeler.net", settings = "assets/gnome/ext/gravatar.dconf", settings_path = "/org/gnome/shell/extensions/gravatar/" },
 ]                                           # NB: an inline table must be on ONE
                                             #   line — TOML 1.0 does not allow it
-                                            #   to span them, however long it gets.                                           # A bare uuid means installed AND
+                                            #   to span them, however long it gets.
+                                            # A bare uuid means installed AND
                                             #   enabled. The table form says
                                             #   otherwise: `enabled = false` is
                                             #   "keep it installed, switched off",
