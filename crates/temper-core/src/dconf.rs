@@ -440,8 +440,13 @@ pub fn owned_elsewhere(home: &Path, machine: &Machine, snap: &DconfSnapshot) -> 
     let mut subtrees = Vec::new();
     for other in all_snapshots(home, machine)? {
         // Only snapshots strictly deeper than this one, and never itself.
-        if other.path.len() > snap.path.len() && other.path.starts_with(&snap.path) {
-            let rel = other.path[snap.path.len()..].trim_start_matches('/');
+        // Compared with the trailing `/` on both sides, so `/org/gnome/shell/`
+        // cannot claim `/org/gnome/shellfoo/`. The manifest validator enforces
+        // that shape, and this does not rely on it having run.
+        let mine = format!("{}/", snap.path.trim_end_matches('/'));
+        let theirs = format!("{}/", other.path.trim_end_matches('/'));
+        if theirs.len() > mine.len() && theirs.starts_with(&mine) {
+            let rel = theirs[mine.len()..].trim_start_matches('/');
             if !rel.is_empty() {
                 let rel = rel.trim_end_matches('/');
                 subtrees.push(format!("{rel}/"));
@@ -750,6 +755,39 @@ mod subtree_ownership_tests {
             !out.contains("layouts-json"),
             "the owned subtree must be gone — two files must not hold it:\n{out}"
         );
+    }
+
+    /// A sibling whose name merely starts the same is not a subtree.
+    ///
+    /// Ownership compares paths by prefix, so `/org/gnome/shell` (no trailing
+    /// slash) would match `/org/gnome/shellfoo/` and silently swallow a
+    /// neighbouring subtree. The manifest validator now rejects that shape, and
+    /// the comparison normalises anyway — a safety property should not depend on
+    /// a validator elsewhere having run.
+    #[test]
+    fn a_neighbouring_subtree_is_not_swallowed() {
+        let snap = |p: &str| crate::manifest::DconfSnapshot {
+            path: p.into(),
+            file: "f".into(),
+            strip: Vec::new(),
+            label: None,
+        };
+        // Same computation `owned_elsewhere` does, on the pair that used to
+        // collide.
+        let rel = |mine: &str, theirs: &str| -> Option<String> {
+            let a = format!("{}/", snap(mine).path.trim_end_matches('/'));
+            let b = format!("{}/", snap(theirs).path.trim_end_matches('/'));
+            (b.len() > a.len() && b.starts_with(&a))
+                .then(|| b[a.len()..].trim_start_matches('/').to_string())
+        };
+        assert_eq!(rel("/org/gnome/shell", "/org/gnome/shellfoo/"), None);
+        assert_eq!(rel("/org/gnome/shell/", "/org/gnome/shellfoo/"), None);
+        assert_eq!(
+            rel("/org/gnome/shell/", "/org/gnome/shell/extensions/x/"),
+            Some("extensions/x/".into())
+        );
+        // A snapshot never owns itself.
+        assert_eq!(rel("/org/gnome/shell/", "/org/gnome/shell/"), None);
     }
 
     /// Subtree ownership is a prefix; key ownership is not.

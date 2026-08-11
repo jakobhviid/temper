@@ -193,7 +193,12 @@ BREW_PREFIX = "/home/linuxbrew/.linuxbrew"   # e.g. override a Mac-valued global
                             #   dconf is the store, and it is present under KDE too,
                             #   while a macOS equivalent would be `defaults` and a
                             #   different feature entirely.
-path  = "/org/gnome/shell/"                 # subtree to dump/load (trailing /)
+path  = "/org/gnome/shell/"                 # subtree to dump/load. Leading AND
+                                            #   trailing `/` — both are checked at
+                                            #   load, because `dconf dump` rejects
+                                            #   a path without the trailing one
+                                            #   and subtree ownership compares
+                                            #   these by prefix.
 file  = "assets/gnome/shell.chronos.dconf"  # snapshot writes here; restore reads
 strip = ["monitors/", "last-selected"]      # NOISE only: key substrings that would
                                             #   corrupt a capture/restore round-trip.

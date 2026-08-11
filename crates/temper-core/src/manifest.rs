@@ -854,6 +854,31 @@ fn reject_duplicate_extensions(ft: &TemperToml) -> Result<()> {
     Ok(())
 }
 
+/// A `[[machine.dconf]].path` must be an absolute dconf directory — leading and
+/// trailing `/`.
+///
+/// SPEC has always said so and nothing checked it. `dconf dump` rejects a path
+/// without the trailing slash, so the failure arrived as a bare "dconf dump …
+/// failed" mid-drift rather than as a manifest error naming the line. It also
+/// broke ownership: subtree ownership compares paths by prefix, and without the
+/// trailing slash `/org/gnome/shell` matches `/org/gnome/shellfoo/` — a
+/// neighbouring subtree silently swallowed.
+fn reject_bad_dconf_paths(ft: &TemperToml) -> Result<()> {
+    for m in &ft.machine {
+        for d in &m.dconf {
+            if !d.path.starts_with('/') || !d.path.ends_with('/') {
+                anyhow::bail!(
+                    "machine '{}' has a [[machine.dconf]] path '{}' — a dconf \
+                     subtree must start and end with '/' (e.g. \"/org/gnome/shell/\")",
+                    m.name,
+                    d.path
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn load_fleet(home: &Path) -> Result<TemperToml> {
     let p = home.join("temper.toml");
     let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
@@ -861,6 +886,7 @@ pub fn load_fleet(home: &Path) -> Result<TemperToml> {
         Ok(ft) => {
             reject_duplicate_machines(&ft)?;
             reject_duplicate_extensions(&ft)?;
+            reject_bad_dconf_paths(&ft)?;
             Ok(ft)
         }
         // Couldn't parse. Version skew (a newer temper's field) or a genuine
@@ -1466,6 +1492,30 @@ mod tests {
             ),
             PullMode::Rebase
         );
+    }
+
+    /// A dconf subtree must start and end with `/`.
+    ///
+    /// SPEC has always said so and nothing checked it, so the failure arrived as
+    /// a bare "dconf dump … failed" mid-drift instead of a manifest error naming
+    /// the line.
+    #[test]
+    fn a_dconf_path_must_be_a_subtree() {
+        let doc = |path: &str| {
+            format!(
+                "[[machine]]\nname = \"t\"\nos = \"linux\"\n\n\
+                 [[machine.dconf]]\npath = \"{path}\"\nfile = \"f.dconf\"\n"
+            )
+        };
+        for bad in ["/org/gnome/shell", "org/gnome/shell/", "shell"] {
+            let ft: TemperToml = toml::from_str(&doc(bad)).unwrap();
+            assert!(
+                super::reject_bad_dconf_paths(&ft).is_err(),
+                "`{bad}` is not a dconf subtree and must be rejected"
+            );
+        }
+        let ft: TemperToml = toml::from_str(&doc("/org/gnome/shell/")).unwrap();
+        assert!(super::reject_bad_dconf_paths(&ft).is_ok());
     }
 
     /// A uuid declared twice in one machine's list is rejected, not merged.
