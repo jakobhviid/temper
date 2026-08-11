@@ -424,7 +424,13 @@ Three consequences follow, and they are the reason for the split:
   installed and switched off. temper asserts its own declarations with
   `gnome-extensions enable/disable` — a **union**, never a rewrite of
   `enabled-extensions`, which would drop the image-baked extensions temper does
-  not declare. Previously these were two unlinked facts, so a uuid enabled in a
+  not declare.
+
+  A `/org/gnome/shell/` snapshot carries that key too, so `restore-dconf`
+  rewrites what the declaration asserts. **The declaration wins**: restore
+  re-asserts the declared uuids' state once the load is done, so the result does
+  not depend on whether you ran `install` or `restore-dconf` last. Only declared
+  uuids — whatever the snapshot restored for the rest stands. Previously these were two unlinked facts, so a uuid enabled in a
   snapshot but declared nowhere got switched on by `restore` and never installed
   by `install`; GNOME fails soft, so nothing said so.
 - **`strip` goes back to one job.** Its ownership half is **derived**: temper

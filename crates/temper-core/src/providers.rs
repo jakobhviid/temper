@@ -2363,6 +2363,17 @@ fn brew_extras_inner(
         .context("running brew bundle cleanup")?;
     let _ = fs::remove_file(&tmp);
 
+    // `cleanup` without `--force` is a read-only listing, so a non-zero exit
+    // means it could not answer — not that there is nothing to report. Parsing
+    // the output anyway turned a broken tap into "zero extras", which reads
+    // exactly like a clean machine, and `prune` then had nothing to offer.
+    if !out.status.success() {
+        eprintln!(
+            "{} `brew bundle cleanup` failed — brew extras not computed this run",
+            crate::ui::yellow(crate::ui::g_warn())
+        );
+        return Ok(Vec::new());
+    }
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
     let ignored: HashSet<&str> = ignore

@@ -2423,7 +2423,22 @@ pub fn run_snapshot(home: &Path, machine: &Machine) -> Result<Vec<std::path::Pat
 /// confirms first — this clobbers live desktop state (never run by `update`).
 /// Journaled per subtree, so `undo` reverts it.
 pub fn run_restore(home: &Path, machine: &Machine, dry_run: bool) -> Result<Vec<std::path::PathBuf>> {
-    crate::dconf::restore(home, machine, dry_run)
+    let loaded = crate::dconf::restore(home, machine, dry_run)?;
+    // A `/org/gnome/shell/` snapshot carries `enabled-extensions` and
+    // `disabled-extensions`, so a restore rewrites the very key the declaration
+    // asserts — and whichever of `install` and `restore-dconf` you ran last won.
+    // The declaration is the spec and the snapshot is a recording of the
+    // machine, so the spec is re-asserted afterwards. Only for uuids temper
+    // declares: the image-baked ones the snapshot restored are left exactly as
+    // the snapshot put them.
+    if !dry_run && !loaded.is_empty() {
+        let specs = providers::effective_extension_specs(home, machine)?;
+        let drift = providers::gext_enable_drift(&specs);
+        if !drift.is_empty() {
+            providers::gext_enable_converge(&drift, false)?;
+        }
+    }
+    Ok(loaded)
 }
 
 /// Adopt (advisory v1): report the installed extras so they can be added to a
