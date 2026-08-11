@@ -125,10 +125,10 @@ gnome_extensions = [                        # optional; for THIS machine, unione
                                             #   one entry per extension, carrying
                                             #   whichever fields it needs.
     { uuid = "CoverflowAltTab@palatis.blogspot.com", enabled = false },
-    { uuid = "tilingshell@ferrarodomenico.com",
-      enabled = true,
-      settings = "assets/gnome/ext/tilingshell.dconf" },
-]                                           # A bare uuid means installed AND
+    { uuid = "tilingshell@ferrarodomenico.com", enabled = true, settings = "assets/gnome/ext/tilingshell.dconf" },
+]                                           # NB: an inline table must be on ONE
+                                            #   line — TOML 1.0 does not allow it
+                                            #   to span them, however long it gets.                                           # A bare uuid means installed AND
                                             #   enabled. The table form says
                                             #   otherwise: `enabled = false` is
                                             #   "keep it installed, switched off",
@@ -315,15 +315,18 @@ retire_packages = ["brew \"old\""]     #   scope, gated with the bundle.
 flatpak_remotes = ["vendor https://example.com/vendor.flatpakrepo"]
                                      # remotes this bundle's apps come from —
                                      #   GROUP scope, gated with the bundle.
-[ignore]                             # extras this bundle knows aren't worth
-flatpak = ["org.example.Baseline"]   #   reporting (the OS baseline it brings).
-
 packages       = ["brew \"jq\""]     # Brewfile-grammar tokens (all-OS)
 packages_mac   = []                  # mac-only
 packages_linux = []                  # linux-only
 gnome_extensions = ["ext@uuid"]      # GNOME extensions (Linux) — os/role-gated
 rpm_ostree     = ["proton-vpn-gnome-desktop"]  # rpm-ostree layered (Linux) — os/role-gated
                                      #   (old name `rpm` still parses)
+
+# Every bundle-level key must come BEFORE the first table header: once `[ignore]`
+# is open, TOML reads what follows as belonging to it, so a `packages` line below
+# this point is `[ignore].packages` and fails to parse.
+[ignore]                             # extras this bundle knows aren't worth
+flatpak = ["org.example.Baseline"]   #   reporting (the OS baseline it brings).
 
 [[step]]   # ordered; each step sets EXACTLY ONE primitive
 # … see steps below …
@@ -499,10 +502,20 @@ group   = "root"                              # drift compares content+mode+owne
 ## Assertions (`[[assert]]`) — drift-only, one check each
 
 ```toml
-[[assert]] absent = "~/.zshrc.local"                       # must NOT exist
-[[assert]] contains_line = { file = "~/.zshrc", line = "source ~/.zshrc.image" }
-[[assert]] mode = { path = "/etc/x", mode = "0644" }       # octal file mode
-[[assert]] executable_resolves = "git"                     # on PATH
+# One `[[assert]]` header per check, each on its own line — TOML does not allow
+# a table header and a key to share a line, so `[[assert]] absent = "…"` is a
+# parse error however readable it looks.
+[[assert]]
+absent = "~/.zshrc.local"                       # must NOT exist
+
+[[assert]]
+contains_line = { file = "~/.zshrc", line = "source ~/.zshrc.image" }
+
+[[assert]]
+mode = { path = "/etc/x", mode = "0644" }       # octal file mode
+
+[[assert]]
+executable_resolves = "git"                     # on PATH
 
 # Any assertion may add:
 #   severity = "notice"   # default "drift". A NOTICE reports a STATE, not a
@@ -520,9 +533,16 @@ group   = "root"                              # drift compares content+mode+owne
 #   absent   = "/run/ostree/staged-deployment"
 #   severity = "notice"
 #   message  = "a system update is staged — reboot to apply it"
-[[assert]] not_member = { group = "onepassword" }          # user NOT in group
-[[assert]] shell = "/bin/zsh"                              # login shell name (matches by basename: /usr/bin/zsh ok)
-[[assert]] json_semantic = { file = "~/deployed.json", against = "reference.json" }  # against: relative to the temper-home
+[[assert]]
+not_member = { group = "onepassword" }          # user NOT in group
+
+[[assert]]
+shell = "/bin/zsh"          # login shell name (matches by basename: /usr/bin/zsh ok)
+
+[[assert]]
+json_semantic = { file = "~/deployed.json", against = "reference.json" }
+                            # `against` is relative to the temper-home
+
 # each also accepts os = "mac"|"linux" and role = "desktop"|"server" (skip on mismatch)
 ```
 
