@@ -283,7 +283,18 @@ impl Columns {
     /// plain text too — slicing a coloured string would cut an escape sequence in
     /// half and bleed the colour down the rest of the terminal.
     pub fn parts(&self, cells: &[&str]) -> Vec<(String, usize)> {
-        let cells = self.fitted(cells);
+        self.parts_within(cells, term_cols())
+    }
+
+    /// `parts`, told the terminal width rather than asking for it.
+    ///
+    /// The squeeze behaviour depends on whether stdout is a terminal, and a test
+    /// that asks the *harness* about that is testing the runner: under a pty —
+    /// `docker run -t`, `script`, some CI images — stdout IS a terminal and the
+    /// assertion inverts. `None` is the redirected case, and it is now something
+    /// a test can say rather than something it has to hope for.
+    pub fn parts_within(&self, cells: &[&str], cols: Option<usize>) -> Vec<(String, usize)> {
+        let cells = self.fitted(cells, cols);
         let last = cells.len().saturating_sub(1);
         cells
             .iter()
@@ -312,7 +323,7 @@ impl Columns {
 
     /// Cells elided to their caps, and the flex column squeezed if the row would
     /// otherwise wrap. Plain text only — see [`Columns::parts`].
-    fn fitted(&self, cells: &[&str]) -> Vec<String> {
+    fn fitted(&self, cells: &[&str], cols: Option<usize>) -> Vec<String> {
         let mut cells: Vec<String> = cells
             .iter()
             .enumerate()
@@ -325,7 +336,7 @@ impl Columns {
 
         // Squeeze the flex column if the line would wrap. Only on a terminal:
         // redirected output keeps every character.
-        if let (Some(cols), Some(flex)) = (term_cols(), cells.get(self.flex).cloned()) {
+        if let (Some(cols), Some(flex)) = (cols, cells.get(self.flex).cloned()) {
             let fixed: usize = self.prefix
                 + cells
                     .iter()
@@ -642,14 +653,45 @@ mod column_tests {
         assert_eq!(elide("~/.config/x", 40), "~/.config/x"); // fits → untouched
     }
 
+    /// Redirected output keeps every character: a log is evidence.
+    ///
+    /// This used to open with `assert!(term_cols().is_none())` — an assertion
+    /// about the *harness*, not about temper. Under a pty (`docker run -t`,
+    /// `script`, some CI images) stdout is a terminal and it inverts, taking the
+    /// real assertion with it. The redirected case is now stated, not hoped for.
     #[test]
     fn redirected_output_is_never_shortened() {
-        // The test harness's stdout is not a terminal, which is exactly the case
-        // that must keep every character: a log is evidence.
-        assert!(term_cols().is_none(), "test stdout should not be a tty");
         let r = rows(&[("zsh", "copy")]);
         let c = Columns::measure(&r, 4, &[16, 0, 0], 2);
         let long = "~/".to_string() + &"x/".repeat(200);
-        assert!(c.row(&["zsh", "copy", &long]).contains(&long));
+
+        let parts = c.parts_within(&["zsh", "copy", &long], None);
+        let line: String = parts.iter().map(|(cell, _)| cell.as_str()).collect();
+        assert!(
+            line.contains(&long),
+            "redirected output must keep every character: {line}"
+        );
+    }
+
+    /// …and the other half, which nothing covered: on a terminal the flex column
+    /// gives way so the line does not wrap. Untestable while the width came from
+    /// the harness, because a test runner is not a terminal.
+    #[test]
+    fn a_narrow_terminal_squeezes_the_flex_column() {
+        let r = rows(&[("zsh", "copy")]);
+        let c = Columns::measure(&r, 4, &[16, 0, 0], 2);
+        let long = "~/".to_string() + &"x/".repeat(200);
+
+        let parts = c.parts_within(&["zsh", "copy", &long], Some(80));
+        let line: String = parts.iter().map(|(cell, _)| cell.as_str()).collect();
+        assert!(
+            !line.contains(&long),
+            "an 80-column terminal must not be handed a 400-character cell: {line}"
+        );
+        assert!(
+            width(&line) <= 80,
+            "the squeezed line still wraps at 80 columns: {} wide",
+            width(&line)
+        );
     }
 }
