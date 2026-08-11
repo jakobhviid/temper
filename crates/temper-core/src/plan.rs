@@ -1096,7 +1096,15 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
         "brew-trust",
         "brew-trust-extra",
     ]);
-    let ext_capture = drifted(&["gnome-extension", "gnome-extension-extra"]);
+    // `gnome-extension-enable` belongs here too: reconcile absorbs the enable
+    // state into the machine's own list. Left out, the label's kind list came up
+    // empty on a machine whose only extension finding was an enable — printing
+    // "…on purpose ()" and naming no kind at all.
+    let ext_capture = drifted(&[
+        "gnome-extension",
+        "gnome-extension-extra",
+        "gnome-extension-enable",
+    ]);
 
     let mut out = Vec::new();
     let push = |out: &mut Vec<Remediation>, label: &str, command: &str| {
@@ -1145,10 +1153,19 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
         if dconf_capture {
             parts.push("desktop keys");
         }
-        let label = format!(
-            "interactively add extras / drop entries you removed on purpose ({})",
-            parts.join(", ")
-        );
+        // The parenthetical names which kinds reconcile would act on. If a new
+        // kind names reconcile without joining one of the three buckets above,
+        // omit it rather than print an empty pair of brackets — the label is
+        // still true, and "()" reads as a rendering fault rather than a missing
+        // bucket, which is what sent a reader looking in the wrong place.
+        let label = if parts.is_empty() {
+            "interactively add extras / drop entries you removed on purpose".to_string()
+        } else {
+            format!(
+                "interactively add extras / drop entries you removed on purpose ({})",
+                parts.join(", ")
+            )
+        };
         push(&mut out, &label, "temper reconcile");
     }
     if absorbs("temper snapshot-dconf") {
@@ -3227,5 +3244,57 @@ mod root_step_tests {
              [[step]]\nexec = \"assets/manual.sh\"\nsudo = true\nrun = \"manual\"\n",
         );
         assert!(own.is_empty() && scripts.is_empty(), "{own:?} {scripts:?}");
+    }
+}
+
+#[cfg(test)]
+mod remediation_label_tests {
+    use super::{remediations, Finding};
+
+    fn finding(kind: &'static str) -> Finding {
+        Finding {
+            app: "gnome-extensions".into(),
+            kind,
+            target: "x@y".into(),
+            ok: false,
+            status: "enabled".into(),
+            detail: None,
+        }
+    }
+
+    /// A machine whose only extension finding is an enable-state must still be
+    /// told what `reconcile` would absorb.
+    ///
+    /// `gnome-extension-enable` gained `temper reconcile` as an answer without
+    /// joining the kind list the label is built from, so the line rendered as
+    /// "…on purpose ()" — offering the verb while naming nothing it would touch.
+    #[test]
+    fn an_enable_finding_names_gnome_extensions_in_the_label() {
+        let out = remediations(&[finding("gnome-extension-enable")]);
+        let rec = out
+            .iter()
+            .find(|r| r.command == "temper reconcile")
+            .expect("an enable finding must offer reconcile");
+        assert!(
+            rec.label.contains("GNOME extensions"),
+            "the label does not say what reconcile would absorb: {}",
+            rec.label
+        );
+        assert!(
+            !rec.label.contains("()"),
+            "empty kind list rendered as brackets: {}",
+            rec.label
+        );
+    }
+
+    /// The guard itself: whatever the buckets say, the label never renders an
+    /// empty pair of brackets.
+    #[test]
+    fn no_reconcile_label_ever_renders_empty_brackets() {
+        for kind in ["gnome-extension", "gnome-extension-extra", "gnome-extension-enable"] {
+            for r in remediations(&[finding(kind)]) {
+                assert!(!r.label.contains("()"), "{kind}: {}", r.label);
+            }
+        }
     }
 }
