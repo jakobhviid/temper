@@ -158,6 +158,72 @@ fn every_reconcile_plan_field_is_enumerated_by_items() {
 /// did — the one command whose whole job is putting things back — and then
 /// `configure set|unset`. Three instances of one omission, none of which any
 /// test could see.
+/// Every candidate list a `PrunePlan` declares is enumerated by `items()`.
+///
+/// The same guarantee `ReconcilePlan` has above, on the verb where it matters
+/// more: `items()` feeds the count, the confirm ("remove N item(s) **listed
+/// above**"), the preview and the `--json` document, so a field it misses is
+/// deleted without ever being shown. That has happened twice — `len()` once
+/// summed two of three lists and `prune` uninstalled three GNOME extensions
+/// after asking to remove zero, and later `flatpak_remotes` and `retired` were
+/// counted but never printed.
+///
+/// `residue_edited` is the one deliberate exception: it is **reported**, never
+/// removed, so counting it would claim work that does not happen.
+#[test]
+fn every_prune_plan_field_is_enumerated_by_items() {
+    let src = include_str!("../../temper-core/src/plan.rs");
+
+    let struct_body = {
+        let start = src.find("pub struct PrunePlan {").expect("PrunePlan struct");
+        let rest = &src[start..];
+        &rest[..rest.find("\n}").expect("struct end")]
+    };
+    let fields: Vec<&str> = struct_body
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("pub "))
+        .filter_map(|l| l.split_once(':'))
+        .map(|(name, _)| name.trim())
+        // Reported, never removed — see above.
+        .filter(|n| *n != "residue_edited")
+        .collect();
+    assert!(fields.len() >= 6, "scrape found too few fields: {fields:?}");
+
+    let items = {
+        let start = src
+            .find("pub fn items(&self) -> Vec<(&'static str, String)> {")
+            .expect("PrunePlan::items()");
+        let rest = &src[start..];
+        &rest[..rest.find("\n    }").expect("items() end")]
+    };
+    for f in &fields {
+        assert!(
+            items.contains(&format!("self.{f}")),
+            "PrunePlan.{f} is never enumerated by items() — it would be counted \
+             and removed without appearing in the preview, the confirm, or --json"
+        );
+    }
+
+    // …and every label `items()` produces is named in `LISTS`, which is what the
+    // preview and the `--json` document iterate.
+    let lists = {
+        let start = src
+            .find("pub const LISTS: &'static [&'static str] = &[")
+            .expect("PrunePlan::LISTS");
+        let rest = &src[start..];
+        &rest[..rest.find("];").expect("LISTS end")]
+    };
+    for (i, _) in items.match_indices("out.push((\"") {
+        let rest = &items[i + "out.push((\"".len()..];
+        let label = &rest[..rest.find('"').expect("label end")];
+        assert!(
+            lists.contains(label),
+            "items() emits the label `{label}` but LISTS does not name it — the \
+             preview and --json iterate LISTS, so it would be invisible in both"
+        );
+    }
+}
+
 #[test]
 fn every_folder_writing_verb_fires_the_repo_hook() {
     let cli_src = include_str!("../src/main.rs");
