@@ -41,9 +41,12 @@ So a change to behaviour ships with the doc change **in the same commit**:
   `deny_unknown_fields`, a `setkey` backend, a primitive)? Update **`SPEC.md`** —
   it is the **parser-of-record** and must match the serde structs *exactly*,
   including the "Not in the schema" list. Add/adjust a worked example. A test
-  scrapes the structs and fails on a field SPEC does not name, so this half is
-  mechanical; the worked example and the "Not in the schema" list are still
-  yours.
+  scrapes **every** struct that derives `Deserialize` — the list is derived, so a
+  new one joins by existing — and fails unless SPEC shows each field the way you
+  would write it: an assignment (`name = …`) or a table header (`[name]`).
+  Mentioning the word in prose does not count, because that let `os`, `key` and
+  `in` pass without being documented at all. So this half is mechanical; the
+  worked example and the "Not in the schema" list are still yours.
 - **Added/changed/removed a verb, flag, or its behaviour**? Update the clap
   help (it renders into `--llm`), **`WORKFLOWS.md`** (the operating loops), and
   the **`README.md`** if it changes what the tool is or how you start. Renaming

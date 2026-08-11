@@ -387,7 +387,12 @@ leaves it alone rather than re-opening System Settings every run). Presence gate
 `needs = { <probe> }` errors unless it passes. A probe is exactly one of
 `binary` / `path` / `brew` / `cask` / `flatpak` / `mas` / `gext` / `rpm` /
 `exec` (e.g. `when = { binary = "ghostty" }` — deploy ghostty config only where
-ghostty is actually present, however it was installed). `always` re-applies every update (fixes drift); `ensure`
+ghostty is actually present, however it was installed). Each takes the thing it
+looks for: `when = { path = "~/.ssh/config" }`, `when = { brew = "jq" }`,
+`when = { cask = "ghostty" }`, `when = { flatpak = "com.spotify.Client" }`,
+`when = { mas = "1333542190" }`, `when = { gext = "tilingshell@ferrarodomenico.com" }`
+(a GNOME extension uuid), `when = { rpm = "gnome-tweaks" }` (a layered rpm), and
+`when = { exec = "test -d /sys/class/power_supply/BAT0" }`. `always` re-applies every update (fixes drift); `ensure`
 is **install-if-missing** on update (creates an absent target, never overwrites
 a present one — an `exec` `ensure` needs a `check` to be applied on update,
 without one it's skipped); `manual` is skipped by automated flows — run it only
