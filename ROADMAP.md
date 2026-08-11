@@ -1,10 +1,15 @@
 # ROADMAP.md — temper's deferred features & scope
 
-What we intend to build (parked, not broken), the **workflow/HMI parity gaps**
-against the ReinstallScripts recipes temper generalizes, what's deliberately
-**not** temper's job, one **restructuring** weighed and declined, and the
-migration-verification gap. Each item has why it's
+**Bugs** — behaviour that is wrong rather than unbuilt — then the **scope-model
+gaps** (each a filled ⚠ or ❌ in the feature matrix), what's deliberately **not**
+temper's job, one **restructuring** weighed and declined, the macOS claims only a
+Mac can settle, and the migration-verification gap. Each item has why it's
 parked, the current mitigation, and enough of a sketch to act on cold.
+
+**Nothing shipped stays in this file.** A roadmap that inventories finished work
+reads as work outstanding, and every reader has to diff it against reality to
+find the live items. Git keeps the record, with dates and diffs. When something
+lands, delete its entry rather than annotating it.
 
 This file **is** embedded in `--llm`, because what is *not* built is as
 load-bearing for an agent authoring a folder as what is: without it, a feature
@@ -19,48 +24,68 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 
 ---
 
+## Bugs
+
+**temper writes flatpaks to one installation and removes them from the other.**
+The converge runs `flatpak install -y --noninteractive` with **no scope flag**,
+whose default is the **system** installation, while `prune`
+(`providers.rs::prune_extras`) and `undo` (`journal.rs`) pass `--user`. Where the
+two disagree — the ordinary case, since flatpak's own default and every desktop
+storefront's (GNOME Software, KDE Discover, Bazaar) is the system installation —
+`prune` removes nothing temper installed and `undo` reverts nothing. Both report
+success, each truthfully describing an installation the apps are not in.
+
+**The bar is the storefront the desktop already ships: if a user can delete an app
+by clicking in it, `temper prune` has to be able to remove it.** temper owns the
+installation its converge writes to.
+
+Privilege is not the obstacle it appears to be. flatpak ships
+`/usr/share/polkit-1/rules.d/org.freedesktop.Flatpak.rules`, which returns `YES` —
+no password at all — for `app-install` / `app-uninstall` / `modify-repo` when
+`subject.active && subject.local && subject.isInGroup("wheel")`. That is why a
+storefront installs and removes system-wide without ever prompting.
+
+The fix, and what must ride with it:
+
+- Drop `--user` from the prune and undo uninstalls so both act on the scope the
+  converge wrote to. The flatpak row's `revertible` column becomes provable.
+- Keep the three-valued read; retarget the decline report. The guard that earns
+  its place is declared-vs-undeclared — the one prune already applies to every
+  other provider, through the preview that names each item and the confirm that
+  defaults to no.
+- **`flatpak_user_apps`' rationale does not survive the move.** It reasons by
+  analogy with `gext`, where system scope means *the image owns it*
+  (`/usr/share/gnome-shell/extensions` — removing one means rebuilding the image).
+  A system-scope flatpak is nothing of the kind: it is where the storefront puts an
+  app the user chose. An image's preinstalled set is an OS baseline like any
+  other, which is what `[ignore].flatpak` is for.
+- **Warn on an unattended run**, exactly as a run needing sudo already does. The
+  polkit rule requires an active local session, so over ssh or from cron it falls
+  through to the action's implicit `auth_admin` with nowhere to answer — and
+  `sudo::acquire` pre-authenticates sudo, not polkit, so this sits outside the
+  one-password-per-run guarantee rather than inside it.
+- Two tests pin the current scope and move with it:
+  `prune_actually_removes.rs` asserts the uninstall carries `--user`, and
+  `prune_promises_what_it_does.rs` fakes flatpak per scope.
+
+**The same defect runs the other way for remotes, and is also live.** temper adds
+declared remotes with `remote-add --user` while installing apps into the system
+installation, and a system install cannot resolve a user remote — so an app
+declared from a vendor remote temper itself added has nowhere to pull from, while
+the declaration reads as satisfied, because remotes are observed in **both**
+installations. Whichever installation temper settles on, apps and remotes have to
+name the same one.
+
 ## Scope-model gaps (known, ranked, each one a filled ⚠ or ❌ in the feature matrix)
 
-**Which flatpak installation temper owns.** flatpak has two installations, and
-temper currently uses different ones in different directions: `install` runs
-`flatpak install` with no scope flag, whose default is the **system**
-installation, while `prune` and `undo` pass `--user`. On a host whose apps are
-all system-scope — any image-based one; the box this was found on has 83 apps
-and **zero** in the user installation — that means prune removes nothing temper
-installed and undo reverts nothing, silently.
-
-Neither direction is obviously the right one to change:
-
-- Passing `--user` to `install` does **not** work as-is: a user-scope operation
-  cannot see a system remote (`flatpak remote-info --user flathub …` → *"Remote
-  not found in the user installation"*), so an image's system `flathub` would
-  stop resolving. It would need temper to add a user copy of every declared
-  remote, duplicating what the machine already has and re-downloading apps that
-  are already present system-wide.
-- Letting `prune`/`undo` act on the system installation makes them able to
-  remove image-baked apps, needs polkit, and can hang over ssh. `[ignore]` and
-  the confirm are the existing guards, and they may well be enough — but that is
-  a fleet-behaviour decision, not a cleanup.
-
-Until it is decided, the honest state is recorded rather than papered over:
-`interface.rs` scores flatpak `revertible` as **No** with the reason. `prune`
-stays **Yes** — it removes the user-scope apps and *reports* the system-scope
-ones it declined, which is a real path with an honest answer. The
-remote provider is settled by contrast — remotes are **observed in both**
-installations (so a declared remote the image provides is not permanently
-missing, and no duplicate user copy is added) and **written to the user** one,
-which is the only one `remote-delete` may act on.
-
-**The rest of the matrix's open cells**, so the summary and the table agree —
-this file rides `--llm` precisely so an agent can tell a working cell from a
-broken one, and it previously said "none open" over a table with fifteen marks
-in it.
+**The matrix's open cells**, so the summary and the table agree — this file rides
+`--llm` precisely so an agent can tell a working cell from a broken one.
 
 - **`revertible` on `brew-trust` and `flatpak-remote`** — neither `brew trust`
   nor `flatpak remote-add` is journaled. The pattern applies (the missing set is
   known before the converge, uninstall is install backwards); it is unwired.
   `install --packages-only` names them at plan time rather than pretending.
-- **`revertible` on `flatpak`** — the installation question above.
+- **`revertible` on `flatpak`** — the installation bug above.
 - **`dconf`**: `install` is ⚠ because `restore` is excluded from
   `install`/`update` (reloading a snapshot would clobber live tweaks — a
   property of the *recording model*, not of the store); `prune` is ❌ because a
@@ -91,39 +116,11 @@ the best candidate — sectioned key=value, one file per app, no cascade, no fla
 syntax, no reload problem — and is valuable to a Linux fleet on its own. KDE is
 the worst candidate to shape a seam around, because every hard case lives there.
 
-## Deferred features (buildable — just not built yet)
-
-*(none open — the deferred batch has shipped: per-machine vars + `{{ brew_prefix }}`,
-bundle os/role gating, presence-gating `when`/`needs`, forgiving `mas`, the
-`sysfile` primitive, comment-preserving `setkey(toml)`, journaled+undoable
-`setkey(dconf)`, discovery auto-scan + `temper setup`, key-level dconf drift +
-per-section reconcile, a journaled `restore-dconf`, `reconcile --current-state-wins`,
-and `temper init`.)*
-
 **Deliberately not journaled** (a decision, not a gap): `setkey(defaults)` —
 `defaults read` loses the value's type, so an undo couldn't rewrite it faithfully
 — and `sysfile`/`exec`, which mutate root-owned/arbitrary state. dconf *is*
 journaled (values round-trip cleanly) — per key for `setkey(dconf)`, and per
 subtree for `restore-dconf`.
-
----
-
-## Workflow & HMI parity gaps (ReinstallScripts)
-
-The features above are self-contained primitives. These were about the **loop** —
-change → drift → decide direction → run the named command — that ReinstallScripts
-emits *at the moment of detection*. Surfaced by comparing temper against the RIS
-`just` recipes and by LLM + human review.
-
-**All shipped.** The reviewer-flagged batch is built — `drift` renders grouped,
-coloured output with a **"Next steps"** summary that names both directions out of
-the drift with exact commands (`plan::remediations`; the RIS four-branch package
-fork + a config `install`/`undo` line, also in `--json`); `reconcile` is the
-interactive spec←machine verb; `install --packages-only` is install-missing; the
-filtered `snapshot-dconf` + confirm-gated `restore-dconf` pair is built (with dconf
-drift and per-section reconcile on top, and a journaled restore); and
-`eq-import` pulls calibrated speaker profiles into the folder (folder-authoring,
-the labelled Principle-#9 exception).
 
 ---
 
@@ -210,7 +207,7 @@ rpm_ostree_extras(&[String], &Ignore) -> Vec<String>
 **Why the full version is the wrong trade.** The providers do not differ because
 the code is untidy. They differ because the *domain* does: brew manages three
 namespaces at once, rpm-ostree converges into a deployment that needs a reboot,
-flatpak has two installations whose asymmetry cannot be resolved from one side,
+flatpak has two installations every direction must name the same one of,
 mas is one platform with an auth state that is an ordinary condition rather than
 a failure. A trait asserts these are one kind of thing with different
 implementations, and the evidence says they are partly different kinds of thing.

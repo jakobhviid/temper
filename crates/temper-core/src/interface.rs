@@ -134,12 +134,12 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         ignore: Col::Yes,
         // Not the same claim. `install` runs `flatpak install` with no scope
         // flag, whose default is the SYSTEM installation, while undo uninstalls
-        // `--user` — so on an image-based host (this fleet's Bazzite boxes have
-        // 83 apps and zero user-scope) a revert finds nothing and reports
-        // success. Which installation temper should own is an open design
-        // question rather than an oversight: a user-scope operation cannot
-        // resolve a system remote, so passing `--user` to install would break
-        // the converge. See ROADMAP, "Which flatpak installation temper owns".
+        // `--user` — so wherever the apps live system-wide (flatpak's default,
+        // and every storefront's) a revert finds nothing and reports success.
+        // That is a bug, not a design question: the bar is the storefront the
+        // desktop already ships, which removes a system app with no privilege
+        // at all, so temper owns the installation its converge writes to.
+        // See ROADMAP, "Bugs".
         revertible: Col::No(
             "undo uninstalls `--user`, which is not necessarily the scope install \
              wrote to — see ROADMAP",
