@@ -50,9 +50,29 @@ installations (so a declared remote the image provides is not permanently
 missing, and no duplicate user copy is added) and **written to the user** one,
 which is the only one `remote-delete` may act on.
 
-*(Otherwise the matrix is clean apart from the ignore column on deployed files,
-which is deliberate: an edited file is reported rather than removed, which covers
-the case that matters.)*
+**The rest of the matrix's open cells**, so the summary and the table agree —
+this file rides `--llm` precisely so an agent can tell a working cell from a
+broken one, and it previously said "none open" over a table with fifteen marks
+in it.
+
+- **`revertible` on `brew-trust` and `flatpak-remote`** — neither `brew trust`
+  nor `flatpak remote-add` is journaled. The pattern applies (the missing set is
+  known before the converge, uninstall is install backwards); it is unwired.
+  `install --packages-only` names them at plan time rather than pretending.
+- **`revertible` on `flatpak`** — the installation question above.
+- **`dconf`**: `install` is ⚠ because `restore` is excluded from
+  `install`/`update` (reloading a snapshot would clobber live tweaks — a
+  property of the *recording model*, not of the store); `prune` is ❌ because a
+  key has no extras direction that is safe to enact wholesale; `ignore` is ⚠ —
+  `strip` silences noise but there is no per-key ignore; `residue` is ❌ because
+  a retired subtree leaves its keys behind and nothing enumerates them.
+- **`ignore` on `deployed-files`** — deliberate: an edited file is *reported*
+  rather than removed, which covers the case that matters.
+- **`profile`** is the weakest row and is honestly scored: no machine scope, a
+  GUI-gated apply, no prune, no reconcile, no ignore, not revertible, no
+  residue story. It also has **no `ProviderSpec`**, so none of that is checked
+  by a test — the matrix→table check runs one way only. Giving it a row in
+  `interface.rs` would fail immediately, which is the argument for doing it.
 
 **The provider trait is half built.** `interface.rs` records each provider's
 eleven answers as data and cross-checks them against the finding registry, so a
