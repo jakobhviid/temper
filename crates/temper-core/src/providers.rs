@@ -1645,6 +1645,32 @@ pub fn gext_missing(effective: &[String]) -> Vec<String> {
 /// Requires the lister, for the same reason `gext_missing` does, but the stakes
 /// are higher in this direction: on a host that cannot enumerate, an unguarded
 /// drop would offer to delete the machine's entire declared list.
+/// Declared extensions whose **live enable-state** differs from what the machine
+/// declares — as `(uuid, what the machine actually is)`.
+///
+/// The spec←machine half of `gext_enable_drift`, which returns what the
+/// declaration wants. `install` converges toward the declaration; this is the
+/// other direction, and without it the enable cell had a converge answer and no
+/// absorb: `drift` reported the extension forever, `reconcile` offered nothing,
+/// and the only route was a hand edit.
+///
+/// Restricted to `machine_own` on purpose. A bundle's list is shared, so
+/// flipping `enabled` there from one box changes every machine composing it —
+/// the same containment rule that keeps package absorbs in the machine's own
+/// Brewfile.
+pub fn gext_enable_absorbable(
+    specs: &[manifest::GnomeExtension],
+    machine_own: &[String],
+) -> Vec<(String, bool)> {
+    gext_enable_drift(specs)
+        .into_iter()
+        .filter(|(uuid, _)| machine_own.iter().any(|m| m == uuid))
+        // `gext_enable_drift` yields what the DECLARATION wants; absorbing means
+        // taking what the machine is, which is its negation.
+        .map(|(uuid, wanted)| (uuid, !wanted))
+        .collect()
+}
+
 pub fn gext_machine_absent(machine_own: &[String]) -> Vec<String> {
     if machine_own.is_empty() {
         return Vec::new();

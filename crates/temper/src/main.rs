@@ -2056,6 +2056,7 @@ fn cmd_reconcile(
     let mut chosen_dconf: Vec<(usize, Vec<dconf::KeyDiff>)> = Vec::new();
     let mut chosen_gext: Vec<String> = Vec::new();
     let mut chosen_gext_drops: Vec<String> = Vec::new();
+    let mut chosen_gext_flips: Vec<(String, bool)> = Vec::new();
     let mut chosen_package_drops: Vec<String> = Vec::new();
     let mut chosen_remote_adds: Vec<String> = Vec::new();
     let mut chosen_remote_drops: Vec<String> = Vec::new();
@@ -2074,6 +2075,7 @@ fn cmd_reconcile(
         // transfer here.
         chosen_gext = plan.gext_adds.clone();
         chosen_gext_drops = plan.gext_drops.clone();
+        chosen_gext_flips = plan.gext_enable_flips.clone();
         chosen_package_drops = plan.package_drops.clone();
         chosen_remote_adds = plan.remote_adds.clone();
         chosen_remote_drops = plan.remote_drops.clone();
@@ -2242,6 +2244,26 @@ fn cmd_reconcile(
             for uuid in &plan.gext_drops {
                 if !prompt_yes(&format!("  keep `{uuid}` in [[machine]].extensions?")) {
                     chosen_gext_drops.push(uuid.clone());
+                }
+            }
+        }
+
+        // An extension the machine has switched on or off against what its own
+        // declaration says. The absorb is an edit to that declaration, so it is
+        // offered only where the machine owns it — a bundle's list is shared,
+        // and `drift` says so for those rather than offering anything here.
+        if !plan.gext_enable_flips.is_empty() {
+            println!(
+                "\n{}",
+                ui::bold("GNOME extensions switched against their declaration:")
+            );
+            for (uuid, enabled) in &plan.gext_enable_flips {
+                let is = if *enabled { "enabled" } else { "disabled" };
+                let says = if *enabled { "disabled" } else { "enabled" };
+                if prompt_yes(&format!(
+                    "  `{uuid}` is {is}, the spec says {says} — record {is}?"
+                )) {
+                    chosen_gext_flips.push((uuid.clone(), *enabled));
                 }
             }
         }
@@ -2479,6 +2501,15 @@ fn cmd_reconcile(
                 ui::dim(&format!("{} [[machine]].packages in temper.toml", ui::g_arrow()))
             );
         }
+        for (uuid, enabled) in &chosen_gext_flips {
+            println!(
+                "  {} extension {} enabled={}  {}",
+                ui::green("+"),
+                uuid,
+                enabled,
+                ui::dim(&format!("{} [[machine]].gnome_extensions in temper.toml", ui::g_arrow()))
+            );
+        }
         for uuid in &chosen_gext_drops {
             println!(
                 "  {} extension {}  {}",
@@ -2580,6 +2611,7 @@ fn cmd_reconcile(
         || !chosen_tap_ignores.is_empty()
         || !chosen_gext.is_empty()
         || !chosen_gext_drops.is_empty()
+        || !chosen_gext_flips.is_empty()
         || !chosen_package_drops.is_empty()
         || !chosen_rpm_adds.is_empty()
         || !chosen_rpm_drops.is_empty()
@@ -2612,6 +2644,9 @@ fn cmd_reconcile(
         for uuid in &chosen_gext_drops {
             tt = reconcile::remove_machine_extension(&tt, &m.name, uuid)?;
         }
+        for (uuid, enabled) in &chosen_gext_flips {
+            tt = reconcile::set_machine_extension_enabled(&tt, &m.name, uuid, *enabled)?;
+        }
         for token in &chosen_package_drops {
             tt = reconcile::remove_machine_package(&tt, &m.name, token)?;
         }
@@ -2637,8 +2672,11 @@ fn cmd_reconcile(
     }
     jrnl.commit()?;
     let keys: usize = chosen_dconf.iter().map(|(_, p)| p.len()).sum();
-    let added =
-        chosen_adds.len() + chosen_trust_adds.len() + chosen_gext.len() + chosen_rpm_adds.len();
+    let added = chosen_adds.len()
+        + chosen_trust_adds.len()
+        + chosen_gext.len()
+        + chosen_rpm_adds.len()
+        + chosen_gext_flips.len();
     let dropped = chosen_drops.len()
         + chosen_trust_drops.len()
         + chosen_gext_drops.len()

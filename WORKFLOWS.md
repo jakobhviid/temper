@@ -290,16 +290,24 @@ list), `temper prune` uninstalls it (asks first), or
 - **A GNOME extension is installed but switched off:** that is a state the
 declaration carries, so it drifts. A bare uuid means *installed and enabled*, so
 a switched-off one reports `gnome-extension-enable` and `install` turns it on.
-If you switched it off on purpose, say so and the drift goes away without your
-desktop changing:
+If you switched it off on purpose, `temper reconcile` offers to record that —
+"`x` is disabled, the spec says enabled — record disabled?" — and writes it into
+this machine's own list:
 
 ```toml
 gnome_extensions = [{ uuid = "CoverflowAltTab@palatis.blogspot.com", enabled = false }]
 ```
 
+A bundle's list is shared, so an extension declared there is not offered: one
+machine may not flip it for every machine composing that bundle. `drift` names
+the file to edit instead.
+
 temper asserts only the uuids it declares, by `enable`/`disable`, and never
 rewrites `enabled-extensions` wholesale — so extensions the image ships and the
-spec says nothing about are left alone.
+spec says nothing about are left alone. For the same reason a declared uuid's
+membership in `enabled-extensions`/`disabled-extensions` is **not** part of the
+dconf snapshot: the declaration owns that fact, and recording it twice made the
+two disagree the moment either changed.
 - **A machine-scope package declared but not installed:** `temper install
 --packages-only` puts it back, or `temper reconcile` drops it — from the
 machine's Brewfile *or* its loose `packages` list, whichever declared it. A

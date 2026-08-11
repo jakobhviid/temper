@@ -97,6 +97,15 @@ pub struct ReconcilePlan {
     /// it later, and every converge reinstalled it with no verb to say
     /// otherwise. Machine-scope only; a bundle's list is shared.
     pub gext_drops: Vec<String>,
+    /// Declared extensions whose live enable-state differs from the machine's
+    /// own declaration — `(uuid, what the machine actually is)`. Absorbing sets
+    /// `enabled` on that entry.
+    ///
+    /// The cell that was missing: the enable state had `install` to converge it
+    /// and nothing to absorb it, so a deliberately-flipped extension drifted
+    /// forever and `reconcile` offered only the dconf arrays, which are not the
+    /// declaration and change nothing it says.
+    pub gext_enable_flips: Vec<(String, bool)>,
     /// Per-snapshot desktop-key candidates (empty off a dconf host). Absorbing
     /// is spec←machine only — pushing a key back OUT is `restore`'s direction,
     /// which drift names separately.
@@ -150,6 +159,15 @@ impl ReconcilePlan {
         for g in &self.gext_drops {
             push("gext_drops", false, g.clone());
         }
+        for (uuid, enabled) in &self.gext_enable_flips {
+            // An edit to an existing declaration rather than a new one, so it is
+            // an "add" in the sense items() means: the spec gains a field.
+            push(
+                "gext_enable_flips",
+                true,
+                format!("{uuid} enabled={enabled}"),
+            );
+        }
         for p in &self.package_drops {
             push("package_drops", false, p.clone());
         }
@@ -196,6 +214,7 @@ impl ReconcilePlan {
         "trust_drops",
         "gext_adds",
         "gext_drops",
+        "gext_enable_flips",
         "package_drops",
         "remote_adds",
         "remote_drops",
@@ -359,6 +378,10 @@ pub fn plan(
             ),
             package_drops: machine_package_drops(machine)?,
             gext_drops: providers::gext_machine_absent(&machine_extension_uuids(machine)),
+            gext_enable_flips: providers::gext_enable_absorbable(
+                &providers::effective_extension_specs(home, machine)?,
+                &machine_extension_uuids(machine),
+            ),
             remote_adds: providers::remotes_extras(&providers::effective_remotes(home, machine)?, ignore),
             remote_drops: machine_remote_drops(machine),
         rpm_adds: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
@@ -507,6 +530,10 @@ pub fn plan(
         ),
         package_drops: machine_package_drops(machine)?,
         gext_drops: providers::gext_machine_absent(&machine_extension_uuids(machine)),
+        gext_enable_flips: providers::gext_enable_absorbable(
+            &providers::effective_extension_specs(home, machine)?,
+            &machine_extension_uuids(machine),
+        ),
         rpm_adds: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
         rpm_drops: providers::rpm_ostree_machine_absent(&machine.rpm_ostree),
         remote_adds: providers::remotes_extras(&providers::effective_remotes(home, machine)?, ignore),
@@ -765,6 +792,82 @@ pub fn append_machine(
     t["apps"] = toml_edit::Item::Value(toml_edit::Value::Array(toml_edit::Array::new()));
     arr.push(t);
     Ok(doc.to_string())
+}
+
+/// Set `enabled` on one extension in a machine's own list, preserving comments
+/// and formatting.
+///
+/// A bare `"uuid"` becomes an inline table `{ uuid = "…", enabled = false }`; an
+/// entry that is already a table has its `enabled` updated in place, keeping any
+/// `settings`/`settings_path` beside it. Writing `enabled = true` on a bare uuid
+/// would be a no-op in meaning — a bare uuid already asserts enabled — so that
+/// case rewrites nothing and the entry stays in its simpler form.
+///
+/// Machine-scope only, like `append_machine_extension`: a bundle's list is
+/// shared, and flipping `enabled` there from one box changes it for every
+/// machine composing that bundle.
+pub fn set_machine_extension_enabled(
+    temper_toml: &str,
+    machine: &str,
+    uuid: &str,
+    enabled: bool,
+) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = temper_toml
+        .parse()
+        .context("parsing temper.toml for the extension enable edit")?;
+    let arr = doc
+        .as_table_mut()
+        .get_mut("machine")
+        .and_then(|m| m.as_array_of_tables_mut())
+        .ok_or_else(|| anyhow!("[[machine]] in temper.toml is not an array of tables"))?;
+    let t = arr
+        .iter_mut()
+        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some(machine))
+        .ok_or_else(|| anyhow!("temper.toml declares no machine named '{machine}'"))?;
+    // Whichever spelling the machine already uses — the same rule the append
+    // path follows, so a folder that has not been renamed is not given a second
+    // key beside the first (serde rejects the pair, on every machine).
+    let field = ["gnome_extensions", "extensions"]
+        .into_iter()
+        .find(|k| t.contains_key(k))
+        .ok_or_else(|| anyhow!("machine '{machine}' declares no extension list"))?;
+    let list = t
+        .get_mut(field)
+        .and_then(|v| v.as_array_mut())
+        .ok_or_else(|| anyhow!("machine '{machine}'s `{field}` is not an array"))?;
+
+    for i in 0..list.len() {
+        let Some(v) = list.get(i) else { continue };
+        let is_match = match v {
+            toml_edit::Value::String(s) => s.value() == uuid,
+            toml_edit::Value::InlineTable(it) => {
+                it.get("uuid").and_then(|u| u.as_str()) == Some(uuid)
+            }
+            _ => false,
+        };
+        if !is_match {
+            continue;
+        }
+        match v {
+            // Already a table: update in place and keep every sibling field.
+            toml_edit::Value::InlineTable(_) => {
+                if let Some(toml_edit::Value::InlineTable(it)) = list.get_mut(i) {
+                    it.insert("enabled", toml_edit::value(enabled).into_value().unwrap());
+                }
+            }
+            // A bare uuid already means enabled, so only the `false` case needs
+            // to grow a table.
+            toml_edit::Value::String(_) if !enabled => {
+                let mut it = toml_edit::InlineTable::new();
+                it.insert("uuid", uuid.into());
+                it.insert("enabled", false.into());
+                list.replace(i, toml_edit::Value::InlineTable(it));
+            }
+            _ => {}
+        }
+        return Ok(doc.to_string());
+    }
+    Err(anyhow!("machine '{machine}' does not declare the extension '{uuid}'"))
 }
 
 /// Append a GNOME extension UUID to a machine's own `extensions` list,
@@ -1281,6 +1384,7 @@ mod tests {
             trust_drops: vec!["c/d".into()],
             gext_adds: vec!["e@x".into()],
             gext_drops: vec!["f@x".into()],
+            gext_enable_flips: vec![("g@x".into(), true)],
             package_drops: vec!["brew \"loose\"".into()],
             remote_adds: vec!["r".into()],
             remote_drops: vec!["s https://x".into()],
@@ -1305,7 +1409,7 @@ mod tests {
                 "`{name}` did not reach the --json document"
             );
         }
-        assert_eq!(doc["total"], 11);
+        assert_eq!(doc["total"], 12);
         assert!(!plan.is_empty());
         assert!(ReconcilePlan {
             brewfile_rel: None,
@@ -1315,6 +1419,7 @@ mod tests {
             trust_drops: vec![],
             gext_adds: vec![],
             gext_drops: vec![],
+            gext_enable_flips: vec![],
             package_drops: vec![],
             remote_adds: vec![],
             remote_drops: vec![],
@@ -1544,6 +1649,74 @@ mod tests {
         assert_eq!(
             remove_trust("[[machine]]\nname=\"m\"\nos=\"linux\"\n", "x/y").unwrap(),
             "[[machine]]\nname=\"m\"\nos=\"linux\"\n"
+        );
+    }
+}
+
+#[cfg(test)]
+mod enable_absorb_tests {
+    use super::set_machine_extension_enabled;
+
+    const TT: &str = "[[machine]]\n\
+                      name = \"box\"\n\
+                      os = \"linux\"\n\
+                      # keep this comment\n\
+                      gnome_extensions = [\"bare@x\", { uuid = \"tbl@x\", settings = \"a.dconf\" }]\n";
+
+    /// A bare uuid means enabled, so recording \"disabled\" has to grow a table.
+    #[test]
+    fn a_bare_uuid_becomes_a_table_when_disabled() {
+        let out = set_machine_extension_enabled(TT, "box", "bare@x", false).unwrap();
+        assert!(
+            out.contains("uuid = \"bare@x\"") && out.contains("enabled = false"),
+            "bare uuid did not grow an enabled=false table:\n{out}"
+        );
+        assert!(out.contains("# keep this comment"), "comment lost:\n{out}");
+    }
+
+    /// …and the reverse is a no-op in meaning: a bare uuid already asserts
+    /// enabled, so it stays in the simpler form rather than gaining a field that
+    /// says what its shape already says.
+    #[test]
+    fn a_bare_uuid_stays_bare_when_enabled() {
+        let out = set_machine_extension_enabled(TT, "box", "bare@x", true).unwrap();
+        assert!(
+            out.contains("\"bare@x\"") && !out.contains("enabled = true"),
+            "a bare uuid gained a redundant enabled=true:\n{out}"
+        );
+    }
+
+    /// An entry that is already a table keeps every sibling field — losing a
+    /// `settings` file while flipping a boolean would silently unown a whole
+    /// dconf subtree.
+    #[test]
+    fn an_existing_table_keeps_its_other_fields() {
+        let out = set_machine_extension_enabled(TT, "box", "tbl@x", false).unwrap();
+        assert!(
+            out.contains("settings = \"a.dconf\""),
+            "the settings file was dropped by an enable edit:\n{out}"
+        );
+        assert!(out.contains("enabled = false"), "enabled not set:\n{out}");
+    }
+
+    /// Only this machine's list. A uuid it does not declare is an error rather
+    /// than a silent no-op — the caller believed it was editing something.
+    #[test]
+    fn an_undeclared_uuid_is_an_error() {
+        assert!(set_machine_extension_enabled(TT, "box", "nope@x", false).is_err());
+    }
+
+    /// The pre-rename spelling is still what some folders use, and writing the
+    /// other one beside it makes serde reject the pair — the whole manifest,
+    /// on every machine.
+    #[test]
+    fn it_writes_whichever_spelling_the_machine_uses() {
+        let old = TT.replace("gnome_extensions", "extensions");
+        let out = set_machine_extension_enabled(&old, "box", "bare@x", false).unwrap();
+        assert!(out.contains("extensions = ["), "spelling changed:\n{out}");
+        assert!(
+            !out.contains("gnome_extensions"),
+            "wrote a second key beside the first:\n{out}"
         );
     }
 }

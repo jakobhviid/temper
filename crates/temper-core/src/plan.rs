@@ -850,13 +850,22 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         name: "gnome-extension-enable",
         detects: Detects::Differs,
         converge: &[Answer::Verb("temper install --packages-only")],
-        // Absorbing means writing `enabled = false` into the declaration that
-        // names the extension — an edit to whichever scope declared it, which is
-        // the fleet's file as often as this machine's.
-        absorb: &[Answer::Hand {
-            file: "the declaration that names it (a bundle, or [[machine]].gnome_extensions)",
-            why: "set `enabled` on the extension to match what you actually want",
-        }],
+        // Absorbing means writing `enabled` into the declaration that names the
+        // extension, so the answer is whichever scope owns it. `reconcile` does
+        // it for the machine's own list; a bundle's is shared, and editing it
+        // from one box would change every machine composing it.
+        //
+        // This was `Hand` for both, which passed the coverage check — `Hand` is
+        // a legal answer when it names a file and a reason — while the machine
+        // half simply had no verb. That is the failure mode `Hand` invites, and
+        // the reason the check cannot be the only thing looking.
+        absorb: &[
+            Answer::Verb("temper reconcile"),
+            Answer::Hand {
+                file: "the bundle that declares it, when the extension is not on this machine's own list",
+                why: "a bundle's `gnome_extensions` is shared, so one machine may not flip it for the rest",
+            },
+        ],
     },
     KindSpec {
         name: "gnome-extension-extra",
