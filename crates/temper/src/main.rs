@@ -965,17 +965,26 @@ fn cmd_setup(dir: Option<String>, json: bool) -> Result<()> {
         println!("{}", serde_json::json!({ "candidates": arr }));
         return Ok(());
     }
+    // With nothing discovered, "not a terminal" is the lesser fact: the picker
+    // would open on an empty list either way, so leading with the tty makes the
+    // reader think a terminal would have helped.
+    if candidates.is_empty() {
+        anyhow::bail!(
+            "no temper folder found nearby, so there is nothing to pick.\n\
+             \x20 have one? give the path: `temper setup <dir>`\n\
+             \x20 starting out? `temper init` scaffolds one here."
+        );
+    }
     if !io::stdin().is_terminal() {
-        let found = if candidates.is_empty() {
-            "none discovered".to_string()
-        } else {
-            candidates
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        anyhow::bail!("not a terminal — run `temper setup <dir>` with an explicit path ({found})");
+        let found = candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!(
+            "not a terminal, so the picker cannot open — pass the path instead: \
+             `temper setup <dir>`. Found: {found}"
+        );
     }
 
     // Interactive picker.
@@ -1183,7 +1192,14 @@ fn cmd_install(
                 r.steps_total, r.steps_changed
             )
         };
-        println!("install {}: {} package(s), {steps}", m.name, r.packages);
+        // `r.packages` is how many declared packages were *considered*, not how
+        // many were installed — so a bare "1 package(s)" alongside "0 would
+        // change" reads as "installing one package" and means the opposite. The
+        // steps half already states what its numbers are; this one did not.
+        println!(
+            "install {}: {} package(s) declared, {steps}",
+            m.name, r.packages
+        );
         if !r.unrevertible.is_empty() {
             println!(
                 "  {} {} change(s) `temper undo` {cannot}:",
@@ -1429,7 +1445,25 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
         String::new()
     };
     println!();
-    if out == 0 {
+    if items.is_empty() {
+        // Nothing was checked, which is not the same as everything being fine.
+        // A machine block carrying only `name` and `os` — a fresh server, or one
+        // `init` has just scaffolded — produced a green "all in sync · 0 checks",
+        // and the reader concludes the machine is converged. It is the failure
+        // `adopt` had: a verdict from a verb that examined nothing.
+        println!(
+            "  {} {}",
+            ui::yellow(&format!("{} nothing to check", ui::g_info())),
+            ui::dim("· this machine declares no packages, config or assertions"),
+        );
+        println!(
+            "{}",
+            ui::dim(
+                "  add `apps = [\"…\"]`, `packages`, or a bundle to its [[machine]] block \
+                 — or run `temper init` to seed it from what is already installed."
+            )
+        );
+    } else if out == 0 {
         println!(
             "  {} {}",
             ui::green(&format!("{} all in sync", ui::g_ok())),
@@ -1562,10 +1596,9 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
         // Removal is destructive (dependency-aware uninstall + untrust) — confirm.
         if !yes
             && !prompt_no(&format!(
-                "remove {} item(s) listed above? this uninstalls packages, GNOME extensions \
-                 and flatpaks, untrusts taps, removes flatpak remotes, DELETES the files \
-                 listed above, and un-layers rpms (a reboot applies that last one)",
-                prune_plan.len()
+                "remove {} item(s) listed above? this {}",
+                prune_plan.len(),
+                prune_plan.effects().join(", ")
             ))
         {
             println!("aborted — nothing removed.");
@@ -1847,15 +1880,24 @@ fn cmd_retired(json: bool) -> Result<()> {
             println!("  {} {p}", ui::dim("· gone"));
         }
     }
+    // The "worth deleting" advice is about entries that have ALREADY done their
+    // job. Printing it when none have invited the opposite reading — deleting
+    // the tombstone that has not worked yet, which abandons the removal.
     let done = rows.iter().filter(|(_, p)| !*p).count();
-    println!(
-        "\n  {}",
-        ui::dim(&format!(
-            "{done} of {} have done their job — an entry nobody can still be \
-             migrating from is worth deleting.",
+    let tail = if done == 0 {
+        "none are gone yet — `temper prune` enacts them".to_string()
+    } else if done == rows.len() {
+        "all gone — these entries have done their job, and one nobody can still \
+         be migrating from is worth deleting"
+            .to_string()
+    } else {
+        format!(
+            "{done} of {} gone — an entry nobody can still be migrating from is \
+             worth deleting; the rest wait for `temper prune`",
             rows.len()
-        ))
-    );
+        )
+    };
+    println!("\n  {}", ui::dim(&tail));
     Ok(())
 }
 

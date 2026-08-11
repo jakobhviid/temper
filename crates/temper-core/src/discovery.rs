@@ -44,9 +44,17 @@ pub fn find_home() -> Result<PathBuf> {
     //    have more than one library — never silently guess).
     let candidates = scan_candidates();
     match candidates.len() {
+        // Nothing found anywhere temper looks, so the reader is in one of two
+        // situations and the message has to serve both. It used to name only
+        // `temper setup`, which *picks* an existing folder — a dead end for the
+        // larger group, who have just installed temper and have no folder at
+        // all. `init` is the verb that creates one, and it went unmentioned.
         0 => bail!(
-            "no temper.toml found — run `temper setup`, set TEMPER_DIR, or run \
-             inside your temper folder"
+            "no temper folder found.\n\
+             \x20 have one already? point temper at it: `temper setup <dir>`, or set \
+             TEMPER_DIR, or cd into it.\n\
+             \x20 starting out?      `temper init` scaffolds one here from what this \
+             machine already has."
         ),
         1 => Ok(candidates.into_iter().next().expect("len==1")),
         _ => {

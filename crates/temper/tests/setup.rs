@@ -70,11 +70,15 @@ fn use_alias_still_works() {
         .stdout(predicates::str::contains("temper home set to"));
 }
 
+/// With nothing discovered there is nothing to pick, and a terminal would not
+/// have helped — so leading with "not a terminal" sent the reader looking for
+/// the wrong problem. The larger group here has just installed temper and has no
+/// folder at all, and `setup` cannot make one: it *picks* an existing folder.
+/// Naming `init` is the whole point of the message.
 #[test]
-fn setup_no_arg_non_terminal_refuses() {
+fn setup_with_nothing_to_pick_names_the_verb_that_creates_one() {
     let xdg = TempDir::new().unwrap();
     let empty = TempDir::new().unwrap();
-    // piped stdin (assert_cmd) is not a tty → can't prompt.
     temper()
         .env("XDG_CONFIG_HOME", xdg.path())
         .env("HOME", empty.path())
@@ -82,7 +86,27 @@ fn setup_no_arg_non_terminal_refuses() {
         .arg("setup")
         .assert()
         .failure()
-        .stderr(predicates::str::contains("not a terminal"));
+        .stderr(predicates::str::contains("nothing to pick"))
+        .stderr(predicates::str::contains("temper init"));
+}
+
+/// …and when there IS something to pick, the tty is the real obstacle. This
+/// branch had no test, which is why the two could be conflated.
+#[test]
+fn setup_no_arg_non_terminal_refuses() {
+    let home = TempDir::new().unwrap();
+    let xdg = TempDir::new().unwrap();
+    manifest(&home.path().join("steel")); // discoverable → the picker would open
+    // piped stdin (assert_cmd) is not a tty → can't prompt.
+    temper()
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .env("HOME", home.path())
+        .current_dir(home.path())
+        .arg("setup")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("not a terminal"))
+        .stderr(predicates::str::contains("steel"));
 }
 
 #[test]

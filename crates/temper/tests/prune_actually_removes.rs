@@ -270,20 +270,35 @@ fn the_stubs_are_on_the_path_temper_uses() {
     );
 }
 
-/// Not a test of temper: a sanity check that `stub` produces something runnable,
-/// so a broken helper reads as a broken helper and not as a passing suite.
+/// Not a test of temper: a sanity check that `stub` writes something a shell
+/// would run, so a broken helper reads as a broken helper and not as a passing
+/// suite.
+///
+/// It does **not** execute the stub. Doing so raced the rest of the suite:
+/// writing a file and exec'ing it immediately hits `ETXTBSY` whenever another
+/// test forks in between and inherits the still-open write descriptor. That the
+/// stubs really do run is settled by the four tests above, which fail with an
+/// empty log if they do not.
 #[test]
-fn the_stub_helper_writes_a_working_executable() {
+fn the_stub_helper_writes_something_runnable() {
     let e = Env::new();
     e.stub("thing", "echo hello");
-    let out = std::process::Command::new(e.bin.path().join("thing"))
-        .arg("an-argument")
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hello");
-    assert!(e.log("thing").contains("an-argument"), "argv was not recorded");
-    assert!(Path::new(&e.bin.path().join("thing")).exists());
+
+    let p = e.bin.path().join("thing");
+    let body = fs::read_to_string(&p).unwrap();
+    assert!(body.starts_with("#!/bin/sh"), "no shebang: {body:?}");
+    assert!(body.contains("echo hello"), "body missing: {body:?}");
+    assert!(
+        body.contains("thing.log"),
+        "the stub must record its argv, or an empty log proves nothing: {body:?}"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&p).unwrap().permissions().mode();
+        assert!(mode & 0o111 != 0, "not executable: {mode:o}");
+    }
+    assert!(Path::new(&p).exists());
 }
 
 /// A converged machine is warned about nothing.
@@ -370,4 +385,79 @@ fn a_tap_this_run_will_trust_is_named_as_unrevertible() {
         !warned.is_empty(),
         "this run will trust a tap that `undo` cannot untrust, and said nothing: {v}"
     );
+}
+
+/// The confirm must describe **this** run, not everything `prune` can do.
+///
+/// It used to recite the full catalogue every time — "uninstalls packages, GNOME
+/// extensions and flatpaks, untrusts taps, removes flatpak remotes, DELETES the
+/// files listed above, and un-layers rpms (a reboot applies that last one)" — so
+/// a run removing nine GNOME extensions warned about deleting files and
+/// rebooting, neither of which was going to happen. The careful reader is
+/// alarmed by clauses that do not apply; the frequent reader stops reading. On
+/// the one prompt standing between them and an irreversible removal.
+#[test]
+fn the_confirm_describes_only_what_this_run_does() {
+    let e = Env::new();
+    e.stub("gnome-extensions", "echo keep@x; echo stray@x");
+    e.stub("gext", "");
+    e.spec(&format!(
+        "[[machine]]\nname = \"t\"\nos = \"{}\"\ngnome_extensions = [\"keep@x\"]\n",
+        os()
+    ));
+
+    // No `--yes`, and stdin is not a tty → the prompt is printed, then declined.
+    let out = e.temper().args(["prune"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        text.contains("uninstalls 1 GNOME extension(s)"),
+        "the confirm must name what it will do: {text}"
+    );
+    for absent in ["DELETES", "un-layers", "untrusts", "flatpak remote"] {
+        assert!(
+            !text.contains(absent),
+            "this run touches only extensions, yet the confirm mentioned \
+             `{absent}` — a warning about work that is not going to happen: {text}"
+        );
+    }
+    // …and nothing was removed, since the prompt was declined.
+    assert!(
+        !e.log("gext").contains("uninstall"),
+        "declining the confirm must remove nothing"
+    );
+}
+
+/// The control: a run that really does delete files and reboot says so. Without
+/// this, "mentions fewer things" would be satisfied by mentioning nothing.
+#[test]
+fn a_run_that_deletes_and_reboots_still_says_so() {
+    let e = Env::new();
+    e.stub(
+        "rpm-ostree",
+        "case \"$1 $2\" in \"status --json\") \
+         echo '{\"deployments\":[{\"booted\":true,\"requested-packages\":[\"kept\",\"strayrpm\"]}]}' ;; esac",
+    );
+    let doomed = e.fake_home.path().join("doomed.conf");
+    fs::write(&doomed, "bye\n").unwrap();
+    e.spec(&format!(
+        // A declared rpm opts the question in — without one, the probe never
+        // runs and nothing is an extra, which is the gate working correctly.
+        "[[machine]]\nname = \"t\"\nos = \"{}\"\nrpm_ostree = [\"kept\"]\n\
+         retire = [\"{}\"]\n",
+        os(),
+        doomed.display()
+    ));
+
+    let out = e.temper().args(["prune"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("DELETES 1 file(s)"),
+        "a run that deletes a file must say so: {text}"
+    );
+    assert!(
+        text.contains("un-layers") && text.contains("reboot"),
+        "un-layering needs a reboot, and the confirm is where that belongs: {text}"
+    );
+    assert!(doomed.exists(), "declining the confirm must delete nothing");
 }

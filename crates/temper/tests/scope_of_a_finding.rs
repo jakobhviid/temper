@@ -165,3 +165,48 @@ fn adopt_does_not_claim_the_machine_matches_its_spec() {
         "…and point at the verb that covers the rest:\n{stdout}"
     );
 }
+
+/// A machine that declares nothing is not "all in sync".
+///
+/// `drift` printed a green "✓ all in sync · 0 checks" for a `[[machine]]` block
+/// carrying only `name` and `os` — which is what a fresh server looks like, and
+/// what `init` scaffolds before seeding finds anything. The reader concludes the
+/// machine is converged; temper checked nothing and there is nothing to converge
+/// to. Same defect `adopt` had: a verdict from a verb that examined nothing.
+#[test]
+fn a_machine_that_declares_nothing_is_not_reported_in_sync() {
+    let home = TempDir::new().unwrap();
+    let fake_home = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    fs::write(
+        home.path().join("temper.toml"),
+        "[[machine]]\nname = \"t\"\nos = \"linux\"\n",
+    )
+    .unwrap();
+
+    let out = Command::cargo_bin("temper")
+        .unwrap()
+        .args(["drift"])
+        .env("TEMPER_DIR", home.path())
+        .env("HOME", fake_home.path())
+        .env("XDG_CONFIG_HOME", fake_home.path().join(".config"))
+        .env("TEMPER_STATE_DIR", state.path())
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        !text.contains("all in sync"),
+        "nothing was checked, so nothing is known to be in sync: {text}"
+    );
+    assert!(
+        text.contains("nothing to check"),
+        "the empty case has to say it is empty: {text}"
+    );
+    // …and point somewhere, since a reader in this state has a folder that does
+    // not describe their machine yet.
+    assert!(
+        text.contains("temper init") || text.contains("[[machine]]"),
+        "say what would make this machine describable: {text}"
+    );
+}

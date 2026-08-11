@@ -2032,6 +2032,53 @@ impl PrunePlan {
         self.items().len()
     }
 
+    /// What this run will actually do, in words, one clause per non-empty list.
+    ///
+    /// The confirm used to recite everything `prune` is *capable* of —
+    /// "uninstalls packages, GNOME extensions and flatpaks, untrusts taps,
+    /// removes flatpak remotes, DELETES the files listed above, and un-layers
+    /// rpms (a reboot applies that last one)" — on every run, whatever was in
+    /// the plan. A run removing nine GNOME extensions warned about deleting
+    /// files and rebooting, neither of which was going to happen.
+    ///
+    /// That is worse than verbose. The careful reader is alarmed by clauses that
+    /// do not apply, and the frequent reader learns the wall of text carries no
+    /// information and stops reading it — on the one prompt standing between
+    /// them and an irreversible removal.
+    pub fn effects(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let n = |v: &[String]| v.len();
+        if !self.packages.is_empty() {
+            out.push(format!("uninstalls {} package(s)", self.packages.len()));
+        }
+        if !self.extensions.is_empty() {
+            out.push(format!(
+                "uninstalls {} GNOME extension(s)",
+                n(&self.extensions)
+            ));
+        }
+        if !self.untrust.is_empty() {
+            out.push(format!("untrusts {} tap(s)", n(&self.untrust)));
+        }
+        if !self.flatpak_remotes.is_empty() {
+            out.push(format!(
+                "removes {} flatpak remote(s)",
+                n(&self.flatpak_remotes)
+            ));
+        }
+        let files = n(&self.residue) + n(&self.retired);
+        if files > 0 {
+            out.push(format!("DELETES {files} file(s)"));
+        }
+        if !self.rpm_ostree.is_empty() {
+            out.push(format!(
+                "un-layers {} rpm(s) — a reboot applies that",
+                n(&self.rpm_ostree)
+            ));
+        }
+        out
+    }
+
     /// The lists `items()` labels, in preview order. `residue_edited` is not one
     /// of them: it is reported, never removed.
     pub const LISTS: &'static [&'static str] = &[
