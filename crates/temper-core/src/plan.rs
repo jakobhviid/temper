@@ -2503,6 +2503,7 @@ pub fn commit_prune(
     machine: &Machine,
     plan: &PrunePlan,
     ignore: &Ignore,
+    brew_trust: &[String],
 ) -> Result<PruneOutcome> {
     // Uninstalling a pkg-based cask needs root per cask, same as installing one.
     // No `acquire` here: the plan is already confirmed and brew asks in its own
@@ -2510,10 +2511,12 @@ pub fn commit_prune(
     let _sudo = crate::sudo::keep_alive();
     if !plan.packages.is_empty() {
         let effective = packages::effective_set(home, machine)?;
-        // `ignore` reaches the executor because `brew bundle cleanup` decides
-        // for itself what to remove: what temper leaves out of the file, brew
-        // takes away.
-        providers::prune_apply(&effective, &plan.packages, ignore)?;
+        // `ignore` and the declared trust both reach the executor because `brew
+        // bundle cleanup` decides for itself what to remove *and* rewrites the
+        // trust store from the same file: what temper leaves out, brew takes
+        // away. Note the ordering below — this runs before `untrust_taps`, so a
+        // wipe here could not be repaired by it either.
+        providers::prune_apply(&effective, &plan.packages, ignore, brew_trust)?;
     }
     if !plan.untrust.is_empty() {
         providers::untrust_taps(&plan.untrust)?;

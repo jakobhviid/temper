@@ -922,10 +922,50 @@ fn ignored_brewfile_lines(ignore: &crate::manifest::Ignore) -> Vec<String> {
     out
 }
 
+/// Rewrite the cleanup Brewfile's body so every declared-trusted tap carries
+/// `trusted: true`.
+///
+/// `brew bundle cleanup --force` calls `Homebrew::Trust.replace!` with whatever
+/// `trusted:` options the file it was handed contains — **replace**, not merge,
+/// so a file that mentions none empties the trust store outright. temper declares
+/// trust in `[brew].trust` / `brew_trust` rather than in the Brewfile, so its
+/// cleanup file mentioned none and every run wiped the lot.
+///
+/// A tap already in the body (a `tap "x"` line from a machine's Brewfile) gains
+/// the option; one declared only as trust gets a line of its own. The taps being
+/// untrusted *by this run* are trusted-but-undeclared by definition, so they are
+/// absent from `trust` and correctly do not survive.
+fn with_declared_trust(body: &str, trust: &[String]) -> String {
+    let mut out = String::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for line in body.lines() {
+        let named = trust.iter().find(|t| {
+            line.starts_with("tap ") && line.contains(&format!("\"{t}\"")) && !line.contains("trusted:")
+        });
+        match named {
+            Some(t) => {
+                seen.push(t.as_str());
+                out.push_str(&format!("{line}, trusted: true\n"));
+            }
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    for t in trust {
+        if !seen.contains(&t.as_str()) && !body.contains(&format!("\"{t}\"")) {
+            out.push_str(&format!("tap \"{t}\", trusted: true\n"));
+        }
+    }
+    out
+}
+
 pub fn prune_apply(
     effective: &[Pkg],
     extras: &[(Manager, String)],
     ignore: &crate::manifest::Ignore,
+    trust: &[String],
 ) -> Result<()> {
     let has_brewish = effective.iter().any(|p| {
         matches!(
@@ -955,6 +995,14 @@ pub fn prune_apply(
             body.push_str(&line);
             body.push('\n');
         }
+        // …and the same for trust, which brew reconciles from this file too:
+        // `cleanup --force` calls `Trust.replace!` with the file's `trusted:`
+        // options, so a file that declares none empties the store. Observed on a
+        // real machine — one `prune` untrusted the tap temper itself installs
+        // from, which then made `brew bundle cleanup` unable to compute extras
+        // at all, so the *next* prune would have read every skipped formula as
+        // an orphan.
+        let body = with_declared_trust(&body, trust);
         let tmp =
             std::env::temp_dir().join(format!("temper-Brewfile-prune-{}", std::process::id()));
         fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
@@ -2883,5 +2931,62 @@ mod cleanup_tests {
             parse_cleanup_extras(text, &ignored(&[])),
             vec![(Manager::Tap, "joshmedeski/sesh".to_string())]
         );
+    }
+}
+
+#[cfg(test)]
+mod declared_trust_tests {
+    use super::with_declared_trust;
+
+    /// A tap the machine's Brewfile already lists gains the option rather than
+    /// gaining a second line — brew would otherwise see the tap twice.
+    #[test]
+    fn an_existing_tap_line_gains_the_option() {
+        let out = with_declared_trust(
+            "tap \"vendor/tap\"\nbrew \"jq\"\n",
+            &["vendor/tap".to_string()],
+        );
+        assert_eq!(out, "tap \"vendor/tap\", trusted: true\nbrew \"jq\"\n");
+    }
+
+    /// The case that actually bit: trust declared in `[brew].trust`, and the
+    /// machine's Brewfile lists no taps at all. Without a line here, `cleanup
+    /// --force` calls `Trust.replace!` with nothing and empties the store.
+    #[test]
+    fn a_tap_declared_only_as_trust_gets_a_line() {
+        let out = with_declared_trust("brew \"jq\"\n", &["vendor/tap".to_string()]);
+        assert!(
+            out.contains("tap \"vendor/tap\", trusted: true"),
+            "a tap declared only via [brew].trust must still reach the file: {out}"
+        );
+        assert!(out.contains("brew \"jq\""), "the rest of the body survives: {out}");
+    }
+
+    /// Nothing declared means nothing added — this must not invent trust.
+    #[test]
+    fn no_declared_trust_changes_nothing() {
+        let body = "brew \"jq\"\ncask \"ghostty\"\n";
+        assert_eq!(with_declared_trust(body, &[]), body);
+    }
+
+    /// A tap being untrusted by this very run is trusted-but-*undeclared*, so it
+    /// is absent from the declared list and must not be re-added — otherwise
+    /// prune would hand back the trust it was asked to remove.
+    #[test]
+    fn a_tap_being_untrusted_is_not_reinstated() {
+        let out = with_declared_trust(
+            "tap \"keep/tap\"\nbrew \"jq\"\n",
+            &["keep/tap".to_string()],
+        );
+        assert!(!out.contains("drop/tap"), "only declared taps appear: {out}");
+        assert!(out.contains("tap \"keep/tap\", trusted: true"));
+    }
+
+    /// Idempotent: a line that already carries the option is left alone rather
+    /// than growing a second one.
+    #[test]
+    fn an_already_trusted_line_is_not_doubled() {
+        let body = "tap \"vendor/tap\", trusted: true\n";
+        assert_eq!(with_declared_trust(body, &["vendor/tap".to_string()]), body);
     }
 }

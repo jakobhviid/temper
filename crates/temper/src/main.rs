@@ -1509,7 +1509,7 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
             // into the (destructive) removal.
             let removed = yes && !dry_run && !prune_plan.is_empty();
             let failed = if removed {
-                plan::commit_prune(&home, &m, &prune_plan, &ignore)?.failed
+                plan::commit_prune(&home, &m, &prune_plan, &ignore, &manifest::effective_trust(&home, &ft.brew.trust, &m)?)?.failed
             } else {
                 Vec::new()
             };
@@ -1621,7 +1621,7 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
             println!("aborted — nothing removed.");
             return Ok(());
         }
-        let outcome = plan::commit_prune(&home, &m, &prune_plan, &ignore)?;
+        let outcome = plan::commit_prune(&home, &m, &prune_plan, &ignore, &manifest::effective_trust(&home, &ft.brew.trust, &m)?)?;
         // The count is what happened, not what was planned. A permission error
         // or a directory where a file was expected used to warn and still be
         // reported as removed (Principle #6b: report the effect).
