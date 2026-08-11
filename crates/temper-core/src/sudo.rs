@@ -238,10 +238,16 @@ impl Drop for KeepAlive {
 mod tests {
     use super::*;
 
+    /// `TEMPER_NO_SUDO_KEEPALIVE` is process-global, so these two tests cannot
+    /// run at the same time: one sets it and removes it again while the other
+    /// reads it. Without this, `drop_is_prompt_and_does_not_hang` could observe
+    /// the variable already removed, take the live branch, and — on a host with
+    /// `sudo` and a terminal — spawn a real keep-alive thread from a unit test.
+    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn opt_out_is_inert() {
-        // Belt-and-braces: the sandboxed test runner has no tty either, so this
-        // asserts the explicit opt-out specifically.
+        let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("TEMPER_NO_SUDO_KEEPALIVE", "1");
         let k = keep_alive();
         assert!(k.handle.is_none(), "opt-out must not spawn a thread");
@@ -250,8 +256,12 @@ mod tests {
 
     #[test]
     fn drop_is_prompt_and_does_not_hang() {
-        // An inert guard (no tty under `cargo test`) must still drop cleanly.
+        let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // State the condition rather than relying on the runner having no tty:
+        // that is a fact about the harness, and under a pty it is false.
+        std::env::set_var("TEMPER_NO_SUDO_KEEPALIVE", "1");
         let k = keep_alive();
         drop(k);
+        std::env::remove_var("TEMPER_NO_SUDO_KEEPALIVE");
     }
 }

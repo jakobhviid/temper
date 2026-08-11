@@ -93,10 +93,21 @@ fn every_spec_example_loads_as_a_real_folder() {
     // passing on the developer's machine, where ghostty happens to be installed.
     //
     // The example stays honest (ghostty is the real-world case); the test stops
-    // asking the host what software it has. Every binary SPEC names is provided
-    // here, on a PATH this test controls.
+    // asking the host what software it has. The stub list is **derived from
+    // SPEC**, so a `{{ which "…" }}` added to an example later cannot quietly
+    // start resolving off the developer's machine again — which is the actual
+    // defect, not the absence of ghostty.
+    let spec = include_str!("../../../SPEC.md");
     let bin = TempDir::new().unwrap();
-    stub(bin.path(), "ghostty");
+    let wanted = binaries_spec_resolves(spec);
+    assert!(
+        wanted.contains(&"ghostty".to_string()),
+        "SPEC stopped showing a `which` example — if that is deliberate, this \
+         guard can go; found: {wanted:?}"
+    );
+    for b in &wanted {
+        stub(bin.path(), b);
+    }
 
     let out = Command::cargo_bin("temper")
         .unwrap()
@@ -142,4 +153,29 @@ fn stub(dir: &std::path::Path, name: &str) {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
     }
+}
+
+/// Every binary SPEC asks temper to resolve — `{{ which "x" }}` in an example,
+/// and the `binary` presence probe.
+///
+/// Scraped so the stub list cannot drift from the document. The ghostty failure
+/// was not that ghostty was missing; it was that the test's idea of what SPEC
+/// needs was maintained by hand, a hundred lines away from SPEC.
+fn binaries_spec_resolves(spec: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for pattern in ["which \\\"", "which \""] {
+        let mut rest = spec;
+        while let Some(i) = rest.find(pattern) {
+            rest = &rest[i + pattern.len()..];
+            let end = match rest.find(['"', '\\']) {
+                Some(e) => e,
+                None => break,
+            };
+            let name = rest[..end].trim();
+            if !name.is_empty() && !out.contains(&name.to_string()) {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out
 }

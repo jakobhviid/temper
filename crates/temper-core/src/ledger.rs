@@ -306,7 +306,19 @@ pub fn remove_path(p: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// `TEMPER_STATE_DIR` is process-global and `state_root()` reads it, so two
+    /// tests doing this at once would each see the other's directory — or, worse,
+    /// see it removed and fall back to the developer's real state dir. Held for
+    /// the whole of `f`, so the set/read/remove is atomic with respect to the
+    /// other tests in this binary.
+    ///
+    /// `discovery.rs` takes its base as a parameter instead, which is the better
+    /// shape; the ledger reaches `state_root()` through `load`/`save`, so doing
+    /// the same here is a production-code change rather than a test one.
+    static STATE_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn with_state<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = STATE_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
         std::env::set_var("TEMPER_STATE_DIR", d.path());
         let out = f();

@@ -49,6 +49,11 @@ fn an_unreadable_bundle_stops_a_capture_instead_of_widening_it() {
         .args(["snapshot-dconf", "--json"])
         .env("TEMPER_DIR", h)
         .env("HOME", fake_home.path())
+        // `dconf::user_db()` reads XDG_CONFIG_HOME before HOME, and gives up
+        // entirely on DCONF_PROFILE — so pinning HOME alone leaves the dconf
+        // answer to whatever session runs the suite.
+        .env("XDG_CONFIG_HOME", fake_home.path().join(".config"))
+        .env_remove("DCONF_PROFILE")
         .env("TEMPER_STATE_DIR", state.path())
         .output()
         .unwrap();

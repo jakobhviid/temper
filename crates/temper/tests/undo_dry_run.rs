@@ -63,6 +63,8 @@ fn a_dry_run_undo_does_not_uninstall_anything() {
         .args(["undo", "--dry-run"])
         .env("TEMPER_STATE_DIR", state.path())
         .env("HOME", fake_home.path())
+        .env("XDG_CONFIG_HOME", fake_home.path().join(".config"))
+        .env_remove("DCONF_PROFILE")
         .env("PATH", &path)
         .output()
         .unwrap();
@@ -112,6 +114,8 @@ fn an_unrevertible_run_is_still_a_run() {
         let mut c = Command::cargo_bin("temper").unwrap();
         c.env("TEMPER_DIR", h)
             .env("HOME", fake_home.path())
+            .env("XDG_CONFIG_HOME", fake_home.path().join(".config"))
+            .env_remove("DCONF_PROFILE")
             .env("TEMPER_STATE_DIR", state.path());
         c
     };

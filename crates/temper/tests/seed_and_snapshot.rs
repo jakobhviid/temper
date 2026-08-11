@@ -186,20 +186,23 @@ fn init_infers_the_machine_name_from_the_hostname() {
     let state = TempDir::new().unwrap();
     // No temper.toml at all — init bootstraps the folder named by TEMPER_DIR.
 
-    temper(home.path(), fake_home.path(), state.path())
-        .args(["init", "--yes"])
-        .assert()
-        .success();
+    // The name init chose comes out of its own document. Recomputing it by
+    // shelling out to `hostname` asked the host a question — the binary is not
+    // coreutils and is absent from minimal images, and it was `.unwrap()`ed — and
+    // then re-implemented `machine::resolve` in order to assert the two agreed.
+    // What matters here is that the folder init wrote is coherent for whatever
+    // name it picked.
+    let out = temper(home.path(), fake_home.path(), state.path())
+        .args(["init", "--json", "--yes"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "init failed: {}", String::from_utf8_lossy(&out.stderr));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("init did not emit one document ({e})"));
+    let host = v["machine"].as_str().expect("init names the machine").to_string();
+    assert!(!host.is_empty(), "init resolved an empty machine name: {v}");
 
     let tt = fs::read_to_string(home.path().join("temper.toml")).unwrap();
-    let host = String::from_utf8(
-        std::process::Command::new("hostname")
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap();
-    let host = host.trim().split('.').next().unwrap().to_lowercase();
 
     assert!(tt.contains("[[machine]]"), "no machine block: {tt}");
     assert!(

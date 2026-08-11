@@ -20,6 +20,10 @@ fn temper(home: &Path, fake_home: &Path, state: &Path) -> Command {
     let mut c = Command::cargo_bin("temper").unwrap();
     c.env("TEMPER_DIR", home)
         .env("HOME", fake_home)
+        // XDG_CONFIG_HOME wins over HOME when temper locates the dconf
+        // database, and DCONF_PROFILE makes it unknowable.
+        .env("XDG_CONFIG_HOME", fake_home.join(".config"))
+        .env_remove("DCONF_PROFILE")
         .env("TEMPER_STATE_DIR", state);
     c
 }
