@@ -76,6 +76,15 @@ impl Env {
         let mut c = Command::cargo_bin("temper").unwrap();
         c.env("TEMPER_DIR", self.home.path())
             .env("HOME", self.fake_home.path())
+            // `XDG_CONFIG_HOME` wins over `HOME` when temper locates the dconf
+            // database, so setting only `HOME` leaves the answer up to whatever
+            // the surrounding session exports. A developer box with a real
+            // desktop passes either way; a CI runner that exports it found the
+            // runner's own missing database and the observability guard fired.
+            .env("XDG_CONFIG_HOME", self.fake_home.path().join(".config"))
+            // Likewise: a `DCONF_PROFILE` in the environment makes the database
+            // location unknowable, and the guard fails closed on it.
+            .env_remove("DCONF_PROFILE")
             .env("TEMPER_STATE_DIR", self.state.path())
             .env("PATH", format!("{}:/usr/bin:/bin", self.bin.path().display()));
         c
