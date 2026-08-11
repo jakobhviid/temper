@@ -526,7 +526,7 @@ fn dconf_plans(home: &Path, machine: &Machine) -> Result<Vec<DconfPlan>> {
     for snap in &crate::dconf::all_snapshots(home, machine)? {
         // Same ownership filter drift uses: reconcile must never offer to absorb
         // a key a `setkey` step already declares.
-        let owned = crate::dconf::setkey_owned(home, machine, snap)?;
+        let owned = crate::dconf::owned_elsewhere(home, machine, snap)?;
         if let crate::dconf::SnapshotState::Diffs(diffs) =
             crate::dconf::snapshot_state_owned(home, snap, &owned)?
         {

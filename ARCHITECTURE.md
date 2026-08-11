@@ -452,14 +452,23 @@ Three consequences follow, and they are the reason for the split:
   other members are the user's — the snapshot is the only thing recording them.
   So the key stays captured, and one member's owner does not become the key's.
 
-**Two snapshots must not cover one key.** An extension's `settings` subtree sits
-*inside* `/org/gnome/shell/extensions/<uuid>/`, so a `[[machine.dconf]]` still
-rooted at `/org/gnome/shell/` covers it too — and then both files capture the
-same keys, absorbing into one leaves the other stale, and the drift never
-clears. That is what the split is for: after it, a machine block holds the
-residue (`/org/gnome/Ptyxis/`, a narrowly-rooted subtree of genuinely
-this-box-only state), not the whole desktop. Re-rooting the machine block is
-part of the migration, and temper does not yet detect the overlap for you.
+**Two snapshots must not cover one key, and temper enforces that.** An
+extension's `settings` subtree sits *inside*
+`/org/gnome/shell/extensions/<uuid>/`, so a `[[machine.dconf]]` rooted at
+`/org/gnome/shell/` covers it too. The **more specific** snapshot wins: its
+subtree is excluded from the shallower one's capture and from both sides of the
+drift comparison, exactly as a `setkey`-owned key is.
+
+Deriving it matters because the obvious workaround does not exist. A machine
+block cannot simply be re-rooted away from the extensions: the root-level keys it
+is there to capture — `favorite-apps`, `app-picker-layout` — live at
+`/org/gnome/shell/` itself, and no path takes those without taking
+`extensions/` too. The alternative was a hand-maintained `strip` entry per split
+extension, which is the ownership list the split exists to delete.
+
+The two kinds of ownership match differently, and both are deliberate: a
+`setkey` owns **one key**, exactly (`a/b` does not take `a/bc`), while a deeper
+snapshot owns a **subtree**, by prefix.
 
 The derivation **fails closed**. If the folder cannot be resolved — one bundle
 with a typo — `setkey_owned` and the snapshot list return an error rather than

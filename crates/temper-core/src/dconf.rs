@@ -56,6 +56,35 @@ pub fn drop_exact(dump: &str, ids: &[String]) -> String {
     filter_dump(dump, |id| ids.iter().any(|p| p == id))
 }
 
+/// What another declaration owns inside this snapshot's subtree.
+///
+/// Two shapes, because there are two kinds of owner. A `setkey` step owns
+/// **one key**, matched exactly — ownership is not a pattern, and a `setkey` on
+/// `a/b` must not take `a/bc` with it. A more specific *snapshot* owns a whole
+/// **subtree**: an extension's `settings` file is rooted at
+/// `/org/gnome/shell/extensions/<uuid>/`, which sits inside a machine block
+/// rooted at `/org/gnome/shell/`, and without this both files capture the same
+/// keys — absorbing into one leaves the other stale and the drift never clears.
+#[derive(Debug, Default, Clone)]
+pub struct Owned {
+    /// Snapshot-relative ids a `setkey` step declares.
+    pub keys: Vec<String>,
+    /// Snapshot-relative prefixes a deeper snapshot owns, each ending in `/`.
+    pub subtrees: Vec<String>,
+}
+
+impl Owned {
+    fn covers(&self, id: &str) -> bool {
+        self.keys.iter().any(|k| k == id)
+            || self.subtrees.iter().any(|p| id.starts_with(p.as_str()))
+    }
+}
+
+/// Drop everything another declaration owns.
+pub fn drop_owned(dump: &str, owned: &Owned) -> String {
+    filter_dump(dump, |id| owned.covers(id))
+}
+
 fn filter_dump(dump: &str, drop: impl Fn(&str) -> bool) -> String {
     let mut out = String::new();
     let mut header = String::new();
@@ -397,6 +426,33 @@ pub fn all_snapshots(home: &Path, machine: &Machine) -> Result<Vec<DconfSnapshot
 ///
 /// `strip` keeps its other, unrelated job: dropping keys that are noise
 /// (`monitors/`, `last-selected`) rather than keys that belong to someone else.
+/// Everything inside `snap`'s subtree that some other declaration owns.
+///
+/// The `setkey` keys, plus every subtree a **more specific snapshot** covers.
+/// That second half is what makes the dconf split work without a hand-maintained
+/// `strip`: an extension's `settings` snapshot is rooted inside a machine block
+/// rooted at `/org/gnome/shell/`, and a machine block cannot simply be re-rooted
+/// away from it — the root-level keys it exists to capture (`favorite-apps`,
+/// `app-picker-layout`) live at that root, so there is no path that takes them
+/// without taking `extensions/` too.
+pub fn owned_elsewhere(home: &Path, machine: &Machine, snap: &DconfSnapshot) -> Result<Owned> {
+    let keys = setkey_owned(home, machine, snap)?;
+    let mut subtrees = Vec::new();
+    for other in all_snapshots(home, machine)? {
+        // Only snapshots strictly deeper than this one, and never itself.
+        if other.path.len() > snap.path.len() && other.path.starts_with(&snap.path) {
+            let rel = other.path[snap.path.len()..].trim_start_matches('/');
+            if !rel.is_empty() {
+                let rel = rel.trim_end_matches('/');
+                subtrees.push(format!("{rel}/"));
+            }
+        }
+    }
+    subtrees.sort();
+    subtrees.dedup();
+    Ok(Owned { keys, subtrees })
+}
+
 pub fn setkey_owned(home: &Path, machine: &Machine, snap: &DconfSnapshot) -> Result<Vec<String>> {
     // Fails CLOSED. This used to swallow the error and return "nothing is
     // owned", which is the most dangerous possible answer: one unparseable
@@ -488,7 +544,7 @@ pub fn observe() -> Store {
 /// Compare one declared snapshot against live dconf, filtering **both** sides
 /// through its `strip` list so a stripped key never reads as drift.
 pub fn snapshot_state(home: &Path, snap: &DconfSnapshot) -> Result<SnapshotState> {
-    snapshot_state_owned(home, snap, &[])
+    snapshot_state_owned(home, snap, &Owned::default())
 }
 
 /// `snapshot_state`, with keys another declaration owns excluded from both
@@ -497,7 +553,7 @@ pub fn snapshot_state(home: &Path, snap: &DconfSnapshot) -> Result<SnapshotState
 pub fn snapshot_state_owned(
     home: &Path,
     snap: &DconfSnapshot,
-    owned: &[String],
+    owned: &Owned,
 ) -> Result<SnapshotState> {
     if let Store::Unreadable(why) = observe() {
         return Ok(SnapshotState::Unobservable(why));
@@ -515,7 +571,7 @@ pub fn snapshot_state_owned(
     }
     // Both sides get the same two filters, so neither a stripped key nor an
     // owned one can read as drift.
-    let filtered = |text: &str| drop_exact(&strip_dump(text, &snap.strip), owned);
+    let filtered = |text: &str| drop_owned(&strip_dump(text, &snap.strip), owned);
     let live = filtered(&String::from_utf8_lossy(&out.stdout));
     // The file was written filtered, but re-filter it: a `strip` entry added
     // after the last capture would otherwise show its stale keys as drift, and
@@ -564,9 +620,14 @@ pub fn capture(home: &Path, machine: &Machine, journal: &mut Journal) -> Result<
         // Never capture a key a `setkey` already declares: that is what turned a
         // snapshot into a second owner and made a prefs-UI tweak fight the
         // bundle on the next converge.
-        let owned = setkey_owned(home, machine, snap)?;
-        excluded += owned.len();
-        let filtered = drop_exact(&strip_dump(&dump_raw(&snap.path)?, &snap.strip), &owned);
+        // Never capture what another declaration owns: a `setkey`'s key, or a
+        // whole subtree a more specific snapshot covers. Both turned the
+        // snapshot into a second owner — the first made a prefs-UI tweak fight
+        // the bundle on the next converge, the second left two files holding the
+        // same keys with the drift never clearing.
+        let owned = owned_elsewhere(home, machine, snap)?;
+        excluded += owned.keys.len() + owned.subtrees.len();
+        let filtered = drop_owned(&strip_dump(&dump_raw(&snap.path)?, &snap.strip), &owned);
         let dest = home.join(&snap.file);
         if let Some(p) = dest.parent() {
             fs::create_dir_all(p).with_context(|| format!("creating {}", p.display()))?;
@@ -655,6 +716,71 @@ pub fn restore(home: &Path, machine: &Machine, dry_run: bool) -> Result<Vec<Path
         journal.commit()?;
     }
     Ok(loaded)
+}
+
+#[cfg(test)]
+mod subtree_ownership_tests {
+    use super::*;
+
+    /// A deeper snapshot owns its subtree, so the shallower one stops capturing
+    /// it.
+    ///
+    /// This is what makes the dconf split work without a hand-maintained
+    /// `strip`. An extension's `settings` file is rooted at
+    /// `/org/gnome/shell/extensions/<uuid>/`, inside a machine block rooted at
+    /// `/org/gnome/shell/` — and the machine block cannot simply be re-rooted
+    /// away, because the root-level keys it exists to capture (`favorite-apps`,
+    /// `app-picker-layout`) live at exactly that root. There is no path that
+    /// takes them without taking `extensions/` too. Without this, both files
+    /// capture the same keys, absorbing into one leaves the other stale, and the
+    /// drift never clears.
+    #[test]
+    fn a_deeper_snapshot_takes_its_subtree_out_of_the_shallower_one() {
+        let dump = "[/]\nfavorite-apps=['a.desktop']\n\n\
+                    [extensions/tilingshell]\nlayouts-json='x'\n\n\
+                    [extensions/other]\nkeep='yes'\n";
+        let owned = Owned {
+            keys: vec![],
+            subtrees: vec!["extensions/tilingshell/".into()],
+        };
+        let out = drop_owned(dump, &owned);
+        assert!(out.contains("favorite-apps"), "the root keys stay:\n{out}");
+        assert!(out.contains("keep='yes'"), "an unowned extension stays:\n{out}");
+        assert!(
+            !out.contains("layouts-json"),
+            "the owned subtree must be gone — two files must not hold it:\n{out}"
+        );
+    }
+
+    /// Subtree ownership is a prefix; key ownership is not.
+    ///
+    /// `a/b` must not take `a/bc` with it — that was already true for `setkey`
+    /// keys and has to stay true now that a second, prefix-shaped kind of
+    /// ownership exists beside them.
+    #[test]
+    fn a_prefix_does_not_swallow_a_sibling_with_a_longer_name() {
+        let dump = "[extensions/blur]\nx=1\n\n[extensions/blurred]\ny=2\n";
+        let owned = Owned {
+            keys: vec![],
+            subtrees: vec!["extensions/blur/".into()],
+        };
+        let out = drop_owned(dump, &owned);
+        assert!(!out.contains("x=1"), "the owned subtree goes:\n{out}");
+        assert!(
+            out.contains("y=2"),
+            "`extensions/blurred` is a different subtree and must survive:\n{out}"
+        );
+
+        // And an exactly-owned key still does not take its longer sibling.
+        let dump = "[a]\nb=1\nbc=2\n";
+        let owned = Owned {
+            keys: vec!["a/b".into()],
+            subtrees: vec![],
+        };
+        let out = drop_owned(dump, &owned);
+        assert!(!out.contains("b=1"), "{out}");
+        assert!(out.contains("bc=2"), "ownership is not a pattern:\n{out}");
+    }
 }
 
 #[cfg(test)]

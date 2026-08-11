@@ -1531,7 +1531,7 @@ pub fn run_drift(
     all_snaps.extend(providers::extension_snapshots(home, machine)?);
     for snap in &all_snaps {
         let group = format!("dconf/{}", snap.name());
-        let owned = crate::dconf::setkey_owned(home, machine, snap)?;
+        let owned = crate::dconf::owned_elsewhere(home, machine, snap)?;
         match crate::dconf::snapshot_state_owned(home, snap, &owned)? {
             // Reported, not dropped. A declared snapshot that cannot be
             // evaluated used to vanish from the report entirely, so a Mac — or
