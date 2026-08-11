@@ -210,6 +210,13 @@ without being a managed provider — Settings Sync stays the sole registrar of
 those extensions, and naming the kind makes the ownership temper declines
 explicit rather than implicit.
 
+> **Upgrade the binary before you rename the field, not after.** A temper from
+> before this release appends the old `extensions` key when `reconcile` absorbs
+> an extension. On a folder already renamed to `gnome_extensions` that is a
+> second key beside the first, and serde rejects the pair as a **duplicate
+> field** — the manifest stops parsing on every machine, and `[git].auto_commit`
+> commits it. This is why step 1 of the order of operations is not optional.
+
 **Not aliased:** the `Finding.kind` values above. If you parse `temper drift
 --json`, they are renamed fields rather than aliases — `.items[].kind`, and the
 `remediation` list beside it. The `dconf-*` kinds are **unchanged**; they were
