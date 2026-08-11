@@ -237,29 +237,27 @@ details a uniform signature is designed to hide.
 
 ## Verification gap (a state, not a feature)
 
-`restore-dconf`'s **write** path has no automated coverage. The suite reaches it
-only under `--dry-run`, which returns before `dconf load` — so the undo payload
-capture and `journal::dconf_load_tree` are exercised by nothing. That function's
-whole point is that reverting a subtree needs a **reset then load**: `dconf load`
-merges, so replaying the prior dump alone would leave every key the restore
-introduced still sitting there.
+`restore-dconf` and its revert are covered by `restore_dconf_is_revertible.rs`,
+against a fake `dconf` that keeps a store on disk and whose `load` **appends** —
+because the real one merges, and a stub that overwrote would pass whether or not
+temper resets first. The tests assert the round trip (a key the snapshot
+introduced is gone after `undo`, a key that predated it is not), the ordering
+(`reset` precedes `load`), and that `--dry-run` touches nothing. Removing the
+reset from `journal::dconf_load_tree` fails two of the three.
 
-Everything around it is confirmed on real machines. Seven boxes converge to zero
-out of sync; `prune` has removed packages, taps and files under confirm on four
-of them; the dconf **capture** half runs on both desktops, including the split of
-extension settings out of a whole-desktop snapshot. It is the restore-then-revert
-pair specifically that nobody has run.
-
-To close it, on a desktop that has a snapshot (a throwaway VM is safer, since
-step 1 clobbers live tweaks by design):
+What that does **not** prove is the fake's fidelity: that `dconf reset -f` really
+empties a subtree, and that `dconf load` merges exactly the way the stub models.
+Those are assumptions about a tool, not about temper, and only a real desktop
+settles them:
 
 1. `temper restore-dconf`, then `temper drift` — the desktop should match the
    snapshot, and drift should be clean.
 2. **`temper undo`** — the desktop must return to its pre-restore state,
-   *including* keys the restore introduced that the prior dump never had. Those
-   are exactly the ones a bare `load` leaves behind, and the only reason the
-   reset exists.
+   *including* keys the restore introduced that the prior dump never had.
 
-`speaker-eq` is unrun for a different reason and always will be until someone
-does it deliberately: it is `run = "manual"` because its picker needs a TTY and
-the speaker physically connected, so no converge reaches it.
+Cheap to do on a machine that already has a snapshot, and worth doing once.
+
+`speaker-eq` is unrun for a different reason: it is `run = "manual"` because its
+script *asks* which profile to install, so no converge reaches it. That is a
+property of the recipe rather than of the work — see the note in `PATTERNS.md` on
+gating a step on hardware instead of on a human.

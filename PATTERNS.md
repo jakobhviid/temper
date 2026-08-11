@@ -186,5 +186,19 @@ to this machine — which is why that is question 3 in AGENTS.md rather than a t
   Add a `check`, or use a real primitive.
 - **Gating on `role`/`os` when you mean "if the app is installed"** → use a
   `when` presence probe. `role`/`os` are for machine *shape*, not app presence.
+- **`run = "manual"` because the script PROMPTS, not because the work needs a
+  human** → make the script choose, and gate it. `manual` is the strongest thing
+  a step can say about itself: no converge will ever run it, and `drift` reports
+  it status-only forever, so it is permanently outside the loop that keeps every
+  other step honest. That is the right answer for work that genuinely needs a
+  person — a calibration you listen to, a dialog only the user can approve.
+
+  It is the wrong answer for a script that could pick for itself. If the choice
+  is derivable from the machine (which hardware is attached, which of the assets
+  matches it), the recipe already knows enough: give the assets a field that says
+  what each matches, default to the one that does, and gate the step with `when`
+  so it is skipped where the hardware is absent. Then it converges, drifts, and
+  is checked like everything else — instead of being a step you have to remember
+  exists.
 
 See SPEC for the exact grammar of every field named here.
