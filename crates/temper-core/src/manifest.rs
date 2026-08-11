@@ -889,6 +889,40 @@ fn reject_bad_dconf_paths(ft: &TemperToml) -> Result<()> {
     Ok(())
 }
 
+/// A `retire` entry must name something removable.
+///
+/// `retire` is the most destructive declaration in the schema, and two shapes
+/// parse while meaning nothing good. An empty string is a typo that silently
+/// never matches — reported by no drift, removed by no prune, and looking for
+/// all the world like it worked. `~` or `/` names something `prune` will refuse
+/// at the point of removal, which leaves the machine permanently red with a
+/// finding no verb can clear.
+///
+/// Caught at load, where the message can name the machine and the entry, rather
+/// than at the end of a converge.
+fn reject_bad_retire(ft: &TemperToml) -> Result<()> {
+    for m in &ft.machine {
+        for r in &m.retire {
+            let t = r.trim();
+            if t.is_empty() {
+                anyhow::bail!(
+                    "machine '{}' has an empty `retire` entry — it matches nothing \
+                     and would be silently ignored",
+                    m.name
+                );
+            }
+            if matches!(t, "/" | "~" | "~/") {
+                anyhow::bail!(
+                    "machine '{}' declares `retire = [\"{t}\"]` — temper will not \
+                     remove your home directory or the filesystem root",
+                    m.name
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn load_fleet(home: &Path) -> Result<TemperToml> {
     let p = home.join("temper.toml");
     let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
@@ -897,6 +931,7 @@ pub fn load_fleet(home: &Path) -> Result<TemperToml> {
             reject_duplicate_machines(&ft)?;
             reject_duplicate_extensions(&ft)?;
             reject_bad_dconf_paths(&ft)?;
+            reject_bad_retire(&ft)?;
             Ok(ft)
         }
         // Couldn't parse. Version skew (a newer temper's field) or a genuine
@@ -1505,6 +1540,35 @@ mod tests {
             ),
             PullMode::Rebase
         );
+    }
+
+    /// A `retire` entry must name something removable.
+    ///
+    /// `retire` is the most destructive declaration in the schema. An empty
+    /// entry matches nothing and is silently ignored — reported by no drift and
+    /// removed by no prune, looking exactly like it worked. `~` or `/` names
+    /// something `prune` refuses at the point of removal, leaving a permanent
+    /// red finding no verb can clear.
+    #[test]
+    fn a_retire_entry_must_name_something_removable() {
+        let doc = |entry: &str| {
+            format!("[[machine]]\nname = \"t\"\nos = \"linux\"\nretire = [\"{entry}\"]\n")
+        };
+        for bad in ["", "  ", "~", "/", "~/"] {
+            let ft: TemperToml = toml::from_str(&doc(bad)).unwrap();
+            assert!(
+                super::reject_bad_retire(&ft).is_err(),
+                "`retire = [{bad:?}]` must be rejected"
+            );
+        }
+        // …and an ordinary target is not second-guessed.
+        for ok in ["~/.config/old-app", "/etc/1password/custom_allowed_browsers"] {
+            let ft: TemperToml = toml::from_str(&doc(ok)).unwrap();
+            assert!(
+                super::reject_bad_retire(&ft).is_ok(),
+                "`retire = [{ok:?}]` is an ordinary target"
+            );
+        }
     }
 
     /// A dconf subtree must start and end with `/`.
