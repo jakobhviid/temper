@@ -133,6 +133,15 @@ claiming a capability with nothing behind it, a provider missing from the matrix
 teaching a verb that is only an alias, a `--json` verb emitting anything but one
 document, and a doc that never made it into `--llm`.
 
+**A fake tool must be able to disagree with you.** Where a test stands a script
+in for `brew`/`gext`/`code`, copy the real tool's *contract*, not the shape the
+code under test happens to expect — exit codes especially. `brew bundle cleanup`
+exits **non-zero when it finds orphans**, the way `diff` does; a fake that
+exited 0 there agreed with a caller that had started reading non-zero as
+failure, so a full suite passed while extras detection returned nothing on every
+real machine. If you cannot say what the tool does on the unhappy path, run it
+once and look, rather than encoding the assumption twice.
+
 **Prefer a `match` to a list of `for` loops.** The compiler checks the first and
 nothing at all about the second, so anywhere a new manager, kind or provider must
 be handled, drive it from an exhaustive match (`Manager::ALL` + `ignore_list`,

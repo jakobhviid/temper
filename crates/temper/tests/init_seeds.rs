@@ -53,6 +53,11 @@ case "$1 $2" in
       echo "ghostty"
       echo "Would untap:"
       echo "user/tap"
+      # …and it exits NON-ZERO to say it found them, as the real one does. A
+      # fake that exits 0 here agrees with whatever the caller assumes about the
+      # exit code, which is how a regression reading it as failure passed a full
+      # suite.
+      exit 1
       ;;
   *) : ;;
 esac
