@@ -61,8 +61,8 @@ pub fn drop_exact(dump: &str, ids: &[String]) -> String {
 /// Two shapes, because there are two kinds of owner. A `setkey` step owns
 /// **one key**, matched exactly — ownership is not a pattern, and a `setkey` on
 /// `a/b` must not take `a/bc` with it. A more specific *snapshot* owns a whole
-/// **subtree**: an extension's `settings` file is rooted at
-/// `/org/gnome/shell/extensions/<uuid>/`, which sits inside a machine block
+/// **subtree**: an extension's `settings` file is rooted at its own subtree
+/// under `/org/gnome/shell/extensions/`, which sits inside a machine block
 /// rooted at `/org/gnome/shell/`, and without this both files capture the same
 /// keys — absorbing into one leaves the other stale and the drift never clears.
 #[derive(Debug, Default, Clone)]
@@ -731,8 +731,8 @@ mod subtree_ownership_tests {
     /// it.
     ///
     /// This is what makes the dconf split work without a hand-maintained
-    /// `strip`. An extension's `settings` file is rooted at
-    /// `/org/gnome/shell/extensions/<uuid>/`, inside a machine block rooted at
+    /// `strip`. An extension's `settings` file is rooted at its own subtree
+    /// under `/org/gnome/shell/extensions/`, inside a machine block rooted at
     /// `/org/gnome/shell/` — and the machine block cannot simply be re-rooted
     /// away, because the root-level keys it exists to capture (`favorite-apps`,
     /// `app-picker-layout`) live at exactly that root. There is no path that

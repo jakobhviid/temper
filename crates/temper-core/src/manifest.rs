@@ -209,28 +209,61 @@ pub struct GnomeExtensionSpec {
     /// scope. No new scope rule; the existing one applied to a smaller unit.
     #[serde(default)]
     pub settings: Option<String>,
+    /// The dconf subtree those settings live in, when it cannot be read off the
+    /// machine.
+    ///
+    /// An extension's subtree is **not** derivable from its uuid. GNOME takes it
+    /// from the extension's gschema, and across the nineteen extensions on the
+    /// fleet this was developed against, *none* of them matched
+    /// `/org/gnome/shell/extensions/<uuid>/`: `tilingshell@ferrarodomenico.com`
+    /// stores under `tilingshell`, `CoverflowAltTab@palatis.blogspot.com` under
+    /// `coverflowalttab`, `appindicatorsupport@rgcjonas.gmail.com` under
+    /// `appindicator`, `rounded-window-corners@fxgn` under
+    /// `rounded-window-corners-reborn`, and `compiz-windows-effect@…` under
+    /// `com/github/hermes83/compiz-windows-effect`. No rule maps one to the
+    /// other — not stripping the domain, not lowercasing.
+    ///
+    /// So temper reads the gschema of the installed extension. Declare this only
+    /// where that cannot work: an extension not installed on the machine holding
+    /// the spec, or one that ships no schema file.
+    #[serde(default)]
+    pub settings_path: Option<String>,
 }
 
 impl GnomeExtension {
-    /// The dconf subtree an extension owns. **Only** its own subtree: anything
-    /// it touches outside this is shared keyspace (two extensions can both want
-    /// `/org/gnome/desktop/interface/gtk-theme`), so an implicit ownership claim
-    /// there would be exactly wrong. Out-of-tree keys are declared as policy.
-    pub fn dconf_path(&self) -> String {
-        format!("/org/gnome/shell/extensions/{}/", self.uuid())
+    /// The subtree this extension declares outright, if any. **Only** its own
+    /// subtree: anything it touches outside this is shared keyspace (two
+    /// extensions can both want `/org/gnome/desktop/interface/gtk-theme`), so an
+    /// implicit ownership claim there would be exactly wrong. Out-of-tree keys
+    /// are declared as policy.
+    ///
+    /// Resolving the *undeclared* case needs the machine — see
+    /// `providers::extension_dconf_path`.
+    pub fn declared_dconf_path(&self) -> Option<&str> {
+        match self {
+            GnomeExtension::Uuid(_) => None,
+            GnomeExtension::Spec(s) => s.settings_path.as_deref(),
+        }
     }
 
-    /// This extension's settings as a snapshot, if it declares a file for them.
+    /// The file this extension's settings are captured to, if it declares one.
+    pub fn settings_file(&self) -> Option<&str> {
+        match self {
+            GnomeExtension::Uuid(_) => None,
+            GnomeExtension::Spec(s) => s.settings.as_deref(),
+        }
+    }
+
+    /// This extension's settings as a snapshot, given the subtree they live in.
     /// Synthesised rather than hand-written so it rides every guard the
     /// machine-scope snapshots already have — observability, ownership, undo.
-    pub fn settings_snapshot(&self) -> Option<DconfSnapshot> {
-        let file = match self {
-            GnomeExtension::Uuid(_) => None,
-            GnomeExtension::Spec(s) => s.settings.clone(),
-        }?;
+    ///
+    /// The path is passed in rather than computed because it is a fact about the
+    /// machine, not about the declaration.
+    pub fn settings_snapshot(&self, path: &str) -> Option<DconfSnapshot> {
         Some(DconfSnapshot {
-            path: self.dconf_path(),
-            file,
+            path: path.to_string(),
+            file: self.settings_file()?.to_string(),
             strip: Vec::new(),
             label: Some(self.uuid().to_string()),
         })
@@ -1171,17 +1204,24 @@ mod rename_alias_tests {
     /// An extension's settings become a snapshot rooted at its own subtree.
     ///
     /// Rooted at its OWN subtree and no wider: anything an extension touches
-    /// outside `/org/gnome/shell/extensions/<uuid>/` is shared keyspace — two
-    /// extensions can both want `/org/gnome/desktop/interface/gtk-theme` — so an
-    /// implicit ownership claim there would be exactly wrong.
+    /// outside its subtree is shared keyspace — two extensions can both want
+    /// `/org/gnome/desktop/interface/gtk-theme` — so an implicit ownership claim
+    /// there would be exactly wrong.
+    ///
+    /// The subtree is passed in, and this test used to assert it was
+    /// `/org/gnome/shell/extensions/<uuid>/`. That is not where GNOME puts it,
+    /// for any extension measured: the test encoded the guess the code made, so
+    /// both agreed and the captures came out empty.
     #[test]
-    fn an_extensions_settings_are_a_snapshot_of_its_own_subtree() {
+    fn an_extensions_settings_are_a_snapshot_of_the_subtree_it_is_given() {
         let b: Bundle = toml::from_str(
             "gnome_extensions = [{ uuid = \"tiling@x\", settings = \"assets/tiling.dconf\" }]\n",
         )
         .unwrap();
-        let snap = b.gnome_extensions[0].settings_snapshot().expect("a snapshot");
-        assert_eq!(snap.path, "/org/gnome/shell/extensions/tiling@x/");
+        let snap = b.gnome_extensions[0]
+            .settings_snapshot("/org/gnome/shell/extensions/tiling/")
+            .expect("a snapshot");
+        assert_eq!(snap.path, "/org/gnome/shell/extensions/tiling/");
         assert_eq!(snap.file, "assets/tiling.dconf");
         assert_eq!(snap.name(), "tiling@x", "the label names the extension");
         assert!(snap.strip.is_empty(), "an extension subtree has no noise to strip");
@@ -1189,10 +1229,26 @@ mod rename_alias_tests {
         // No settings declared, no snapshot — declaring an extension does not
         // silently start capturing its keys.
         let b: Bundle = toml::from_str("gnome_extensions = [\"plain@x\"]\n").unwrap();
-        assert!(b.gnome_extensions[0].settings_snapshot().is_none());
+        assert!(b.gnome_extensions[0].settings_snapshot("/x/").is_none());
         let b: Bundle =
             toml::from_str("gnome_extensions = [{ uuid = \"a@x\", enabled = false }]\n").unwrap();
-        assert!(b.gnome_extensions[0].settings_snapshot().is_none());
+        assert!(b.gnome_extensions[0].settings_snapshot("/x/").is_none());
+    }
+
+    /// A declared `settings_path` is the answer for a box where the extension
+    /// is not installed, so it must win outright — and be tolerated without its
+    /// trailing slash, which every other path in the schema also is.
+    #[test]
+    fn a_declared_settings_path_wins_and_is_normalised() {
+        let b: Bundle = toml::from_str(
+            "gnome_extensions = [{ uuid = \"a@x\", settings = \"s.dconf\", \
+             settings_path = \"/org/gnome/shell/extensions/other\" }]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            crate::providers::extension_dconf_path(&b.gnome_extensions[0]).as_deref(),
+            Some("/org/gnome/shell/extensions/other/")
+        );
     }
 
     /// …and the new names parse too, obviously — but assert it, because an alias

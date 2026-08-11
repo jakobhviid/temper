@@ -14,7 +14,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
@@ -1087,6 +1087,102 @@ pub fn effective_extension_specs(
 }
 
 #[cfg(test)]
+mod extension_dconf_path_tests {
+    /// The rule the code used to apply — uuid in, path out — against the paths
+    /// the extensions on a real desktop actually declare. Not one matches, and
+    /// the failures are not a single systematic transform: the domain goes, but
+    /// also case changes, names change outright, and two nest several levels
+    /// deep. Any future attempt to "just derive it" has to answer this table.
+    #[test]
+    fn no_rule_maps_a_uuid_to_its_subtree() {
+        // (uuid, the subtree it really uses) — read off installed gschemas.
+        let real = [
+            ("tilingshell@ferrarodomenico.com", "tilingshell"),
+            ("CoverflowAltTab@palatis.blogspot.com", "coverflowalttab"),
+            ("appindicatorsupport@rgcjonas.gmail.com", "appindicator"),
+            ("rounded-window-corners@fxgn", "rounded-window-corners-reborn"),
+            ("logomenu@aryan_k", "Logo-menu"),
+            (
+                "compiz-windows-effect@hermes83.github.com",
+                "com/github/hermes83/compiz-windows-effect",
+            ),
+        ];
+        // Each plausible rule, and a case that kills it. Dropping the domain is
+        // right often enough to look like the answer — which is exactly how the
+        // guess survived review.
+        type Rule = (&'static str, fn(&str) -> String);
+        let rules: [Rule; 3] = [
+            ("the uuid itself", |u| u.to_string()),
+            ("drop the domain", |u| {
+                u.split('@').next().unwrap().to_string()
+            }),
+            ("drop the domain, lowercased", |u| {
+                u.split('@').next().unwrap().to_lowercase()
+            }),
+        ];
+        for (name, rule) in rules {
+            assert!(
+                real.iter().any(|(uuid, path)| rule(uuid) != *path),
+                "`{name}` maps every uuid to its real subtree — if that is true, \
+                 the probe is unnecessary and this test is the thing that is wrong"
+            );
+        }
+        // …and no rule at all gets the nested one.
+        assert_eq!(
+            real.iter()
+                .find(|(u, _)| u.starts_with("compiz-windows-effect"))
+                .map(|(_, p)| *p),
+            Some("com/github/hermes83/compiz-windows-effect"),
+            "the schema path can be nested several levels below the uuid"
+        );
+    }
+
+    #[test]
+    fn the_schema_path_is_read_out_of_the_gschema() {
+        let xml = r#"<?xml version="1.0"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.tilingshell"
+          path="/org/gnome/shell/extensions/tilingshell/">
+    <key name="x" type="b"><default>true</default></key>
+  </schema>
+</schemalist>"#;
+        assert_eq!(
+            super::first_shell_extension_path(xml).as_deref(),
+            Some("/org/gnome/shell/extensions/tilingshell/")
+        );
+    }
+
+    /// An extension may ship a schema for keyspace it does not own. Claiming
+    /// `/org/gnome/desktop/interface/` as "its subtree" would hand one extension
+    /// ownership of keys the whole desktop shares.
+    #[test]
+    fn a_schema_outside_the_extensions_tree_is_not_its_subtree() {
+        let xml = r#"<schemalist>
+  <schema id="org.gnome.desktop.interface" path="/org/gnome/desktop/interface/"/>
+</schemalist>"#;
+        assert_eq!(super::first_shell_extension_path(xml), None);
+
+        // …but it must still find the real one when both are present.
+        let both = r#"<schemalist>
+  <schema id="org.gnome.desktop.interface" path="/org/gnome/desktop/interface/"/>
+  <schema id="org.gnome.shell.extensions.foo" path="/org/gnome/shell/extensions/foo/"/>
+</schemalist>"#;
+        assert_eq!(
+            super::first_shell_extension_path(both).as_deref(),
+            Some("/org/gnome/shell/extensions/foo/")
+        );
+    }
+
+    /// The extensions root itself is not any one extension's subtree — taking it
+    /// would make that extension own every other extension's settings.
+    #[test]
+    fn the_bare_extensions_root_is_rejected() {
+        let xml = r#"<schema path="/org/gnome/shell/extensions/"/>"#;
+        assert_eq!(super::first_shell_extension_path(xml), None);
+    }
+}
+
+#[cfg(test)]
 mod extension_scope_tests {
     use crate::manifest::GnomeExtension;
 
@@ -1105,6 +1201,7 @@ mod extension_scope_tests {
             uuid: "x@y".into(),
             enabled: false,
             settings: None,
+            settings_path: None,
         });
         let mut out = [bundle];
         if let Some(slot) = out.iter_mut().find(|e| e.uuid() == machine.uuid()) {
@@ -1176,10 +1273,99 @@ pub fn extension_snapshots(
     home: &Path,
     machine: &Machine,
 ) -> Result<Vec<manifest::DconfSnapshot>> {
-    Ok(effective_extension_specs(home, machine)?
-        .iter()
-        .filter_map(|e| e.settings_snapshot())
-        .collect())
+    let mut out = Vec::new();
+    for e in effective_extension_specs(home, machine)? {
+        if e.settings_file().is_none() {
+            continue;
+        }
+        match extension_dconf_path(&e) {
+            Some(path) => out.extend(e.settings_snapshot(&path)),
+            // Declared settings temper cannot place. Skipping silently would
+            // capture nothing into a file that reads as "this extension has no
+            // settings" — say it instead, and name the field that fixes it.
+            None => eprintln!(
+                "warning: cannot tell which dconf subtree `{}` stores its \
+                 settings in — it is not installed here, or ships no schema. \
+                 Its `settings` file is left alone. Declare `settings_path = \
+                 \"/org/gnome/shell/extensions/<subtree>/\"` to say where.",
+                e.uuid()
+            ),
+        }
+    }
+    Ok(out)
+}
+
+/// Which dconf subtree an extension keeps its settings in.
+///
+/// **Not** `/org/gnome/shell/extensions/<uuid>/`. GNOME derives the path from
+/// the extension's gschema, and on a real fleet none of nineteen installed
+/// extensions matched the uuid: the domain is dropped, case changes, and some
+/// bear no resemblance at all (`appindicatorsupport@rgcjonas.gmail.com` →
+/// `appindicator`, `rounded-window-corners@fxgn` →
+/// `rounded-window-corners-reborn`). Guessing produced empty captures that
+/// reported success.
+///
+/// So this reads the schema the extension ships. A declared `settings_path`
+/// wins — it is the answer for an extension that is not installed on this box.
+pub fn extension_dconf_path(e: &manifest::GnomeExtension) -> Option<String> {
+    if let Some(p) = e.declared_dconf_path() {
+        let mut p = p.to_string();
+        if !p.ends_with('/') {
+            p.push('/');
+        }
+        return Some(p);
+    }
+    let home = std::env::var("HOME").ok()?;
+    let roots = [
+        PathBuf::from(&home).join(".local/share/gnome-shell/extensions"),
+        PathBuf::from("/usr/share/gnome-shell/extensions"),
+    ];
+    for root in roots {
+        let schemas = root.join(e.uuid()).join("schemas");
+        let Ok(entries) = std::fs::read_dir(&schemas) else {
+            continue;
+        };
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|d| d.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "xml"))
+            .collect();
+        // One extension can ship several schemas; sort so the answer does not
+        // depend on directory order.
+        files.sort();
+        for f in files {
+            let Ok(text) = std::fs::read_to_string(&f) else {
+                continue;
+            };
+            if let Some(p) = first_shell_extension_path(&text) {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+/// The first `path="/org/gnome/shell/extensions/…/"` in a gschema document.
+///
+/// Deliberately not an XML parse: the attribute is unambiguous, and a schema
+/// file that fails to parse should still yield its path rather than take the
+/// feature down. Restricted to the extensions tree so a schema that also
+/// declares, say, `/org/gnome/desktop/…` cannot claim shared keyspace.
+fn first_shell_extension_path(xml: &str) -> Option<String> {
+    const PREFIX: &str = "/org/gnome/shell/extensions/";
+    for (i, _) in xml.match_indices("path=\"") {
+        let rest = &xml[i + 6..];
+        let end = rest.find('"')?;
+        let p = &rest[..end];
+        if p.starts_with(PREFIX) && p.len() > PREFIX.len() {
+            let mut p = p.to_string();
+            if !p.ends_with('/') {
+                p.push('/');
+            }
+            return Some(p);
+        }
+    }
+    None
 }
 
 /// Just the uuids — what `install` and the extras diff work in.

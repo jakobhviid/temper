@@ -126,6 +126,7 @@ gnome_extensions = [                        # optional; for THIS machine, unione
                                             #   whichever fields it needs.
     { uuid = "CoverflowAltTab@palatis.blogspot.com", enabled = false },
     { uuid = "tilingshell@ferrarodomenico.com", enabled = true, settings = "assets/gnome/ext/tilingshell.dconf" },
+    { uuid = "gravatar@dsheeler.net", settings = "assets/gnome/ext/gravatar.dconf", settings_path = "/org/gnome/shell/extensions/gravatar/" },
 ]                                           # NB: an inline table must be on ONE
                                             #   line — TOML 1.0 does not allow it
                                             #   to span them, however long it gets.                                           # A bare uuid means installed AND
@@ -137,13 +138,26 @@ gnome_extensions = [                        # optional; for THIS machine, unione
                                             #   captured dconf key nothing linked
                                             #   to the declaration.
                                             # `settings` captures the extension's
-                                            #   own subtree
-                                            #   (/org/gnome/shell/extensions/<uuid>/)
-                                            #   into that file — snapshot,
-                                            #   restore and drift treat it exactly
-                                            #   like a [[machine.dconf]] block, and
-                                            #   it inherits the scope of whatever
-                                            #   declared the extension.
+                                            #   own dconf subtree into that file —
+                                            #   snapshot, restore and drift treat
+                                            #   it exactly like a [[machine.dconf]]
+                                            #   block, and it inherits the scope of
+                                            #   whatever declared the extension.
+                                            # WHICH subtree is read from the
+                                            #   extension's installed gschema. It
+                                            #   is NOT derivable from the uuid:
+                                            #   tilingshell@ferrarodomenico.com
+                                            #   stores under `tilingshell`,
+                                            #   appindicatorsupport@rgcjonas.gmail.com
+                                            #   under `appindicator`. Guessing gets
+                                            #   an empty capture.
+                                            # `settings_path` says it outright, for
+                                            #   an extension that is not installed
+                                            #   on the box holding the spec or that
+                                            #   ships no schema. It wins when given;
+                                            #   without it and with nothing to read,
+                                            #   temper warns and leaves the file
+                                            #   alone rather than emptying it.
 brewfile = "brewfiles/chronos"   # optional; a Brewfile whose lines join the set
 retire_packages = ["brew \"foo\""]  # optional; packages that must NOT be installed.
                             #   Reported as drift every run and removed by

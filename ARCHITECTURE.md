@@ -414,7 +414,7 @@ Split by who owns the key:
 
 | owner | what it covers | how it is declared |
 |---|---|---|
-| **the extension** | `/org/gnome/shell/extensions/<uuid>/…` | `settings = "…"` on the extension — synthesised into a snapshot rooted at its own subtree, so capture, restore, drift and per-section reconcile are the machinery that already existed |
+| **the extension** | the extension's own dconf subtree (read from its gschema — *not* the uuid) | `settings = "…"` on the extension — synthesised into a snapshot rooted at its own subtree, so capture, restore, drift and per-section reconcile are the machinery that already existed |
 | **policy — always set** | a value the fleet or the machine insists on (global shortcuts, 1Password) | a `setkey` step |
 | **policy — always absent** | a key that must not be set | the absence primitive, not a captured value |
 | **machine-specific live state** | the residue: genuinely this-box-only settings | a narrowly-rooted `[[machine.dconf]]` |
@@ -459,9 +459,8 @@ Three consequences follow, and they are the reason for the split:
   So the key stays captured, and one member's owner does not become the key's.
 
 **Two snapshots must not cover one key, and temper enforces that.** An
-extension's `settings` subtree sits *inside*
-`/org/gnome/shell/extensions/<uuid>/`, so a `[[machine.dconf]]` rooted at
-`/org/gnome/shell/` covers it too. The **more specific** snapshot wins: its
+extension's `settings` subtree sits *inside* `/org/gnome/shell/extensions/`, so a
+`[[machine.dconf]]` rooted at `/org/gnome/shell/` covers it too. The **more specific** snapshot wins: its
 subtree is excluded from the shallower one's capture and from both sides of the
 drift comparison, exactly as a `setkey`-owned key is.
 
