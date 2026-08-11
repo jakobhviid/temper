@@ -101,3 +101,47 @@ fn a_bundle_declared_item_names_its_file_not_a_verb_that_cannot_act() {
          note: {item}"
     );
 }
+
+/// A verb that has checked one row of the matrix may not announce a verdict on
+/// all of it.
+///
+/// `adopt` looks at installed packages and nothing else, and said "nothing to
+/// adopt — machine matches its spec" on a box where `drift` was reporting
+/// eleven changed desktop keys, two extensions switched off against their
+/// declaration, and a failing assertion. Every one of those was true and none
+/// was a package. The reader stops, because the tool told them they were done.
+#[test]
+fn adopt_does_not_claim_the_machine_matches_its_spec() {
+    let home = TempDir::new().unwrap();
+    let fake_home = TempDir::new().unwrap();
+    let state = TempDir::new().unwrap();
+    let h = home.path();
+    fs::write(
+        h.join("temper.toml"),
+        "[[machine]]\nname = \"t\"\nos = \"linux\"\n",
+    )
+    .unwrap();
+
+    let out = Command::cargo_bin("temper")
+        .unwrap()
+        .args(["adopt"])
+        .env("TEMPER_DIR", h)
+        .env("HOME", fake_home.path())
+        .env("TEMPER_STATE_DIR", state.path())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        !stdout.contains("matches its spec") && !stdout.contains("in sync"),
+        "`adopt` checked packages only — it cannot report on the machine:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("package"),
+        "the empty result has to name the row it looked at:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("drift"),
+        "…and point at the verb that covers the rest:\n{stdout}"
+    );
+}
