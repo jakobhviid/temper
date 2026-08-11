@@ -1989,6 +1989,19 @@ pub struct PrunePlan {
     /// converged one, and "nothing to remove" is the wrong conclusion to draw
     /// from "I could not look".
     pub unavailable: Vec<packages::Manager>,
+    /// Extras this machine holds that `prune` **cannot** remove, with the reason.
+    /// Reported, never counted, and deliberately not in `items()` — for the same
+    /// reason as `unavailable`: nothing is planned for them.
+    ///
+    /// Today this is the system-scope flatpaks. `install` writes flatpaks to the
+    /// system installation, and removal is scoped to the user's (a system app is
+    /// the image's or root's, needs polkit, and hangs over ssh). The executor has
+    /// always known that and declined; the *plan* did not, so a machine whose
+    /// only extras were system flatpaks asked "remove 2 item(s)?" and then
+    /// removed none. A confirm that overstates what a destructive run will do is
+    /// worse than a verbose one — it spends the user's trust on the single prompt
+    /// standing between them and an irreversible removal.
+    pub unremovable: Vec<(packages::Manager, String, &'static str)>,
 }
 
 impl PrunePlan {
@@ -2149,6 +2162,18 @@ impl PrunePlan {
                 .map(|m| m.as_str())
                 .collect::<Vec<_>>()),
         );
+        doc.insert(
+            "unremovable".into(),
+            serde_json::json!(self
+                .unremovable
+                .iter()
+                .map(|(m, n, why)| serde_json::json!({
+                    "manager": m.as_str(),
+                    "name": n,
+                    "why": why,
+                }))
+                .collect::<Vec<_>>()),
+        );
         doc.insert("removed".into(), serde_json::json!(removed));
         serde_json::Value::Object(doc)
     }
@@ -2279,6 +2304,14 @@ mod prune_plan_tests {
             // prune acts on.
             residue_edited: vec!["~/.config/edited".into()],
             unavailable: Vec::new(),
+            // Reported, never removed, for the same reason: prune is not able to
+            // remove a system-scope flatpak, so counting it would make the
+            // confirm promise work the executor declines.
+            unremovable: vec![(
+                packages::Manager::Flatpak,
+                "org.image.Baked".into(),
+                "installed system-wide, not by you",
+            )],
         };
         assert!(!p.is_empty());
         assert_eq!(p.len(), 7, "a list prune acts on is not being counted");
@@ -2348,6 +2381,33 @@ pub fn run_prune(
     brew_trust: &[String],
 ) -> Result<PrunePlan> {
     let (mut packages, unavailable) = package_extras_observed(home, machine, ignore)?;
+    // Flatpaks this user did not install cannot be removed by this user. Split
+    // them out HERE, at plan time, so the count, the confirm and `--json` all
+    // describe the run that will actually happen — the executor has always
+    // declined them, but only after the confirm had already claimed otherwise.
+    //
+    // `None` means we could not tell user from system, and the executor removes
+    // nothing in that case; the plan has to agree, or it over-promises again.
+    let mut unremovable: Vec<(packages::Manager, String, &'static str)> = Vec::new();
+    if packages.iter().any(|(m, _)| *m == packages::Manager::Flatpak) {
+        let user = providers::flatpak_user_apps();
+        packages.retain(|(m, n)| {
+            if *m != packages::Manager::Flatpak {
+                return true;
+            }
+            match &user {
+                Some(u) if u.iter().any(|x| x == n) => true,
+                Some(_) => {
+                    unremovable.push((*m, n.clone(), "installed system-wide, not by you"));
+                    false
+                }
+                None => {
+                    unremovable.push((*m, n.clone(), "could not tell user from system installs"));
+                    false
+                }
+            }
+        });
+    }
     // A retired package is removed even though it is not an "extra": the spec
     // says it must not be here, which is a stronger statement than not
     // mentioning it. `[ignore]` deliberately does not silence this — ignoring is
@@ -2406,6 +2466,7 @@ pub fn run_prune(
             .filter(|p| crate::manifest::expand_tilde(p).exists())
             .collect(),
         unavailable,
+        unremovable,
     })
 }
 

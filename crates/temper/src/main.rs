@@ -1563,6 +1563,23 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
                 println!("      {path}");
             }
         }
+        // Extras this user cannot remove — reported whether or not there is other
+        // work, because they are the reason `drift` still lists something prune
+        // just walked past. Printed before the emptiness check for exactly that
+        // case: a machine whose only extras are system flatpaks has an empty
+        // plan, and "nothing to remove" alone reads as "nothing is out of place".
+        if !prune_plan.unremovable.is_empty() && !json {
+            for (mgr, name, why) in &prune_plan.unremovable {
+                println!(
+                    "{}",
+                    ui::yellow(&format!(
+                        "  {} {} {name} — {why}; prune cannot remove it",
+                        ui::g_warn(),
+                        mgr.as_str()
+                    ))
+                );
+            }
+        }
         if prune_plan.is_empty() {
             println!("prune {}: nothing to remove.", m.name);
             // …but say whether that is an answer or a shrug. A manager that is

@@ -269,6 +269,16 @@ of the drift. You pick a direction and run what it prints:
 > the terminal — so "nothing to remove" is never mistaken for a converged
 > machine. Nothing it holds is ever proposed for removal; an unexamined manager
 > contributes no drops at all.
+
+> **And it says what it cannot remove.** `install` writes flatpaks to the
+> **system** installation; removing one is scoped to **your** installation,
+> because a system app belongs to the image or to root and needs polkit — which
+> over ssh prompts into a void. A system-installed extra is therefore reported
+> and never counted: `unremovable` in `--json`, a yellow line on the terminal,
+> and absent from the "remove N item(s)?" total. On an image-based desktop that
+> is often *every* flatpak extra, so the plan is empty while `drift` still lists
+> them; the line is what connects the two. To act on one, either declare it, or
+> remove it yourself with `flatpak uninstall --system <id>`.
 - **GNOME extensions installed but not declared:** three answers, like packages —
 `temper reconcile` declares it for **this machine** (its own `gnome_extensions`
 list), `temper prune` uninstalls it (asks first), or

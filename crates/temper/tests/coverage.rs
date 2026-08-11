@@ -181,9 +181,12 @@ fn every_prune_plan_field_is_enumerated_by_items() {
         //   `residue_edited` — reported, never removed (see above).
         //   `unavailable`    — managers that could not be asked. Nothing is
         //      planned for them, which is the point: they exist so an empty plan
-        //      can say why it is empty. Both are published in `--json`; neither
-        //      is ever counted or removed.
-        .filter(|n| *n != "residue_edited" && *n != "unavailable")
+        //      can say why it is empty.
+        //   `unremovable`    — extras prune is not able to remove (a system-scope
+        //      flatpak). Counting them would make the confirm promise work the
+        //      executor is going to decline.
+        // All three are published in `--json`; none is ever counted or removed.
+        .filter(|n| !matches!(*n, "residue_edited" | "unavailable" | "unremovable"))
         .collect();
     assert!(fields.len() >= 6, "scrape found too few fields: {fields:?}");
 
@@ -205,7 +208,7 @@ fn every_prune_plan_field_is_enumerated_by_items() {
         let rest = &src[start..];
         &rest[..rest.find("\n    }").expect("to_json() end")]
     };
-    for exempt in ["residue_edited", "unavailable"] {
+    for exempt in ["residue_edited", "unavailable", "unremovable"] {
         assert!(
             to_json.contains(exempt),
             "PrunePlan.{exempt} is exempt from items() because it is not work — \
