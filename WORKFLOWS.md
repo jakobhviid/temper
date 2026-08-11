@@ -262,6 +262,13 @@ of the drift. You pick a direction and run what it prints:
     leaves it alone. That matters because `brew bundle cleanup` decides for
     itself what to remove, so temper has to name the ignored packages in the
     file it hands over rather than merely filtering them out of the report.
+
+> **An empty prune says why it is empty.** A manager that is installed and
+> failing cannot be asked what it holds, and its silence is not the same as
+> having nothing. `prune` names it — `unavailable` in `--json`, a yellow line on
+> the terminal — so "nothing to remove" is never mistaken for a converged
+> machine. Nothing it holds is ever proposed for removal; an unexamined manager
+> contributes no drops at all.
 - **GNOME extensions installed but not declared:** three answers, like packages —
 `temper reconcile` declares it for **this machine** (its own `gnome_extensions`
 list), `temper prune` uninstalls it (asks first), or

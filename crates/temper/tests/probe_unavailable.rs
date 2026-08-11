@@ -74,10 +74,46 @@ impl Env {
         }
     }
 
+    /// Replace the manifest — for the tests below, which are about brew rather
+    /// than the VS Code folder `new()` builds.
+    fn spec(&self, body: &str) {
+        fs::write(self.home.path().join("temper.toml"), body).unwrap();
+    }
+
+    fn brew(&self, body: &str) {
+        let bin = self.bin.path().join("brew");
+        fs::write(&bin, format!("#!/bin/sh\n{body}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    /// Installed and failing — the state `have()` cannot see, and the one that
+    /// makes "no extras" ambiguous.
+    fn broken_brew(&self) {
+        self.brew("echo 'Error: Your Homebrew is broken.' >&2\nexit 1");
+    }
+
+    /// Installed and answering: one formula, which is also the declared one, so
+    /// there is genuinely nothing to prune.
+    fn working_brew(&self) {
+        self.brew(
+            "case \"$1 $2\" in\n\
+             \x20 \"list --formula\") echo jq ;;\n\
+             \x20 \"trust --json\") echo '{\"taps\":[]}' ;;\n\
+             \x20 \"bundle cleanup\") exit 0 ;;\n\
+             esac\nexit 0",
+        );
+    }
+
     fn temper(&self) -> Command {
         let mut c = Command::cargo_bin("temper").unwrap();
         c.env("TEMPER_DIR", self.home.path())
             .env("HOME", self.fake_home.path())
+            .env("XDG_CONFIG_HOME", self.fake_home.path().join(".config"))
+            .env_remove("DCONF_PROFILE")
             .env("TEMPER_STATE_DIR", self.state.path())
             // A deliberately narrow PATH: the fake `code`, plus the system
             // basics. It must NOT inherit the developer's PATH, or the real
@@ -184,4 +220,68 @@ fn a_working_probe_still_reports_missing_packages() {
         2,
         "an answering manager reporting none means both are genuinely missing: {v}"
     );
+}
+
+/// `prune` must distinguish "nothing to remove" from "could not look".
+///
+/// Principle #12 — report `unavailable`, never absent — was enforced for `drift`
+/// and not for the verb that deletes. On a machine whose brew is installed and
+/// failing, `prune --json` emitted `"extras": []`, which is byte-identical to a
+/// converged machine. For a removal verb those are opposite instructions.
+#[test]
+fn prune_says_when_it_could_not_ask() {
+    let e = Env::new();
+    e.broken_brew();
+    e.spec(&format!(
+        "[[machine]]\nname = \"box\"\nos = \"{}\"\npackages = [\"brew \\\"jq\\\"\"]\n",
+        os()
+    ));
+
+    let out = e.temper().args(["prune", "--json"]).output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
+        panic!(
+            "prune did not emit one document ({err}): {}",
+            String::from_utf8_lossy(&out.stdout)
+        )
+    });
+
+    assert_eq!(
+        v["extras"].as_array().map(|a| a.len()).unwrap_or(0),
+        0,
+        "a manager that cannot be asked must not yield extras to remove: {v}"
+    );
+    let un: Vec<&str> = v["unavailable"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
+        .unwrap_or_default();
+    assert!(
+        un.contains(&"brew"),
+        "prune reported an empty plan without saying brew could not be asked — \
+         indistinguishable from a converged machine: {v}"
+    );
+
+    // …and the human reading the terminal is told too, not only the parser.
+    let human = e.temper().args(["prune"]).output().unwrap();
+    let text = String::from_utf8_lossy(&human.stdout);
+    assert!(
+        text.contains("could not ask brew"),
+        "the terminal output claimed nothing to remove and left out why: {text}"
+    );
+}
+
+/// The control: a manager that answers normally is never listed as unavailable,
+/// or the field means nothing.
+#[test]
+fn a_working_manager_is_not_reported_unavailable() {
+    let e = Env::new();
+    e.working_brew();
+    e.spec(&format!(
+        "[[machine]]\nname = \"box\"\nos = \"{}\"\npackages = [\"brew \\\"jq\\\"\"]\n",
+        os()
+    ));
+
+    let out = e.temper().args(["prune", "--json"]).output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let un = v["unavailable"].as_array().map(|a| a.len()).unwrap_or(0);
+    assert_eq!(un, 0, "a healthy brew was reported unavailable: {v}");
 }

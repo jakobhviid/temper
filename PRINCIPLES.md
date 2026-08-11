@@ -226,6 +226,15 @@ computed from state that was actually observed. Every write path reads "empty" a
 "delete what the spec captured", so a read that could not happen must never reach
 one as a fact.
 
+**The verbs owe this as much as the report does, and it is easy to give it only
+to the report.** `drift` distinguished the two and `prune` did not: on a machine
+whose brew was installed and failing, `prune --json` emitted `"extras": []`,
+byte-identical to a converged machine. Nothing was deleted wrongly — the empty
+list was safe — but "nothing to remove" and "I could not look" are opposite
+instructions to whoever reads it, and a removal verb is the worst place to
+conflate them. Any verb that can act on an observation publishes what it could
+not observe, in `--json` and on the terminal both.
+
 **Residue is an observability question too.** When a declaration goes away, what
 it deployed stays behind — and whether that needs machinery depends on exactly
 this: *enumerable state needs no tombstone; non-enumerable state does.* Packages

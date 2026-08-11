@@ -1531,6 +1531,24 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
         }
         if prune_plan.is_empty() {
             println!("prune {}: nothing to remove.", m.name);
+            // …but say whether that is an answer or a shrug. A manager that is
+            // installed and failing reports nothing, and "nothing to remove" is
+            // the wrong conclusion to draw from "I could not look".
+            if !prune_plan.unavailable.is_empty() {
+                println!(
+                    "{}",
+                    ui::yellow(&format!(
+                        "  could not ask {} what is installed — whatever it holds \
+                         is unexamined, not absent.",
+                        prune_plan
+                            .unavailable
+                            .iter()
+                            .map(|m| m.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                );
+            }
             return Ok(());
         }
         if dry_run {

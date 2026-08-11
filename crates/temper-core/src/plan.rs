@@ -1978,6 +1978,17 @@ pub struct PrunePlan {
     /// `rpm-ostree-extra`. Stages a new deployment, so it sets the reboot signal
     /// exactly as layering does.
     pub rpm_ostree: Vec<String>,
+    /// Package managers that are installed and could not be asked what they
+    /// hold. **Never removable**, and deliberately not in `items()`: nothing is
+    /// planned for them, which is the point. They are here so an empty plan can
+    /// say *why* it is empty.
+    ///
+    /// Principle #12 — report `unavailable`, never absent — was enforced for
+    /// `drift` and not for the verb that deletes. A consumer reading
+    /// `"extras": []` from a machine whose brew is broken cannot tell it from a
+    /// converged one, and "nothing to remove" is the wrong conclusion to draw
+    /// from "I could not look".
+    pub unavailable: Vec<packages::Manager>,
 }
 
 impl PrunePlan {
@@ -2080,6 +2091,17 @@ impl PrunePlan {
             "residue_edited".into(),
             serde_json::json!(self.residue_edited),
         );
+        // Not in `LISTS`, because nothing is planned for these — which is
+        // exactly why they have to be published. Without them a consumer cannot
+        // tell an empty plan from an unaskable machine.
+        doc.insert(
+            "unavailable".into(),
+            serde_json::json!(self
+                .unavailable
+                .iter()
+                .map(|m| m.as_str())
+                .collect::<Vec<_>>()),
+        );
         doc.insert("removed".into(), serde_json::json!(removed));
         serde_json::Value::Object(doc)
     }
@@ -2100,11 +2122,30 @@ fn package_extras(
     machine: &Machine,
     ignore: &Ignore,
 ) -> Result<Vec<(packages::Manager, String)>> {
+    Ok(package_extras_observed(home, machine, ignore)?.0)
+}
+
+/// `package_extras`, plus the managers that could not be asked.
+///
+/// The extras list alone cannot distinguish "this manager reported nothing" from
+/// "this manager is installed and failing", and for a **removal** verb those are
+/// opposite instructions. `drift` has always made the distinction — it reports
+/// `package-unavailable` — while `prune --json` emitted `"extras": []` either
+/// way, which reads as a clean machine.
+/// Extras, plus the managers that could not be asked for them.
+type ExtrasObserved = (Vec<(packages::Manager, String)>, Vec<packages::Manager>);
+
+fn package_extras_observed(
+    home: &Path,
+    machine: &Machine,
+    ignore: &Ignore,
+) -> Result<ExtrasObserved> {
     let effective = packages::effective_set(home, machine)?;
     if effective.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let installed = providers::probe(&effective)?;
+    let unavailable: Vec<packages::Manager> = installed.unavailable_managers().collect();
     let mut out: Vec<(packages::Manager, String)> =
         packages::extras(&effective, &installed, ignore)
             .into_iter()
@@ -2116,7 +2157,7 @@ fn package_extras(
             })
             .collect();
     out.extend(providers::brew_extras(&effective, ignore)?);
-    Ok(out)
+    Ok((out, unavailable))
 }
 
 #[cfg(test)]
@@ -2190,6 +2231,7 @@ mod prune_plan_tests {
             // Reported, never removed — so deliberately NOT counted as an item
             // prune acts on.
             residue_edited: vec!["~/.config/edited".into()],
+            unavailable: Vec::new(),
         };
         assert!(!p.is_empty());
         assert_eq!(p.len(), 7, "a list prune acts on is not being counted");
@@ -2258,7 +2300,7 @@ pub fn run_prune(
     ignore: &Ignore,
     brew_trust: &[String],
 ) -> Result<PrunePlan> {
-    let mut packages = package_extras(home, machine, ignore)?;
+    let (mut packages, unavailable) = package_extras_observed(home, machine, ignore)?;
     // A retired package is removed even though it is not an "extra": the spec
     // says it must not be here, which is a stronger statement than not
     // mentioning it. `[ignore]` deliberately does not silence this — ignoring is
@@ -2316,6 +2358,7 @@ pub fn run_prune(
             .into_iter()
             .filter(|p| crate::manifest::expand_tilde(p).exists())
             .collect(),
+        unavailable,
     })
 }
 

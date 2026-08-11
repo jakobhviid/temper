@@ -831,7 +831,10 @@ All `--json`-capable, all with an `--llm` guide, mutating ones journaled for
   and `brew untrust` any tap trusted on the machine but
   not in `[brew].trust` (the machine→spec mirror of `reconcile`'s trust absorb);
   previews and confirms first (`--yes` skips; under `--json` it previews unless
-  `--yes`).
+  `--yes`). A package manager that is present and **failing** is published as
+  `unavailable` rather than contributing an empty extras list: on a removal verb,
+  "nothing to remove" and "could not look" are opposite instructions, and an
+  empty plan has to say which one it is.
 - **`init [name]`** — scaffold **this** machine into the folder: append a
   `[[machine]]` block (creating `temper.toml` if absent), wire `brewfiles/<name>`,
   then seed it via `reconcile --current-state-wins --include-trust`. The name is

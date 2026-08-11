@@ -177,8 +177,13 @@ fn every_prune_plan_field_is_enumerated_by_items() {
         .filter_map(|l| l.trim().strip_prefix("pub "))
         .filter_map(|l| l.split_once(':'))
         .map(|(name, _)| name.trim())
-        // Reported, never removed — see above.
-        .filter(|n| *n != "residue_edited")
+        // The two fields that are deliberately NOT work:
+        //   `residue_edited` — reported, never removed (see above).
+        //   `unavailable`    — managers that could not be asked. Nothing is
+        //      planned for them, which is the point: they exist so an empty plan
+        //      can say why it is empty. Both are published in `--json`; neither
+        //      is ever counted or removed.
+        .filter(|n| *n != "residue_edited" && *n != "unavailable")
         .collect();
     assert!(fields.len() >= 6, "scrape found too few fields: {fields:?}");
 
@@ -189,6 +194,25 @@ fn every_prune_plan_field_is_enumerated_by_items() {
         let rest = &src[start..];
         &rest[..rest.find("\n    }").expect("items() end")]
     };
+
+    // The exempted fields are exempt from being *work*, not from being *seen*.
+    // Without this, "not counted" could quietly become "not reported" — which is
+    // the same failure this test guards, one level up.
+    let to_json = {
+        let start = src
+            .find("pub fn to_json(&self, machine: &str, removed: bool)")
+            .expect("PrunePlan::to_json()");
+        let rest = &src[start..];
+        &rest[..rest.find("\n    }").expect("to_json() end")]
+    };
+    for exempt in ["residue_edited", "unavailable"] {
+        assert!(
+            to_json.contains(exempt),
+            "PrunePlan.{exempt} is exempt from items() because it is not work — \
+             but it must still be published, or it is simply invisible"
+        );
+    }
+
     for f in &fields {
         assert!(
             items.contains(&format!("self.{f}")),
