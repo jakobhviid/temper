@@ -115,16 +115,20 @@ a hand-maintained `strip` list that silently rotted whenever you forgot an entry
 | a key you want **always absent** | the absence primitive, not a captured value |
 | genuinely machine-specific live state | a narrowly-rooted `[[machine.dconf]]`, still supported |
 
-**`strip` loses *part* of its ownership job.** Any dconf key a `setkey` step
+**`strip` keeps only part of its ownership job.** Any dconf key a `setkey` step
 declares is excluded from capture and from drift automatically, and a capture
-reports how many it left out. So a `strip` entry naming exactly that key is now
-redundant.
+reports how many it left out. A `strip` entry naming exactly that key is
+therefore redundant, and deleting it changes nothing.
 
-**A `strip` entry naming a whole subtree is not.** The derivation covers the keys
-a `setkey` declares; a subtree entry covers their unowned siblings too, and
-deleting it surfaces every one of them as `dconf-extra`. Measured on the fleet
-this was developed against, cutting two subtree entries took drift from 17
-out-of-sync to 19.
+**A `strip` entry naming a whole subtree is a different thing.** The derivation
+covers the keys a `setkey` declares; a subtree entry covers their unowned
+siblings too, and deleting it surfaces every one of them as `dconf-extra`.
+Cutting two subtree entries on the fleet this was developed against added four
+findings — three `dconf-extra` under `blur-my-shell/applications/` and one
+changed key under `quick-settings-audio-panel/` — all of them keys that bundle
+deliberately leaves unowned. That report is not wrong: an unowned key does not
+survive a rebuild. But it is a decision about what you want to own, so make it
+deliberately rather than as part of a rename.
 
 ```toml
 # `blur-my-shell/applications/blur` is declared by a setkey → the derivation
