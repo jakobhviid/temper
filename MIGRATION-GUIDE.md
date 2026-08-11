@@ -110,7 +110,7 @@ a hand-maintained `strip` list that silently rotted whenever you forgot an entry
 
 | what it is | where it goes now |
 |---|---|
-| an extension's own subtree under `/org/gnome/shell/extensions/` | `settings = "…"` on the extension: `{ uuid = "x@y", settings = "assets/gnome/ext/x.dconf" }`. temper reads *which* subtree from the extension's gschema; the uuid is not it. |
+| an extension's own subtree under `/org/gnome/shell/extensions/` | `settings = "…"` on the extension: `{ uuid = "x@y", settings = "assets/gnome/ext/x.dconf" }`. temper reads *which* subtree from the extension's gschema; the uuid is not it. Give each machine its own file unless you mean the two boxes to hold identical values — and if you do, declare the extension in a shared bundle instead, which is what group scope is for. |
 | a key you want **always set** (global shortcuts, 1Password) | a `setkey` step in a bundle |
 | a key you want **always absent** | the absence primitive, not a captured value |
 | genuinely machine-specific live state | a narrowly-rooted `[[machine.dconf]]`, still supported |
