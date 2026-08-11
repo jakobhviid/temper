@@ -420,7 +420,13 @@ fn deployed_paths(home: &Path, machine: &Machine) -> Result<crate::ledger::Ledge
                 continue;
             };
             let hash = bytes.as_ref().map(|b| {
-                let body = String::from_utf8_lossy(b).trim_end_matches('\n').to_string();
+                // `trim_matches`, not `trim_end_matches`: the hash has to be of
+                // the same bytes `block_removed` will extract when prune checks
+                // it, and that trims BOTH ends. A source whose content began
+                // with a blank line hashed differently from itself, so its
+                // region was never removable and drift called it "edited since
+                // temper deployed it" — a lie about untouched content.
+                let body = String::from_utf8_lossy(b).trim_matches('\n').to_string();
                 blake3::hash(body.as_bytes()).to_hex().to_string()
             });
             (hash, Some(marker))

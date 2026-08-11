@@ -419,3 +419,43 @@ fn respelling_a_declared_target_is_not_residue() {
         "prune deleted a file the spec still declares"
     );
 }
+
+/// A `block` whose source begins with a blank line is still removable residue.
+///
+/// The ledger hashed the source with `trim_end_matches('\n')` while the removal
+/// path extracts the region with `trim_matches` — both ends. So a source with a
+/// leading newline hashed differently from itself: `prune` never removed the
+/// region, and `drift` reported it as "edited since temper deployed it", which
+/// was a lie about content nobody had touched.
+#[test]
+fn a_block_with_a_leading_blank_line_is_still_removable() {
+    let e = Env::new();
+    fs::create_dir_all(e.h().join("assets")).unwrap();
+    // The leading newline is the whole point.
+    fs::write(e.h().join("assets/snippet"), "\nsource ~/.image\n").unwrap();
+    fs::write(e.target("rc"), "# the user's own\n").unwrap();
+    e.spec("[[step]]\nblock = \"assets/snippet\"\nin = \"~/rc\"\nmarker = \"img\"\n");
+    e.temper().arg("install").assert().success();
+    assert!(fs::read_to_string(e.target("rc")).unwrap().contains("source ~/.image"));
+
+    // Drop the step: the region is residue, and it is UNTOUCHED, so it belongs
+    // in the removable list rather than the reported-only one.
+    e.spec("");
+    let out = e.temper().args(["prune", "--json"]).output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        v["residue_edited"].as_array().map(|a| a.len()).unwrap_or(0),
+        0,
+        "nobody edited it — it must not be reported as edited: {v}"
+    );
+    assert_eq!(
+        v["residue"].as_array().map(|a| a.len()).unwrap_or(0),
+        1,
+        "an untouched region is removable residue: {v}"
+    );
+
+    e.temper().args(["prune", "--yes"]).assert().success();
+    let rc = fs::read_to_string(e.target("rc")).unwrap();
+    assert!(!rc.contains("source ~/.image"), "the region should be gone:\n{rc}");
+    assert!(rc.contains("# the user's own"), "the user's file stays:\n{rc}");
+}

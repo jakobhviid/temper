@@ -2107,13 +2107,26 @@ fn cmd_reconcile(
                     // The url is what a declaration needs, and only the machine
                     // has it — so it is read back from the live remote list.
                     AddChoice::Add => {
-                        let url = providers::flatpak_remotes_installed()
+                        // No url, no declaration. `unwrap_or_default` wrote
+                        // `"<name> "`, which `parse_remote` rejects — so the
+                        // absorbed entry was invisible to `effective_remotes`,
+                        // the remote stayed an extra, and reconcile offered it
+                        // again on every run. Refusing loudly is the honest
+                        // answer to "I could not read what you asked me to
+                        // record".
+                        match providers::flatpak_remotes_installed()
                             .unwrap_or_default()
                             .into_iter()
-                            .find(|(n, _)| n == name)
-                            .map(|(_, u)| u)
-                            .unwrap_or_default();
-                        chosen_remote_adds.push(format!("{name} {url}"));
+                            .find(|(n, u)| n == name && !u.trim().is_empty())
+                        {
+                            Some((_, url)) => {
+                                chosen_remote_adds.push(format!("{name} {url}"))
+                            }
+                            None => println!(
+                                "  {} could not read {name}'s url — not absorbed",
+                                ui::yellow(ui::g_warn())
+                            ),
+                        }
                     }
                     AddChoice::Ignore => {
                         chosen_ignores.push(("flatpak_remote".to_string(), name.clone()))
