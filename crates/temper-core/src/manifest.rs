@@ -919,6 +919,7 @@ fn reject_bad_dconf_paths(ft: &TemperToml) -> Result<()> {
             }
         }
         no_shared_keyspace(&m.gnome_extensions, &format!("machine '{}'", m.name))?;
+        no_path_in_a_uuid(&m.gnome_extensions, &format!("machine '{}'", m.name))?;
     }
     Ok(())
 }
@@ -931,6 +932,24 @@ fn reject_bad_dconf_paths(ft: &TemperToml) -> Result<()> {
 /// hand-written `settings_path` bypassed that: it would have let one extension
 /// capture, restore and own keyspace the whole desktop shares, and two
 /// extensions declaring the same one would fight over every key in it.
+/// A uuid is an identifier, and temper uses it as one path segment — the
+/// extension's own directory, where its schema is read from. So a uuid carrying
+/// `/` or `..` walks out of the extensions root and makes temper read somewhere
+/// nobody named. GNOME uuids never contain either, so this rejects nothing real.
+pub(crate) fn no_path_in_a_uuid(exts: &[GnomeExtension], whose: &str) -> Result<()> {
+    for e in exts {
+        let u = e.uuid();
+        if u.is_empty() || u.contains('/') || u.split('/').any(|c| c == "..") || u.contains('\0') {
+            anyhow::bail!(
+                "{whose} declares the GNOME extension uuid '{u}' — a uuid is an \
+                 identifier (e.g. \"tilingshell@ferrarodomenico.com\"), not a \
+                 path, and temper reads the extension's own directory by it."
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn no_shared_keyspace(exts: &[GnomeExtension], whose: &str) -> Result<()> {
     const ROOT: &str = "/org/gnome/shell/extensions/";
     for e in exts {
@@ -1060,6 +1079,7 @@ pub fn load_bundle(home: &Path, name: &str) -> Result<Bundle> {
             let whose = format!("bundle '{name}'");
             no_duplicate_uuids(&b.gnome_extensions, &whose)?;
             no_shared_keyspace(&b.gnome_extensions, &whose)?;
+            no_path_in_a_uuid(&b.gnome_extensions, &whose)?;
             validate_retire(&b.retire, &b.retire_packages, &whose)?;
             Ok(b)
         }
@@ -1995,5 +2015,39 @@ mod settings_path_tests {
         // Declaring no path at all is the ordinary case — the probe answers it.
         let b: Bundle = toml::from_str("gnome_extensions = [\"a@x\"]\n").unwrap();
         assert!(no_shared_keyspace(&b.gnome_extensions, "bundle 'a'").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod uuid_shape_tests {
+    use super::*;
+
+    /// temper joins the uuid onto the extensions root to find the schema it
+    /// reads the dconf subtree from. A uuid holding a path walks out of that
+    /// root, so the identifier is held to being one.
+    #[test]
+    fn a_uuid_may_not_be_a_path() {
+        for bad in [
+            "../../../etc/passwd",
+            "a/b@x",
+            "..",
+            "",
+        ] {
+            let b: Bundle =
+                toml::from_str(&format!("gnome_extensions = [\"{bad}\"]\n")).unwrap();
+            assert!(
+                no_path_in_a_uuid(&b.gnome_extensions, "bundle 'a'").is_err(),
+                "`{bad}` is a path, not a uuid"
+            );
+        }
+
+        // The shape every real uuid has, in both declaration forms.
+        let b: Bundle =
+            toml::from_str("gnome_extensions = [\"tilingshell@ferrarodomenico.com\"]\n").unwrap();
+        assert!(no_path_in_a_uuid(&b.gnome_extensions, "bundle 'a'").is_ok());
+        let b: Bundle =
+            toml::from_str("gnome_extensions = [{ uuid = \"kiwi@kemma\", enabled = false }]\n")
+                .unwrap();
+        assert!(no_path_in_a_uuid(&b.gnome_extensions, "bundle 'a'").is_ok());
     }
 }
