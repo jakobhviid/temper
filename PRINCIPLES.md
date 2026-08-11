@@ -139,7 +139,10 @@ the rest. Mutating runs are journaled
 (amdl's content-addressed, after-hash-guarded model: a revert that finds the file
 changed since skips-and-reports rather than clobbering).
 `--json` on every command; an `--llm` guide; human → stdout, progress/errors →
-stderr so pipes stay clean.
+stderr so pipes stay clean. Asserted, not merely intended: every read-only and
+preview verb is run under `--json` and its **whole** stdout must parse as one
+document — a second object is trailing garbage, which is how `init` broke, and a
+stray line is not the first line, which is how a failing `exec` broke it.
 
 **Advice is a mutation too.** A remediation temper names must be *executable for
 the finding it names* — a verb with a real code path for that kind, on this host.
