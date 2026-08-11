@@ -1772,13 +1772,10 @@ pub fn run_install(
     // Journal per provider, so undo dispatches to the right uninstall. Recorded
     // after the converge and only for managers whose install is not also an
     // upgrade path — see `Entry::PackagesInstalled`.
-    for (mgr, name) in [
-        (packages::Manager::Flatpak, "flatpak"),
-        (packages::Manager::Brew, "brew"),
-        (packages::Manager::Cask, "cask"),
-        (packages::Manager::Vscode, "vscode"),
-        (packages::Manager::Mas, "mas"),
-    ] {
+    for &mgr in packages::Manager::ALL {
+        let Some(name) = packages::journal_provider(mgr) else {
+            continue;
+        };
         let added: Vec<String> = to_add
             .iter()
             .filter(|(m, _)| *m == mgr)

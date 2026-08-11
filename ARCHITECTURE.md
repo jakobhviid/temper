@@ -319,7 +319,13 @@ registrar. Listing it as a managed provider would claim an ownership temper does
 not want.
 
 **Every package provider journals its installs**, so `undo` removes exactly what
-a converge added. What remains unrevertible is narrow and specific: the
+a converge added. Which providers those are is an exhaustive match rather than a
+list (`packages::journal_provider`), and a test holds it against the uninstall
+arms `undo` dispatches to — journaling something that cannot be un-installed is
+a promise made at install time and broken at undo time. `tap` is the one
+deliberate `None`: a tap is not installed but *tapped*, and it comes and goes
+with the Brewfile that names it, which is why no `brew untap` exists anywhere in
+the tree. What remains unrevertible is narrow and specific: the
 brew/flatpak **upgrade** phase of `update` (reverting one means pinning a prior
 version whose bottle or commit may be gone), and the deliberately-unjournaled
 `setkey(defaults)` (`defaults read` loses the value's type), `sysfile` and `exec`.

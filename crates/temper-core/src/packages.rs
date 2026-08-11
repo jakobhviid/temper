@@ -241,6 +241,29 @@ impl Manager {
     ];
 }
 
+/// The journal provider name for a manager, or `None` when its installs are
+/// deliberately not journaled.
+///
+/// Exhaustive on purpose: this decides what `undo` can take back, and it used to
+/// be a hand-written list of five that silently omitted `Tap`. A manager added
+/// later would have been installed and never recorded, so `undo` would report
+/// success having left it in place. Every `Some` here must have an uninstall arm
+/// in `journal::uninstall_packages` — a test holds the two together.
+pub fn journal_provider(m: Manager) -> Option<&'static str> {
+    match m {
+        Manager::Brew => Some("brew"),
+        Manager::Cask => Some("cask"),
+        Manager::Flatpak => Some("flatpak"),
+        Manager::Mas => Some("mas"),
+        Manager::Vscode => Some("vscode"),
+        // A tap is not installed, it is *tapped*, and it comes and goes with the
+        // Brewfile that names it. `brew bundle cleanup --tap` untaps an orphan,
+        // so there is no separate uninstall to record — and `brew untap` appears
+        // nowhere in the tree precisely because nothing needs it.
+        Manager::Tap => None,
+    }
+}
+
 /// The `[ignore]` list for a manager. Exhaustive, so a new manager cannot be
 /// added without answering this.
 pub fn ignore_list(ignore: &Ignore, m: Manager) -> &[String] {

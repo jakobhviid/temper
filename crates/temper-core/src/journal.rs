@@ -649,6 +649,41 @@ mod tests {
         assert!(matches!(back, Entry::PackagesInstalled { .. }));
     }
 
+    /// Everything `install` journals, `undo` can un-install.
+    ///
+    /// The two lists are written in different files — `packages::journal_provider`
+    /// decides what gets recorded, `uninstall_packages` decides what can be taken
+    /// back — and nothing related them. Journaling a provider with no arm here
+    /// means `undo` reports the revert as skipped for something the run
+    /// definitely did: a promise made at install time and broken at undo time,
+    /// which is Principle #8's whole subject.
+    #[test]
+    fn every_journalled_provider_can_be_uninstalled() {
+        let src = include_str!("journal.rs");
+        let arms = {
+            let start = src
+                .find("fn run_uninstall(provider: &str, packages: &[String]) -> bool {")
+                .expect("run_uninstall");
+            &src[start..][..src[start..].find("\n}").expect("fn end")]
+        };
+
+        let mut names: Vec<&'static str> = crate::packages::Manager::ALL
+            .iter()
+            .filter_map(|m| crate::packages::journal_provider(*m))
+            .collect();
+        // The two providers journaled outside the manager loop.
+        names.push("gnome-extensions");
+        names.push("rpm-ostree");
+
+        for n in names {
+            assert!(
+                arms.contains(&format!("\"{n}\" =>")),
+                "`{n}` is journaled by a converge but `uninstall_packages` has no \
+                 arm for it — `undo` would skip what the run recorded"
+            );
+        }
+    }
+
     /// An unknown provider is refused rather than shelled out blindly, and the
     /// return value counts what was actually removed.
     ///
