@@ -2,7 +2,8 @@
 
 What we intend to build (parked, not broken), the **workflow/HMI parity gaps**
 against the ReinstallScripts recipes temper generalizes, what's deliberately
-**not** temper's job, and the migration-verification gap. Each item has why it's
+**not** temper's job, one **restructuring** weighed and declined, and the
+migration-verification gap. Each item has why it's
 parked, the current mitigation, and enough of a sketch to act on cold.
 
 This file **is** embedded in `--llm`, because what is *not* built is as
@@ -181,6 +182,76 @@ Fixed blind, and portably, rather than left for the hardware: `sudo install -D`
 before `journal.commit()`, discarding the run's undo record), `getent` in
 `gid_of` (absent on macOS — it falls back to `dscl`), and the `defaults` numeric
 comparison (`48` vs `48.0` drifted forever).
+
+## Possible restructuring — provider dispatch behind a trait
+
+**Parked deliberately, with a recommendation against the full version.** Recorded
+here because the question recurs the moment anyone reads `providers.rs`, and the
+answer took measuring to reach.
+
+The contract is already explicit as **data**: `interface::PROVIDERS` gives every
+provider eleven columns, each `Yes` / `No(reason)` / `NA(reason)`, cross-checked
+by tests against `plan::KIND_ANSWERS` so a provider cannot claim `prune` unless
+its kinds name `temper prune`. The restructuring would move that from data into
+types — `trait Provider { fn observe(&self) -> Option<Vec<Item>>; fn extras(…);
+fn converge(…); fn prune(…); … }` — and have callers iterate providers instead of
+naming them.
+
+**What it would buy.** A new provider becomes a compile error until every method
+exists, which is the strongest form of "walk the matrix before you call it done".
+And one answer shape, enforced rather than conventional — today they diverge:
+
+```rust
+brew_extras(&[Pkg], &Ignore) -> Result<Vec<(Manager, String)>>
+gext_extras(&[String], &Ignore) -> Vec<String>   // "couldn't ask" becomes an empty Vec
+rpm_ostree_extras(&[String], &Ignore) -> Vec<String>
+```
+
+**Why the full version is the wrong trade.** The providers do not differ because
+the code is untidy. They differ because the *domain* does: brew manages three
+namespaces at once, rpm-ostree converges into a deployment that needs a reboot,
+flatpak has two installations whose asymmetry cannot be resolved from one side,
+mas is one platform with an auth state that is an ordinary condition rather than
+a failure. A trait asserts these are one kind of thing with different
+implementations, and the evidence says they are partly different kinds of thing.
+
+The concrete cost is not aesthetic. `Col::NA("reason")` makes each difference
+state *why*, and a test fails on an empty reason; a trait method returning
+`Ok(())` for the inapplicable case deletes that sentence and leaves the asymmetry
+silent. Per-tool facts get pressed flat the same way — `brew bundle cleanup`
+exits **non-zero when it finds orphans**, and reading that as failure once zeroed
+brew extras on every machine.
+
+The gain is also smaller than a grep suggests. Of the ~48 per-manager match arms,
+**23 are in `packages.rs`** and are total mappings (`as_str`, `journal_provider`,
+`ignore_list`) — already exhaustive, already a compile error on a new variant,
+and better left as matches. The real dispatch fan-out is closer to twenty sites.
+
+**The narrow version, which is recommended.** Unify where the shape is genuinely
+shared, not where we wish it were. Exactly one question is common to every
+provider — *"what is present here, and could I even ask?"* — and it is where the
+dangerous failure lives, because "couldn't ask" collapsing into "none" is what
+lets a write path read empty as *delete everything*.
+
+1. **One `Option<…>` shape for observation and extras**, enforced rather than
+   conventional.
+2. **Make `Col::Yes` provable.** It is currently checked against another table.
+   Call each provider's observation function for every provider claiming
+   `observe: Yes`, so a cell cannot claim a capability no code path delivers —
+   the shape of defect that let a removed GNOME extension come back on every
+   converge for two releases.
+
+Everything past observation — converge, prune, reconcile — stays as functions,
+because that is where the providers legitimately stop resembling each other.
+
+**The deciding evidence.** None of the defects found in the scope-model cycle
+would have been caught by a trait: an extension's dconf subtree derived from its
+uuid, a capture writing a bundle-scope file from one machine, an escape hatch
+skipping the rule its probe enforced, a verb reporting on rows it had not
+checked. Every one came from a specific provider's specific behaviour — the
+details a uniform signature is designed to hide.
+
+---
 
 ## Verification gap (a state, not a feature)
 
