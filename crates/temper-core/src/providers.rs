@@ -543,19 +543,34 @@ pub fn casks_needing_root(effective: &[Pkg]) -> Vec<String> {
 /// packages go through one materialized Brewfile + `brew bundle`; flatpaks are
 /// installed by id. `dry_run` performs no mutation. Returns the number of
 /// declared packages considered.
+/// Which converge path a manager takes. Exhaustive, so a manager added later
+/// cannot fall through every branch and simply never be installed — the mirror
+/// of the probe gap, and just as quiet: the package stays declared, stays
+/// missing, and every converge reports success.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum ConvergeVia {
+    /// The aggregate `brew bundle` — brew, cask, tap and vscode ride one file.
+    BrewBundle,
+    Flatpak,
+    /// Separate and **forgiving**: mas is the flakiest provider (no App Store
+    /// sign-in, an app not tied to the Apple ID), and riding `brew bundle` means
+    /// one mas failure aborts the whole converge. Split out, its failures are
+    /// warned and skipped (Principle #6).
+    Mas,
+}
+
+fn converge_via(m: Manager) -> ConvergeVia {
+    match m {
+        Manager::Brew | Manager::Cask | Manager::Tap | Manager::Vscode => ConvergeVia::BrewBundle,
+        Manager::Flatpak => ConvergeVia::Flatpak,
+        Manager::Mas => ConvergeVia::Mas,
+    }
+}
+
 pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize> {
-    // mas is converged SEPARATELY (below), not via the aggregate brew bundle:
-    // it is the flakiest provider (no App Store sign-in, an app not tied to the
-    // Apple ID), and riding brew bundle means one mas failure aborts the whole
-    // converge. Split out, its failures are warned and skipped (Principle #6).
     let brewish: Vec<&Pkg> = effective
         .iter()
-        .filter(|p| {
-            matches!(
-                p.manager,
-                Manager::Brew | Manager::Cask | Manager::Tap | Manager::Vscode
-            )
-        })
+        .filter(|p| converge_via(p.manager) == ConvergeVia::BrewBundle)
         .collect();
 
     if !brewish.is_empty() && have("brew") && !dry_run {
@@ -594,7 +609,7 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize
 
     let flatpaks: Vec<&str> = effective
         .iter()
-        .filter(|p| p.manager == Manager::Flatpak)
+        .filter(|p| converge_via(p.manager) == ConvergeVia::Flatpak)
         .map(|p| p.name.as_str())
         .collect();
     if !flatpaks.is_empty() && have("flatpak") && !dry_run {
@@ -612,7 +627,7 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize
     // (to stderr, so `--json` stays clean) and skipped, never fatal.
     let mas: Vec<&Pkg> = effective
         .iter()
-        .filter(|p| p.manager == Manager::Mas)
+        .filter(|p| converge_via(p.manager) == ConvergeVia::Mas)
         .collect();
     if !mas.is_empty() && have("mas") && !dry_run {
         // Only install what's genuinely missing. Re-running `mas install` on an
@@ -1745,6 +1760,40 @@ pub fn rpm_ostree_requested() -> Option<Vec<String>> {
     requested_from_status(&out.stdout)
 }
 
+
+#[cfg(test)]
+mod converge_dispatch_tests {
+    use super::{converge_via, ConvergeVia};
+    use crate::packages::Manager;
+
+    /// Every manager converges by some route, and each route has packages.
+    ///
+    /// `converge` used to select its three sets with `matches!` on named
+    /// variants, so a manager added later fell through all of them and was
+    /// simply never installed — the mirror of the probe gap, and just as quiet:
+    /// the package stays declared, stays missing, and every converge reports
+    /// success. The match makes the choice compulsory; this checks nobody has
+    /// quietly routed everything down one branch.
+    #[test]
+    fn every_manager_has_a_converge_route_and_every_route_is_used() {
+        for &m in Manager::ALL {
+            // Exhaustive by construction — this is here to fail loudly if the
+            // match is ever given a catch-all arm.
+            let _ = converge_via(m);
+        }
+        for route in [ConvergeVia::BrewBundle, ConvergeVia::Flatpak, ConvergeVia::Mas] {
+            assert!(
+                Manager::ALL.iter().any(|m| converge_via(*m) == route),
+                "a converge route no manager takes is dead code"
+            );
+        }
+        // The split that matters: mas must not ride `brew bundle`, or one App
+        // Store failure aborts the whole converge.
+        assert_eq!(converge_via(Manager::Mas), ConvergeVia::Mas);
+        assert_eq!(converge_via(Manager::Flatpak), ConvergeVia::Flatpak);
+        assert_eq!(converge_via(Manager::Vscode), ConvergeVia::BrewBundle);
+    }
+}
 
 #[cfg(test)]
 mod rpm_ostree_status_tests {
