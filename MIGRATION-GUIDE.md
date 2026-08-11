@@ -60,11 +60,18 @@ what you accepted at a prompt.
 
 ---
 
-## 4.0 — scope becomes the rule, and dconf splits by owner
+## 3.x → 6.x — scope becomes the rule, and dconf splits by owner
 
 The largest change since the folder format settled. Three things move.
 
-### 4.0.1 Machine-scope counterparts for fleet-only lists
+**There is no 4.x or 5.x to migrate through.** The version is derived from the
+commit history, and this work carried three breaking changes among many
+features and fixes, so the arithmetic ran 3.6.1 straight to 6.3.31 in one
+release. The intermediate majors were never built and never published — if you
+are on any 3.x, this one section is the whole migration. The numbered steps
+below are an order to work in, not point releases.
+
+### 1. Machine-scope counterparts for fleet-only lists
 
 **Why.** Scope decides which verbs apply (see ARCHITECTURE, "Scope decides the
 verb set"): a fleet declaration is drift-and-install, a machine declaration is
@@ -98,7 +105,7 @@ flatpak = ["org.example.JustOnAtlas"]
 per-machine decision; removing one is a spec edit, and then every machine's
 `prune` enacts it.
 
-### 4.0.2 dconf snapshots split by owner
+### 2. dconf snapshots split by owner
 
 **Why.** Measured on a real fleet, **95% of the keys in a whole-desktop snapshot
 were extension settings**. The remaining ~5% were either fixed policy (global
@@ -185,7 +192,7 @@ own declarations — it enables and disables by uuid and never rewrites
 `enabled-extensions`, so image-baked extensions it does not declare are left
 exactly alone.
 
-### 4.0.2b Two gates that used to fail open
+### 3. Two gates that used to fail open
 
 **Why.** A bundle's `os`/`role` gate covered two of the five ways a bundle
 carries machine-specific content, and the three it missed failed **silently and
@@ -214,7 +221,7 @@ green**.
 out-of-sync count should not grow. On the fleet this was developed against, both
 were identical before and after.
 
-### 4.0.3 Names get specific
+### 4. Names get specific
 
 Every rename ships with a serde alias or a verb alias; the old name keeps
 working. Update at your leisure, except the `--json` kinds.
@@ -252,7 +259,7 @@ explicit rather than implicit.
 `remediation` list beside it. The `dconf-*` kinds are **unchanged**; they were
 already named for the store.
 
-### 4.0.4 Behaviour you will notice, with nothing to edit
+### 5. Behaviour you will notice, with nothing to edit
 
 These need no change to your folder. They are listed because each one alters
 what a verb does on a folder that is already correct, and finding that out from
