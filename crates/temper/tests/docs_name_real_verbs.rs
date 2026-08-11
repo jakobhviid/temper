@@ -84,8 +84,9 @@ fn commands_in(doc: &str) -> Vec<String> {
 #[test]
 fn every_documented_command_is_a_canonical_verb() {
     let verbs = canonical_verbs();
-    // MIGRATION-GUIDE is exempt: naming the old spelling beside the new one is
-    // its entire job, and the "documenting the diff" rule exempts it explicitly.
+    // Every doc is checked. Nothing is exempt from naming the canonical verb —
+    // the migration guide used to be, because printing an old spelling beside a
+    // new one was its whole job, and it is gone.
     let docs: [(&str, &str); 6] = [
         ("WORKFLOWS.md", include_str!("../../../WORKFLOWS.md")),
         ("README.md", include_str!("../../../README.md")),
@@ -136,17 +137,7 @@ fn every_doc_is_embedded_in_the_llm_guide_or_exempt() {
     //   INTERNALS.md           the same reader: how the tool is built, what it
     //                          would take to extend it. Someone writing
     //                          `apps/ghostty.toml` never needs it.
-    //   MIGRATION-GUIDE.md     read once, by whoever is moving a folder across a
-    //                          major. `--llm` points at it by name instead of
-    //                          carrying 334 lines of version deltas into every
-    //                          read — and the errors that send you there (an
-    //                          unknown field, a version skew) are self-describing.
-    let exempt = [
-        "AGENTS.md",
-        "CLAUDE.md",
-        "INTERNALS.md",
-        "MIGRATION-GUIDE.md",
-    ];
+    let exempt = ["AGENTS.md", "CLAUDE.md", "INTERNALS.md"];
 
     let mut missing = Vec::new();
     let mut seen = 0;

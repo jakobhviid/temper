@@ -48,13 +48,16 @@ is a tax on the right one. Two things follow, and a test enforces both
 Before adding a section, ask which of the two readers it is for. If the answer is
 "a contributor", it belongs in `INTERNALS.md` or `AGENTS.md`.
 
-`MIGRATION-GUIDE.md` is the **one** doc whose job is the before/after, and the
-only place exempt from the "documenting the diff" rule below. It gains a section
-per **major** version — the ones where a folder has to be edited — and loses one
-when nobody can still be migrating from it. `--llm` **points at it by name rather
-than embedding it**: it is read once, by whoever is moving a folder across a
-major, and the errors that send you there (an unknown field, a version skew) say
-so themselves.
+**Nothing here documents the before/after.** There is no exempt document: the
+"documenting the diff" rule below holds everywhere, and the commit message is
+where a transition belongs.
+
+A migration guide used to be the exception, kept while the fleet moved across a
+major. The fleet has moved, and this fleet is the user base — so an entry nobody
+can still be migrating *from* is trivia, which is what its own rule said to do
+with it. If a future major needs one, write it, ship it while it is true, and
+delete it the same way. A folder that will not parse already names the field it
+does not know, and a version-skew error already names the upgrade.
 
 So a change to behaviour ships with the doc change **in the same commit**:
 

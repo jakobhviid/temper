@@ -2953,13 +2953,12 @@ fn llm_guide() -> String {
     // clap-rendered reference and the schema — are worth naming as such up front.
     out.push_str(
         "=== WHAT IS IN THIS GUIDE ===\n\n\
-Read the first three to author and run a folder; the rest is why.\n\n\
+Listed in the order they appear. The first four run and author a folder; the rest is why.\n\n\
   README ............ what temper is, and the shape of a folder\n\
   COMMAND REFERENCE . every verb and flag, rendered from the CLI so it cannot drift\n\
-  MANIFEST SCHEMA ... authoritative field list; an unknown field is a parse error\n\
   WORKFLOWS ......... the day-to-day loops, and which verb to reach for\n\
+  MANIFEST SCHEMA ... authoritative field list; an unknown field is a parse error\n\
   PATTERNS .......... which primitive fits which problem shape, and the anti-patterns\n\
-  MIGRATION ......... only if a folder will not parse\n\
   ARCHITECTURE ...... the model behind the schema\n\
   PRINCIPLES ........ the guardrails, and the defects that earned them\n\
   ROADMAP ........... what is NOT built, so a gap is not mistaken for a bug\n\n",
@@ -2987,20 +2986,6 @@ Read the first three to author and run a folder; the rest is why.\n\n\
     out.push_str(include_str!("../../../SPEC.md"));
     out.push_str("\n\n=== PATTERNS (how to COMPOSE primitives for common problem shapes) ===\n\n");
     out.push_str(include_str!("../../../PATTERNS.md"));
-    // Pointed at rather than inlined. It is a delta between majors — read once,
-    // by whoever is editing a folder across an upgrade — while this guide is read
-    // in full by every agent authoring against the CURRENT schema, which SPEC
-    // above already states. Inlining it spent a third of a thousand lines
-    // teaching versions most readers will never meet, and the symptom it explains
-    // is already self-describing: the parse error names the unknown field, and
-    // the version-skew error names the upgrade.
-    out.push_str("\n\n=== MIGRATION (moving a folder across a MAJOR version) ===\n\n");
-    out.push_str(
-        "If a folder fails to parse with `unknown field <name>`, it was written \
-         for a different major.\nThe stamp at the top of `temper.toml` says which; \
-         `MIGRATION-GUIDE.md` in the temper repo\ncarries the per-version rename \
-         tables and the behaviour changes that go with them.\n",
-    );
     // The model behind the schema: where a declaration may live, what may touch
     // it, and which cells of the feature matrix are filled. `SPEC.md` above stays
     // the parser-of-record where the two could ever disagree.
