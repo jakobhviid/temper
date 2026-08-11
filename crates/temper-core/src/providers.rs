@@ -2464,19 +2464,28 @@ fn brew_extras_inner(
         .context("running brew bundle cleanup")?;
     let _ = fs::remove_file(&tmp);
 
-    // `cleanup` without `--force` is a read-only listing, so a non-zero exit
-    // means it could not answer — not that there is nothing to report. Parsing
-    // the output anyway turned a broken tap into "zero extras", which reads
-    // exactly like a clean machine, and `prune` then had nothing to offer.
-    if !out.status.success() {
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    // `cleanup` without `--force` exits **non-zero when it finds orphans** —
+    // that is its normal result, the way `diff` and `grep` report a match. So
+    // the exit code alone cannot say whether it worked: what distinguishes a
+    // real failure is that it named nothing.
+    //
+    //   exit 0                      → ran, nothing to clean
+    //   exit non-zero + a section   → ran, and these are the extras
+    //   exit non-zero + no section  → could not run
+    //
+    // Reading a non-zero exit as failure reported **zero extras on every machine
+    // that had any**, which looks exactly like a clean one.
+    let named_something = text.contains("Would uninstall") || text.contains("Would untap");
+    if !out.status.success() && !named_something {
         eprintln!(
-            "{} `brew bundle cleanup` failed — brew extras not computed this run",
+            "{} `brew bundle cleanup` could not run — brew extras not computed \
+             this run",
             crate::ui::yellow(crate::ui::g_warn())
         );
         return Ok(Vec::new());
     }
-    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(&out.stderr));
     let ignored: HashSet<&str> = ignore
         .brew
         .iter()

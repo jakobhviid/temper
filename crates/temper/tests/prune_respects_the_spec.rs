@@ -70,9 +70,14 @@ case "$1 $2" in
             # The file temper hands us IS its claim about what may stay.
             for a in "$@"; do [ -f "$a" ] && cp "$a" {seen}; done
             ;;
-        *)  echo "Would uninstall formulae:"
+        *)  # Real `brew bundle cleanup` exits NON-ZERO when it finds orphans —
+            # that is its normal result, like `diff`. The fake must do the same,
+            # or a caller that reads the exit code as failure passes here and
+            # reports zero extras on every real machine that has any.
+            echo "Would uninstall formulae:"
             echo "ignored-tool"
             echo "stray-orphan"
+            exit 1
             ;;
       esac
       ;;
