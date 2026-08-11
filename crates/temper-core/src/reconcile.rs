@@ -776,18 +776,39 @@ pub fn append_machine_extension(temper_toml: &str, machine: &str, uuid: &str) ->
         .iter_mut()
         .find(|t| t.get("name").and_then(|v| v.as_str()) == Some(machine))
         .ok_or_else(|| anyhow!("temper.toml declares no machine named '{machine}'"))?;
+    // Write the key the machine ALREADY uses, and the canonical name otherwise.
+    //
+    // This wrote `extensions` unconditionally — the pre-rename spelling. It
+    // still parses, because the field carries a serde alias, so nothing failed
+    // on a folder that had not been migrated. On one that HAS been, it appends a
+    // second key beside `gnome_extensions`, and serde rejects the pair as a
+    // duplicate field: the whole manifest stops parsing, on every machine, and
+    // `[git].auto_commit` pushes that. The migration renames first and reconciles
+    // afterwards, so this is reachable by following the documented order.
+    let key = if t.contains_key(EXT_KEY_OLD) && !t.contains_key(EXT_KEY) {
+        EXT_KEY_OLD
+    } else {
+        EXT_KEY
+    };
     let list = t
-        .entry("extensions")
+        .entry(key)
         .or_insert(toml_edit::Item::Value(toml_edit::Value::Array(
             toml_edit::Array::new(),
         )))
         .as_array_mut()
-        .ok_or_else(|| anyhow!("[[machine]].extensions is not an array"))?;
+        .ok_or_else(|| anyhow!("[[machine]].{key} is not an array"))?;
     if !list.iter().any(|v| v.as_str() == Some(uuid)) {
         list.push(uuid);
     }
     Ok(doc.to_string())
 }
+
+/// The canonical machine-scope extension key, and the spelling that still parses
+/// through a serde alias. A folder mid-migration may carry either; a folder
+/// carrying **both** does not parse at all, so nothing may ever create the
+/// second one.
+const EXT_KEY: &str = "gnome_extensions";
+const EXT_KEY_OLD: &str = "extensions";
 
 /// Remove a GNOME extension UUID from a machine's own `extensions` list,
 /// preserving comments + formatting. A no-op if the machine, the list, or the
@@ -809,8 +830,13 @@ pub fn remove_machine_extension(temper_toml: &str, machine: &str, uuid: &str) ->
             .iter_mut()
             .find(|t| t.get("name").and_then(|v| v.as_str()) == Some(machine))
         {
-            if let Some(list) = t.get_mut("extensions").and_then(|e| e.as_array_mut()) {
-                list.retain(|v| v.as_str() != Some(uuid));
+            // Both spellings, because a folder mid-migration may carry either
+            // — and dropping from only one would leave the entry declared under
+            // the other while reporting the removal as done.
+            for key in [EXT_KEY, EXT_KEY_OLD] {
+                if let Some(list) = t.get_mut(key).and_then(|e| e.as_array_mut()) {
+                    list.retain(|v| v.as_str() != Some(uuid));
+                }
             }
         }
     }
@@ -1010,6 +1036,191 @@ pub fn remove_trust(temper_toml: &str, tap: &str) -> Result<String> {
         arr.retain(|v| v.as_str() != Some(tap));
     }
     Ok(doc.to_string())
+}
+
+#[cfg(test)]
+mod machine_writer_tests {
+    use super::*;
+
+    /// The folder is the user's, and these functions edit it in place. Every
+    /// machine-scope writer must round-trip, preserve the comments and the
+    /// neighbouring machine, and leave TOML that still parses.
+    ///
+    /// Four of them — the remote and rpm pairs — had a single call site each and
+    /// no test at all. A `toml_edit` writer that corrupts a document does it to
+    /// the fleet spec, and `[git].auto_commit` then commits the damage.
+    const DOC: &str = r#"# fleet spec — keep this comment
+[ignore]
+flatpak = ["org.example.Baseline"]
+
+[[machine]]
+name = "atlas"          # the desktop
+os   = "linux"
+rpm_ostree = ["already-here"]
+
+[[machine]]
+name = "helios"
+os   = "mac"
+"#;
+
+    fn parses(doc: &str) -> toml::Value {
+        doc.parse::<toml::Value>()
+            .unwrap_or_else(|e| panic!("writer produced unparseable TOML ({e}):\n{doc}"))
+    }
+
+    fn machine<'a>(v: &'a toml::Value, name: &str) -> &'a toml::Value {
+        v["machine"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["name"].as_str() == Some(name))
+            .unwrap_or_else(|| panic!("machine `{name}` vanished"))
+    }
+
+    fn list(v: &toml::Value, m: &str, key: &str) -> Vec<String> {
+        machine(v, m)
+            .get(key)
+            .and_then(|x| x.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn every_machine_scope_writer_round_trips() {
+        // (label, key, value, append, remove)
+        type W = fn(&str, &str, &str) -> Result<String>;
+        let cases: &[(&str, &str, &str, W, W)] = &[
+            (
+                "flatpak_remotes",
+                "flatpak_remotes",
+                "vendor https://example.com/v.flatpakrepo",
+                append_machine_remote,
+                remove_machine_remote,
+            ),
+            (
+                "rpm_ostree",
+                "rpm_ostree",
+                "proton-vpn",
+                append_machine_rpm,
+                remove_machine_rpm,
+            ),
+            (
+                "brew_trust",
+                "brew_trust",
+                "me/tap",
+                append_machine_trust,
+                remove_machine_trust,
+            ),
+            (
+                "gnome_extensions",
+                "gnome_extensions",
+                "x@y",
+                append_machine_extension,
+                remove_machine_extension,
+            ),
+        ];
+
+        for (label, key, value, add, drop) in cases {
+            let added = add(DOC, "atlas", value)
+                .unwrap_or_else(|e| panic!("{label}: append failed: {e}"));
+            let v = parses(&added);
+            assert!(
+                list(&v, "atlas", key).iter().any(|x| x == value),
+                "{label}: `{value}` is not in atlas's list after append:\n{added}"
+            );
+            // The other machine is untouched — a machine-scope write that
+            // reaches a sibling is the failure this scope exists to prevent.
+            assert!(
+                list(&v, "helios", key).is_empty(),
+                "{label}: the write reached helios:\n{added}"
+            );
+            assert!(
+                added.contains("# fleet spec — keep this comment")
+                    && added.contains("# the desktop"),
+                "{label}: comments were lost:\n{added}"
+            );
+
+            let removed = drop(&added, "atlas", value)
+                .unwrap_or_else(|e| panic!("{label}: remove failed: {e}"));
+            let v = parses(&removed);
+            assert!(
+                !list(&v, "atlas", key).iter().any(|x| x == value),
+                "{label}: `{value}` survived the remove:\n{removed}"
+            );
+            assert!(
+                removed.contains("# fleet spec — keep this comment"),
+                "{label}: comments were lost on remove:\n{removed}"
+            );
+
+            // Removing something absent is a no-op, not an error or a corruption.
+            let twice = drop(&removed, "atlas", value)
+                .unwrap_or_else(|e| panic!("{label}: second remove errored: {e}"));
+            parses(&twice);
+        }
+    }
+
+    /// Absorbing an extension must never produce a manifest that stops parsing.
+    ///
+    /// The writer emitted `extensions`, the pre-rename spelling. It still parses
+    /// through a serde alias, so nothing failed on an un-migrated folder — but
+    /// on a migrated one it appends a second key beside `gnome_extensions`, and
+    /// serde rejects the pair as a **duplicate field**. The manifest then fails
+    /// to load on every machine, and `auto_commit` pushes it. The migration
+    /// renames first and reconciles afterwards, so following the documented
+    /// order was enough to reach it.
+    #[test]
+    fn absorbing_an_extension_never_writes_both_spellings() {
+        let migrated = "[[machine]]\nname = \"atlas\"\nos = \"linux\"\n\
+                        gnome_extensions = [\"a@x\"]\n";
+        let out = append_machine_extension(migrated, "atlas", "b@y").unwrap();
+        assert!(
+            !(out.contains("gnome_extensions") && out.contains("\nextensions")),
+            "wrote both spellings — this manifest no longer parses:\n{out}"
+        );
+        // …and it really does still load.
+        let v: toml::Value = out.parse().unwrap();
+        let m = &v["machine"].as_array().unwrap()[0];
+        let list: Vec<&str> = m["gnome_extensions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap())
+            .collect();
+        assert_eq!(list, vec!["a@x", "b@y"], "{out}");
+
+        // A folder that has NOT been migrated keeps using its own spelling
+        // rather than growing a second key from the other end.
+        let old = "[[machine]]\nname = \"atlas\"\nos = \"linux\"\nextensions = [\"a@x\"]\n";
+        let out = append_machine_extension(old, "atlas", "b@y").unwrap();
+        assert!(
+            !out.contains("gnome_extensions"),
+            "an un-migrated folder must not gain the second key either:\n{out}"
+        );
+        assert!(out.contains("b@y"), "{out}");
+
+        // And a drop reaches the entry whichever spelling holds it.
+        for doc in [migrated, old] {
+            let dropped = remove_machine_extension(doc, "atlas", "a@x").unwrap();
+            assert!(!dropped.contains("a@x"), "not dropped:\n{dropped}");
+        }
+    }
+
+    /// An existing entry is preserved when a sibling is appended, and the fleet
+    /// `[ignore]` is never touched by a machine-scope write.
+    #[test]
+    fn appending_keeps_what_is_already_declared() {
+        let out = append_machine_rpm(DOC, "atlas", "proton-vpn").unwrap();
+        let v = parses(&out);
+        let rpms = list(&v, "atlas", "rpm_ostree");
+        assert!(
+            rpms.contains(&"already-here".to_string()) && rpms.contains(&"proton-vpn".to_string()),
+            "both must survive: {rpms:?}"
+        );
+        assert!(
+            out.contains("org.example.Baseline"),
+            "a machine-scope write must not disturb the fleet [ignore]:\n{out}"
+        );
+    }
 }
 
 #[cfg(test)]
