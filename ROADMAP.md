@@ -3,9 +3,10 @@
 **Bugs** — behaviour that is wrong rather than unbuilt — then the **scope-model
 gaps** (each a filled ⚠ or ❌ in the feature matrix), what's deliberately **not**
 temper's job, the **composition** with a whole-machine updater, one
-**restructuring** weighed and declined, the macOS claims only a Mac can settle,
-and the migration-verification gap. Each item has why it's
-parked, the current mitigation, and enough of a sketch to act on cold.
+**restructuring** weighed and declined, the **suggestions** raised but not ruled
+on, the macOS claims only a Mac can settle, and the migration-verification gap.
+Each item has why it's parked, the current mitigation, and enough of a sketch to
+act on cold.
 
 **Nothing shipped stays in this file.** A roadmap that inventories finished work
 reads as work outstanding, and every reader has to diff it against reality to
@@ -287,6 +288,94 @@ uuid, a capture writing a bundle-scope file from one machine, an escape hatch
 skipping the rule its probe enforced, a verb reporting on rows it had not
 checked. Every one came from a specific provider's specific behaviour — the
 details a uniform signature is designed to hide.
+
+---
+
+## Suggestions (raised, not ruled on)
+
+Ideas with a case behind them and no decision taken. Each names what it would
+fix, what it would cost, and what has to be answered before it could ship.
+Nothing here is scheduled, and nothing here is refused.
+
+### Split `role` into purpose and graphical session (`headless`)
+
+**The defect that raised it.** `[[machine]]` carries `role = "desktop" |
+"server"`, and every role gate written against it in practice — GNOME
+extensions, PWA launchers, speaker EQ, audio devices, a touchpad quirk, an
+`os-update` step whose polkit grant needs an active local session — asks one
+question: *does this machine have a graphical session?* The word `server`
+answers a different one: *what is this machine for?* Most fleets never notice,
+because the two answers agree on a laptop and agree on a headless box.
+
+They come apart on a Mac used as a server. macOS cannot be run headless, so such
+a machine has a full GUI, a browser and a terminal emulator and is sat in front
+of — while its role reads `server`. A folder hit exactly this: the machine's
+Brewfile installed a terminal, a browser and a remote-desktop client, its `apps`
+list named none of the three because it "was a server", and all three ran
+unmanaged. The label had drifted from the machine, and nothing could catch it,
+because a label is the one thing temper never observes.
+
+**The suggestion.** Keep `os` and `role`; add `headless = true | false` as the
+field the gates actually want.
+
+| machine | `os` | `role` | `headless` |
+|---|---|---|---|
+| laptop, workstation | `mac` / `linux` | `desktop` | `false` |
+| **Mac used as a server** | `mac` | `server` | **`false`** |
+| headless Linux box | `linux` | `server` | `true` |
+
+The middle row is the whole argument. It is the row no two-value taxonomy can
+express, and it is not exotic — it is every Mac mini in a cupboard.
+
+**What has to be decided first.**
+
+- **Does `role` survive?** Once the gates move to `headless`, a folder can be
+  left with nothing that gates on `role` at all — a field maintained for a
+  comment. Three honest endings: keep it as a documented label; drop it and let
+  `headless` carry the gate; or add no field and rename `role`'s values
+  (`graphical` / `headless`) instead. The third is the cheapest and the most
+  disruptive — it changes the meaning of a key every existing folder already
+  sets.
+- **What does an absent `headless` do?** A machine naming no `role` fails a role
+  gate closed, on the reasoning that a bundle naming a role describes a group
+  and a machine naming none is not in it. A boolean cannot simply inherit that:
+  failing closed would mean an unset field silently excludes every desktop
+  machine not yet migrated. Defaulting to `false` is the friendlier answer and
+  the less consistent one.
+- **`init` has to ask.** `temper init --role` prompts for a role today, so
+  whatever wins needs the matching question — plus an inference worth trusting
+  on a first run (a Mac is never headless; a Linux box with no session is).
+
+### Also raised, deliberately not recommended yet: `desktop_environment`
+
+A `desktop_environment = "gnome" | "kde" | …` field on `[[machine]]`, so a
+bundle could branch on the DE. **This is a consideration and no call has been
+made** — recorded so the argument does not have to be reconstructed later.
+
+The case against it *today*:
+
+- **The `apps` list already selects the DE.** A folder composes a `gnome` bundle
+  or it composes a `kde` one. A DE field is a second declaration of a decision
+  already taken, and two declarations of one decision can contradict each other
+  — which is precisely the failure `role` produced above. Building a second one
+  on purpose wants a better reason than symmetry.
+- **It can be probed.** `$XDG_CURRENT_DESKTOP`, or an ordinary `when` binary
+  probe, reads the live answer and cannot drift from the machine the way a
+  declared label can.
+- **A field with one value is a constant, not a taxonomy.** Nothing settles that
+  except a fleet actually running two DEs.
+
+What would change the answer: a *single* bundle that must branch on the DE
+rather than split into two, or a provider whose observation needs the DE before
+it can ask the machine anything. Either turns the field from redundancy into
+information.
+
+**The line both suggestions share.** *Declare intent, probe circumstance.* A
+field on `[[machine]]` is a hand-maintained claim that can drift from the box; a
+`when` probe cannot, which is the same instinct behind gating a step on reality
+rather than on a machine name. `headless` is intent — this box is not meant to
+be sat in front of — and is worth declaring. A DE is circumstance, and where it
+is not, it is the `apps` list's job.
 
 ---
 
