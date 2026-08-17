@@ -512,7 +512,7 @@ that list without touching tier 1.
 
 | Primitive | Scope | What it does |
 |---|---|---|
-| `copy` | app | deploy a file/dir → target(s). Modes: `verbatim`, `template` (variable + apply-time-probe substitution), `seed` (create-once, then hands-off, excluded from drift). Fields: `to`, `mode` (file perms), `template`. |
+| `copy` | app | deploy one file → one target; a directory source is an error, so N files are N steps. Modes: `verbatim`, `template` (variable + apply-time-probe substitution), `seed` (create-once, then hands-off, excluded from drift). Fields: `to`, `mode` (file perms), `template`. |
 | `block` | app | ensure a marker-delimited block / line is present in a user-owned file, idempotently (the grove-`setup` pattern: SSH `Include`, zshrc `source` line). |
 | `setkey` | both | set one or more keys in a structured store, preserving siblings. **Backends:** `dconf`, macOS `defaults`, `ini`/`.desktop`, `json`, `toml`. Supports **list-append** (json/toml/dconf array-union, e.g. dconf `custom-keybindings`) and opt-in apply-time value templating (`template = true`, all backends). The `json` backend is **JSONC/comment-preserving** (reads `//` + trailing commas, writes without reformatting). Generalizes the old standalone `dconf`. |
 | `brew` | machine | converge the aggregate Brewfile (`brew bundle`); internalizes tap-trust (and drift-checks it both ways vs `brew trust --json`); knows the `vscode` sub-type |

@@ -28,6 +28,30 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 
 ## Bugs
 
+**An `exec` presence probe never passes.** `probe::passes` runs the probe's value
+as a **path**, not a command — `Command::new("sh").arg(home.join(script))` — so
+`when = { exec = "test -d /sys/class/power_supply/BAT0" }` executes
+`sh <temper-home>/test -d /sys/class/power_supply/BAT0`. There is no such file,
+`sh` exits non-zero, and the probe reports absent. `exec = "true"` fails
+identically. Every documented example is a command rather than a script path, so
+the probe is unusable as specified and an `exec`-gated step is skipped on every
+machine.
+
+It fails in the direction Principle #6 exists to prevent. The step reports
+`⚠ skipped: exec `…` absent`, which is exactly what a legitimate gate-miss looks
+like, so the recipe does nothing and reads healthy — the step's author is told
+their hardware is absent rather than that the gate cannot work. Found from the
+folder side, where a step gated on the RT1318 amplifier's sysfs path silently
+never ran; a `path` probe was the workaround.
+
+`sh -c` is the one-line fix, and the reason to look twice before making it is
+where the current semantic came from: a `[[step]]`'s `exec` genuinely **is** a
+script path relative to the temper-home, and the probe reuses that reading. So
+the two spellings of `exec` in the schema mean different things, and SPEC has to
+say which is which whichever way this lands. A probe taking a path would also
+duplicate `path`, which is the argument for the command reading.
+→ the check that decides it: gate a step on `exec = "true"` and assert it applies.
+
 **A declared flatpak remote is added where the converge cannot use it.** temper
 adds remotes with `remote-add --user` (`providers::remotes_converge`) while
 installing apps with `install --system`, and a system-scope install cannot
