@@ -397,8 +397,13 @@ fn run_with_spinner(mut cmd: Command, what: &str, initial: &str) -> Result<(bool
     });
 
     let pb = crate::ui::spinner(initial);
+    // A child that goes quiet gets the terminal back: `sudo` and polkit prompt on
+    // `/dev/tty`, which none of the pipes above capture, so a question can land
+    // under the region and be erased by the next redraw. See `ui::StallWatch`.
+    let stall = crate::ui::StallWatch::new(&pb);
     let mut log = String::new();
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        stall.activity();
         if let Some(label) = brew_progress_label(&line) {
             pb.set_message(format!("Installing {label}"));
         }
@@ -410,6 +415,7 @@ fn run_with_spinner(mut cmd: Command, what: &str, initial: &str) -> Result<(bool
         .with_context(|| format!("waiting for {what}"))?
         .success();
     let log = format!("{log}{}", errs.join().unwrap_or_default());
+    drop(stall); // stop the watcher before the region goes away
     pb.finish_and_clear();
 
     if ok {

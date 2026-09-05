@@ -160,7 +160,7 @@ pub fn spinner(msg: &str) -> indicatif::ProgressBar {
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
     );
     pb.set_message(msg.to_string());
-    pb.enable_steady_tick(std::time::Duration::from_millis(90));
+    pb.enable_steady_tick(SPINNER_TICK);
     pb
 }
 
@@ -175,7 +175,7 @@ pub fn spinner_counted(len: u64, msg: &str) -> indicatif::ProgressBar {
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
     );
     pb.set_message(msg.to_string());
-    pb.enable_steady_tick(std::time::Duration::from_millis(90));
+    pb.enable_steady_tick(SPINNER_TICK);
     pb
 }
 
@@ -402,6 +402,17 @@ fn human_secs(d: std::time::Duration) -> String {
 /// How long a unit may run before it says what it is.
 const WAIT_NOTICE_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// How fast a live region redraws. One constant, because it is also how often a
+/// region would overwrite a prompt drawn beneath it — see [`StallWatch`].
+const SPINNER_TICK: std::time::Duration = std::time::Duration::from_millis(90);
+
+/// How long a child may say nothing before the run stops animating and says so.
+///
+/// Generous on purpose. The cost of firing late is a longer wait; the cost of
+/// firing early is crying wolf during a large download, and a notice users learn
+/// to ignore protects nobody.
+const STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(90);
+
 impl WaitNotice {
     pub fn new(label: &str) -> WaitNotice {
         let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -436,6 +447,107 @@ impl WaitNotice {
 impl Drop for WaitNotice {
     fn drop(&mut self) {
         self.done
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+/// A backstop for a child that has gone quiet: stop animating, and say so.
+///
+/// The failure it exists for is not a slow package manager, it is an **invisible
+/// question**. `sudo`, polkit and PAM write their prompt to `/dev/tty`, which no
+/// pipe of ours captures, so it lands under a live region and the next redraw
+/// erases it — leaving a spinner turning forever over a child blocked on a
+/// password nobody was shown.
+///
+/// This is deliberately cause-agnostic. Asking "will this child need a password?"
+/// cannot be answered ahead of time for polkit, whose verdict depends on the
+/// action, the session and local rules — so instead of predicting the prompter,
+/// this notices the *silence* any prompter produces. Whatever the cause, an
+/// unbounded silent hang becomes a bounded visible one.
+///
+/// Stopping the ticker is the part that matters, and it is enough on its own: a
+/// static line cannot overwrite anything, so a prompt drawn afterwards survives
+/// and can be answered even though the question itself was erased. Animation
+/// resumes on the next byte of output, so a merely slow child costs one line and
+/// gets its spinner back.
+pub struct StallWatch {
+    last: std::sync::Arc<std::sync::Mutex<std::time::Instant>>,
+    stalled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+    pb: indicatif::ProgressBar,
+}
+
+impl StallWatch {
+    /// Watch `pb`'s child. Inert under `--json`, which has no region to quiet and
+    /// owes stdout exactly one document.
+    pub fn new(pb: &indicatif::ProgressBar) -> StallWatch {
+        StallWatch::spawn(pb, STALL_AFTER)
+    }
+
+    /// `new`, with the window as a parameter — so the behaviour can be tested in
+    /// milliseconds instead of the minute and a half a real run waits.
+    fn spawn(pb: &indicatif::ProgressBar, after: std::time::Duration) -> StallWatch {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        let last = Arc::new(Mutex::new(std::time::Instant::now()));
+        let stalled = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        if json_mode() {
+            return StallWatch { last, stalled, stop, handle: None, pb: pb.clone() };
+        }
+        let (l, s, st, bar) = (last.clone(), stalled.clone(), stop.clone(), pb.clone());
+        let handle = std::thread::spawn(move || {
+            // Ticked rather than slept whole, so dropping the guard does not block
+            // for the rest of the window — the same shape as `WaitNotice`.
+            let tick = (after / 4).min(std::time::Duration::from_millis(200));
+            while !st.load(Ordering::Relaxed) {
+                std::thread::sleep(tick);
+                if st.load(Ordering::Relaxed) {
+                    return;
+                }
+                if s.load(Ordering::Relaxed) {
+                    continue; // already said it; nothing to add until output returns
+                }
+                let idle = l.lock().map(|t| t.elapsed()).unwrap_or_default();
+                if idle >= after {
+                    s.store(true, Ordering::Relaxed);
+                    // Through `suspend`, so the notice does not land on the region's
+                    // own line — then stop the ticker so nothing redraws again.
+                    bar.suspend(|| {
+                        eprintln!(
+                            "{}",
+                            dim("      … no output for a while. If something is asking for a \
+                                 password, it may be hidden — try answering here.")
+                        );
+                    });
+                    bar.disable_steady_tick();
+                }
+            }
+        });
+        StallWatch { last, stalled, stop, handle: Some(handle), pb: pb.clone() }
+    }
+
+    /// The child produced output: reset the clock, and put the animation back if
+    /// it was stopped.
+    pub fn activity(&self) {
+        use std::sync::atomic::Ordering;
+        if let Ok(mut t) = self.last.lock() {
+            *t = std::time::Instant::now();
+        }
+        if self.stalled.swap(false, Ordering::Relaxed) {
+            self.pb.enable_steady_tick(SPINNER_TICK);
+        }
+    }
+}
+
+impl Drop for StallWatch {
+    fn drop(&mut self) {
+        self.stop
             .store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(h) = self.handle.take() {
             let _ = h.join();
@@ -479,7 +591,7 @@ impl Checklist {
                 .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
             );
             pb.set_message(phase.to_string());
-            pb.enable_steady_tick(std::time::Duration::from_millis(90));
+            pb.enable_steady_tick(SPINNER_TICK);
             pb
         });
         Checklist { pb }
@@ -583,6 +695,54 @@ impl Checklist {
         if let Some(pb) = self.pb {
             pb.finish_and_clear();
         }
+    }
+}
+
+#[cfg(test)]
+mod stall_tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    /// Silence stops the animation; output starts it again.
+    ///
+    /// The stopping is the load-bearing half. A ticking region overwrites
+    /// whatever is beneath it every 90 ms, which is how a `sudo` prompt written
+    /// to `/dev/tty` disappears and a run waits forever on a question nobody
+    /// saw. A static line overwrites nothing.
+    #[test]
+    fn silence_stops_the_animation_and_output_restarts_it() {
+        let pb = spinner("test");
+        let w = StallWatch::spawn(&pb, Duration::from_millis(40));
+
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(
+            w.stalled.load(Ordering::Relaxed),
+            "a child past the window must stop the region redrawing over it"
+        );
+
+        w.activity();
+        assert!(
+            !w.stalled.load(Ordering::Relaxed),
+            "output means nothing is waiting on a prompt — animate again"
+        );
+        pb.finish_and_clear();
+    }
+
+    /// A child that keeps talking never trips it, however long it runs.
+    #[test]
+    fn a_busy_child_is_never_called_stalled() {
+        let pb = spinner("test");
+        let w = StallWatch::spawn(&pb, Duration::from_millis(120));
+        for _ in 0..10 {
+            std::thread::sleep(Duration::from_millis(30));
+            w.activity();
+        }
+        assert!(
+            !w.stalled.load(Ordering::Relaxed),
+            "steady output must not be reported as a stall"
+        );
+        pb.finish_and_clear();
     }
 }
 
