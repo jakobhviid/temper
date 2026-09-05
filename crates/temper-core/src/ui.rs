@@ -406,11 +406,19 @@ const WAIT_NOTICE_AFTER: std::time::Duration = std::time::Duration::from_secs(3)
 /// region would overwrite a prompt drawn beneath it — see [`StallWatch`].
 const SPINNER_TICK: std::time::Duration = std::time::Duration::from_millis(90);
 
-/// How long a child may say nothing before the run stops animating and says so.
+/// How long a child may say nothing before the region stops redrawing.
 ///
-/// Generous on purpose. The cost of firing late is a longer wait; the cost of
-/// firing early is crying wolf during a large download, and a notice users learn
-/// to ignore protects nobody.
+/// Short, because stopping costs almost nothing. During silence the animation's
+/// only contribution is a claim that something is happening — which it has not
+/// verified, and which is false in precisely the case that matters. The message
+/// beneath it stays either way. Long enough only that bursty output does not
+/// stutter the spinner.
+const QUIET_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How long before the run says a hidden prompt may be waiting.
+///
+/// Generous, because unlike stopping the ticker this one can cry wolf, and a
+/// notice users learn to ignore protects nobody.
 const STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(90);
 
 impl WaitNotice {
@@ -454,84 +462,50 @@ impl Drop for WaitNotice {
     }
 }
 
-/// A backstop for a child that has gone quiet: stop animating, and say so.
+/// A backstop for a child that has gone quiet: stop redrawing over it, then say so.
 ///
 /// The failure it exists for is not a slow package manager, it is an **invisible
 /// question**. `sudo`, polkit and PAM write their prompt to `/dev/tty`, which no
 /// pipe of ours captures, so it lands under a live region and the next redraw
-/// erases it — leaving a spinner turning forever over a child blocked on a
-/// password nobody was shown.
+/// erases it — leaving a spinner turning over a child blocked on a password
+/// nobody was shown.
 ///
-/// This is deliberately cause-agnostic. Asking "will this child need a password?"
-/// cannot be answered ahead of time for polkit, whose verdict depends on the
-/// action, the session and local rules — so instead of predicting the prompter,
-/// this notices the *silence* any prompter produces. Whatever the cause, an
-/// unbounded silent hang becomes a bounded visible one.
+/// Deliberately cause-agnostic. "Will this child need a password?" cannot be
+/// answered ahead of time for polkit, whose verdict depends on the action, the
+/// session and local rules — so rather than predicting the prompter, this notices
+/// the *silence* any prompter produces.
 ///
-/// Stopping the ticker is the part that matters, and it is enough on its own: a
-/// static line cannot overwrite anything, so a prompt drawn afterwards survives
-/// and can be answered even though the question itself was erased. Animation
-/// resumes on the next byte of output, so a merely slow child costs one line and
-/// gets its spinner back.
+/// **Two windows, because the two responses have opposite costs.** Stopping the
+/// ticker ([`QUIET_AFTER`]) is nearly free and is the half that actually rescues
+/// the prompt: a static line overwrites nothing, so a question drawn afterwards
+/// survives and can be answered. Saying so ([`STALL_AFTER`]) is the half that can
+/// cry wolf, so it waits much longer. Tying both to the conservative window would
+/// leave a prompt erasable for a minute and a half to protect a message that has
+/// nothing to do with it.
+///
+/// Animation resumes on the next byte, so a merely slow child gets its spinner
+/// back.
 pub struct StallWatch {
-    last: std::sync::Arc<std::sync::Mutex<std::time::Instant>>,
-    stalled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    beat: Beat,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
+}
+
+/// A cloneable handle for reporting that the child said something.
+///
+/// Cloneable because a child speaks on **two** streams and either counts as being
+/// alive. Watching only stdout would read a child whose progress goes to stderr —
+/// which is where plenty of tools put it — as perfectly silent, and fire the
+/// notice on every such run.
+#[derive(Clone)]
+pub struct Beat {
+    last: std::sync::Arc<std::sync::Mutex<std::time::Instant>>,
+    quiet: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    noticed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pb: indicatif::ProgressBar,
 }
 
-impl StallWatch {
-    /// Watch `pb`'s child. Inert under `--json`, which has no region to quiet and
-    /// owes stdout exactly one document.
-    pub fn new(pb: &indicatif::ProgressBar) -> StallWatch {
-        StallWatch::spawn(pb, STALL_AFTER)
-    }
-
-    /// `new`, with the window as a parameter — so the behaviour can be tested in
-    /// milliseconds instead of the minute and a half a real run waits.
-    fn spawn(pb: &indicatif::ProgressBar, after: std::time::Duration) -> StallWatch {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::{Arc, Mutex};
-
-        let last = Arc::new(Mutex::new(std::time::Instant::now()));
-        let stalled = Arc::new(AtomicBool::new(false));
-        let stop = Arc::new(AtomicBool::new(false));
-        if json_mode() {
-            return StallWatch { last, stalled, stop, handle: None, pb: pb.clone() };
-        }
-        let (l, s, st, bar) = (last.clone(), stalled.clone(), stop.clone(), pb.clone());
-        let handle = std::thread::spawn(move || {
-            // Ticked rather than slept whole, so dropping the guard does not block
-            // for the rest of the window — the same shape as `WaitNotice`.
-            let tick = (after / 4).min(std::time::Duration::from_millis(200));
-            while !st.load(Ordering::Relaxed) {
-                std::thread::sleep(tick);
-                if st.load(Ordering::Relaxed) {
-                    return;
-                }
-                if s.load(Ordering::Relaxed) {
-                    continue; // already said it; nothing to add until output returns
-                }
-                let idle = l.lock().map(|t| t.elapsed()).unwrap_or_default();
-                if idle >= after {
-                    s.store(true, Ordering::Relaxed);
-                    // Through `suspend`, so the notice does not land on the region's
-                    // own line — then stop the ticker so nothing redraws again.
-                    bar.suspend(|| {
-                        eprintln!(
-                            "{}",
-                            dim("      … no output for a while. If something is asking for a \
-                                 password, it may be hidden — try answering here.")
-                        );
-                    });
-                    bar.disable_steady_tick();
-                }
-            }
-        });
-        StallWatch { last, stalled, stop, handle: Some(handle), pb: pb.clone() }
-    }
-
+impl Beat {
     /// The child produced output: reset the clock, and put the animation back if
     /// it was stopped.
     pub fn activity(&self) {
@@ -539,9 +513,81 @@ impl StallWatch {
         if let Ok(mut t) = self.last.lock() {
             *t = std::time::Instant::now();
         }
-        if self.stalled.swap(false, Ordering::Relaxed) {
+        if self.quiet.swap(false, Ordering::Relaxed) {
             self.pb.enable_steady_tick(SPINNER_TICK);
         }
+        // A later silence is a new silence, and earns its own notice.
+        self.noticed.store(false, Ordering::Relaxed);
+    }
+}
+
+impl StallWatch {
+    /// Watch `pb`'s child. Inert under `--json`, which has no region to quiet and
+    /// owes stdout exactly one document.
+    pub fn new(pb: &indicatif::ProgressBar) -> StallWatch {
+        StallWatch::spawn(pb, QUIET_AFTER, STALL_AFTER)
+    }
+
+    /// A handle to hand to whoever else is reading from the child.
+    pub fn beat(&self) -> Beat {
+        self.beat.clone()
+    }
+
+    /// The child produced output.
+    pub fn activity(&self) {
+        self.beat.activity();
+    }
+
+    /// `new`, with both windows as parameters — so the behaviour is tested in
+    /// milliseconds instead of the minute and a half a real run waits.
+    fn spawn(
+        pb: &indicatif::ProgressBar,
+        quiet_after: std::time::Duration,
+        notice_after: std::time::Duration,
+    ) -> StallWatch {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        let beat = Beat {
+            last: Arc::new(Mutex::new(std::time::Instant::now())),
+            quiet: Arc::new(AtomicBool::new(false)),
+            noticed: Arc::new(AtomicBool::new(false)),
+            pb: pb.clone(),
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        if json_mode() {
+            return StallWatch { beat, stop, handle: None };
+        }
+        let (b, st, bar) = (beat.clone(), stop.clone(), pb.clone());
+        let handle = std::thread::spawn(move || {
+            // Ticked rather than slept whole, so dropping the guard does not block
+            // for the rest of the window — the same shape as `WaitNotice`.
+            let tick = (quiet_after / 4).min(std::time::Duration::from_millis(200));
+            while !st.load(Ordering::Relaxed) {
+                std::thread::sleep(tick);
+                if st.load(Ordering::Relaxed) {
+                    return;
+                }
+                let idle = b.last.lock().map(|t| t.elapsed()).unwrap_or_default();
+
+                // First window: stop redrawing, so a prompt beneath us survives.
+                if idle >= quiet_after && !b.quiet.swap(true, Ordering::Relaxed) {
+                    bar.disable_steady_tick();
+                }
+                // Second: name what the silence might mean. Through `suspend`, so
+                // the line does not land on the region's own.
+                if idle >= notice_after && !b.noticed.swap(true, Ordering::Relaxed) {
+                    bar.suspend(|| {
+                        eprintln!(
+                            "{}",
+                            dim("      … no output for a while. If something is asking for a \
+                                 password, it may be hidden — try answering here.")
+                        );
+                    });
+                }
+            }
+        });
+        StallWatch { beat, stop, handle: Some(handle) }
     }
 }
 
@@ -704,43 +750,79 @@ mod stall_tests {
     use std::sync::atomic::Ordering;
     use std::time::Duration;
 
-    /// Silence stops the animation; output starts it again.
+    /// The two windows fire independently, and the cheap one fires first.
     ///
-    /// The stopping is the load-bearing half. A ticking region overwrites
-    /// whatever is beneath it every 90 ms, which is how a `sudo` prompt written
-    /// to `/dev/tty` disappears and a run waits forever on a question nobody
-    /// saw. A static line overwrites nothing.
+    /// Stopping the ticker is what rescues the prompt — a ticking region
+    /// overwrites whatever is beneath it, which is how a `sudo` prompt written to
+    /// `/dev/tty` disappears. It must not wait on the notice's much longer window,
+    /// which exists only to avoid crying wolf.
     #[test]
-    fn silence_stops_the_animation_and_output_restarts_it() {
+    fn redrawing_stops_long_before_the_notice_is_printed() {
         let pb = spinner("test");
-        let w = StallWatch::spawn(&pb, Duration::from_millis(40));
+        let w = StallWatch::spawn(&pb, Duration::from_millis(40), Duration::from_secs(30));
 
         std::thread::sleep(Duration::from_millis(500));
         assert!(
-            w.stalled.load(Ordering::Relaxed),
-            "a child past the window must stop the region redrawing over it"
+            w.beat.quiet.load(Ordering::Relaxed),
+            "past the quiet window the region must stop redrawing over the child"
         );
-
-        w.activity();
         assert!(
-            !w.stalled.load(Ordering::Relaxed),
-            "output means nothing is waiting on a prompt — animate again"
+            !w.beat.noticed.load(Ordering::Relaxed),
+            "the notice has its own, much longer window and must not ride the first"
         );
         pb.finish_and_clear();
     }
 
-    /// A child that keeps talking never trips it, however long it runs.
+    /// Output restarts the animation and re-arms the notice.
+    #[test]
+    fn output_resumes_the_animation() {
+        let pb = spinner("test");
+        let w = StallWatch::spawn(&pb, Duration::from_millis(40), Duration::from_millis(80));
+
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(w.beat.quiet.load(Ordering::Relaxed));
+        assert!(w.beat.noticed.load(Ordering::Relaxed));
+
+        w.activity();
+        assert!(!w.beat.quiet.load(Ordering::Relaxed), "output must animate again");
+        assert!(
+            !w.beat.noticed.load(Ordering::Relaxed),
+            "a later silence is a new silence and earns its own notice"
+        );
+        pb.finish_and_clear();
+    }
+
+    /// A child that keeps talking never trips either window, however long it runs.
     #[test]
     fn a_busy_child_is_never_called_stalled() {
         let pb = spinner("test");
-        let w = StallWatch::spawn(&pb, Duration::from_millis(120));
+        let w = StallWatch::spawn(&pb, Duration::from_millis(120), Duration::from_millis(150));
         for _ in 0..10 {
             std::thread::sleep(Duration::from_millis(30));
             w.activity();
         }
+        assert!(!w.beat.quiet.load(Ordering::Relaxed), "steady output is not a stall");
+        assert!(!w.beat.noticed.load(Ordering::Relaxed));
+        pb.finish_and_clear();
+    }
+
+    /// A clone reports for the same child — the property the stderr reader needs.
+    ///
+    /// Watching one stream only would read a child whose progress goes to stderr
+    /// as silent, and fire on every run of it.
+    #[test]
+    fn a_cloned_beat_speaks_for_the_same_child() {
+        let pb = spinner("test");
+        let w = StallWatch::spawn(&pb, Duration::from_millis(40), Duration::from_secs(30));
+        let from_stderr = w.beat();
+
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(w.beat.quiet.load(Ordering::Relaxed));
+
+        from_stderr.activity(); // the *other* stream speaks
         assert!(
-            !w.stalled.load(Ordering::Relaxed),
-            "steady output must not be reported as a stall"
+            !w.beat.quiet.load(Ordering::Relaxed),
+            "either stream counts as the child being alive"
         );
         pb.finish_and_clear();
     }

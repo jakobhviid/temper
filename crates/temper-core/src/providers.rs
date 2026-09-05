@@ -13,7 +13,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -388,19 +388,28 @@ fn run_with_spinner(mut cmd: Command, what: &str, initial: &str) -> Result<(bool
     let stdout = child.stdout.take().context("piped stdout")?;
     let stderr = child.stderr.take().context("piped stderr")?;
 
-    // stderr is drained on its own thread: a full pipe buffer on either stream
-    // would deadlock the child while we block reading the other.
-    let errs = std::thread::spawn(move || {
-        let mut buf = String::new();
-        let _ = BufReader::new(stderr).read_to_string(&mut buf);
-        buf
-    });
-
     let pb = crate::ui::spinner(initial);
     // A child that goes quiet gets the terminal back: `sudo` and polkit prompt on
     // `/dev/tty`, which none of the pipes above capture, so a question can land
     // under the region and be erased by the next redraw. See `ui::StallWatch`.
     let stall = crate::ui::StallWatch::new(&pb);
+
+    // stderr is drained on its own thread: a full pipe buffer on either stream
+    // would deadlock the child while we block reading the other. Read by line
+    // rather than to EOF so it can report the child is alive as it goes — plenty
+    // of tools put their progress here, and a child watched on stdout alone reads
+    // as silent for as long as it happens to be talking on the other stream.
+    let beat = stall.beat();
+    let errs = std::thread::spawn(move || {
+        let mut buf = String::new();
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            beat.activity();
+            buf.push_str(&line);
+            buf.push('\n');
+        }
+        buf
+    });
+
     let mut log = String::new();
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
         stall.activity();
