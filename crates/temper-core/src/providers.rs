@@ -307,7 +307,18 @@ fn brew_progress_label(line: &str) -> Option<String> {
     {
         return None; // a list — its members each get their own line
     }
-    for prefix in ["Installing Cask ", "Installing ", "Fetching "] {
+    // `Upgrading` is the *upgrade* vocabulary and `update` runs `brew upgrade`, so
+    // leaving it out made the busiest verb the quietest one. `Downloading` is
+    // deliberately absent: its argument is a URL, and the package name from the
+    // preceding `Upgrading` line is the better thing to leave on screen while the
+    // download runs.
+    for prefix in [
+        "Installing Cask ",
+        "Installing ",
+        "Upgrading Cask ",
+        "Upgrading ",
+        "Fetching ",
+    ] {
         if let Some(x) = rest.strip_prefix(prefix) {
             return Some(x.trim().to_string());
         }
@@ -322,6 +333,34 @@ fn brew_progress_label(line: &str) -> Option<String> {
         return Some(x.split(';').next().unwrap_or(x).trim().to_string());
     }
     None
+}
+
+/// How wide a progress label may get. The region is one line that rewrites itself
+/// in place, so a label that outgrows the terminal wraps and the line stops being
+/// one line.
+const LABEL_MAX: usize = 48;
+
+/// What a child is working on right now, for the region's message.
+///
+/// Homebrew's `==>` headers are parsed for a clean name where they match. Every
+/// other child — `flatpak update`, `rpm-ostree uninstall` — had no parser at all
+/// and so sat on its opening message for the whole run, which is indistinguishable
+/// from being wedged. So anything else falls back to its own last line, elided:
+/// less pretty than a parsed name, and far better than nothing, because the point
+/// is to be able to say where a run stopped.
+///
+/// Blank and decorative lines are skipped so the label does not flicker to empty,
+/// and a warning is left to `noteworthy_lines`, which prints it properly rather
+/// than flashing it past in a region that is about to be overwritten.
+fn progress_label(line: &str) -> Option<String> {
+    if let Some(name) = brew_progress_label(line) {
+        return Some(crate::ui::elide(&name, LABEL_MAX));
+    }
+    let t = line.trim();
+    if t.is_empty() || t.chars().all(|c| !c.is_alphanumeric()) || is_noteworthy(t) {
+        return None;
+    }
+    Some(crate::ui::elide(t.trim_start_matches("==> ").trim(), LABEL_MAX))
 }
 
 /// Whether a captured line *starts* something worth surfacing even on a
@@ -413,8 +452,13 @@ fn run_with_spinner(mut cmd: Command, what: &str, initial: &str) -> Result<(bool
     let mut log = String::new();
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
         stall.activity();
-        if let Some(label) = brew_progress_label(&line) {
-            pb.set_message(format!("Installing {label}"));
+        if let Some(label) = progress_label(&line) {
+            // The phase is kept and the item appended, rather than replaced. Which
+            // phase you are in is the half that says whether a pause is expected,
+            // and it is also what the line still reads as once the child goes quiet
+            // and the region freezes — the last thing that happened before the
+            // silence is exactly what a stalled run needs to be able to say.
+            pb.set_message(format!("{initial}: {label}"));
         }
         log.push_str(&line);
         log.push('\n');
@@ -2388,6 +2432,57 @@ pub fn rpm_missing(effective: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod progress_tests {
     use super::*;
+
+    /// The busiest verb was the quietest one.
+    ///
+    /// `temper update` runs `brew upgrade`, whose per-formula header is
+    /// `==> Upgrading foo` — and the label parser knew only the *install*
+    /// vocabulary, so the one line that says what an upgrade is doing right now
+    /// never matched. The region sat on "upgrading packages" for the whole run,
+    /// which reads exactly like being wedged and leaves nothing to report when a
+    /// run really does stall.
+    #[test]
+    fn the_upgrade_vocabulary_is_recognised_not_only_the_install_one() {
+        // Verbatim from Homebrew's `oh1` calls (upgrade.rb / formula_installer.rb).
+        assert_eq!(brew_progress_label("==> Upgrading openssl@3").as_deref(), Some("openssl@3"));
+        assert_eq!(brew_progress_label("==> Installing openssl@3").as_deref(), Some("openssl@3"));
+        // A URL is not a name: the label stays on the package the `Upgrading` line
+        // named, which is what should be on screen while its bottle downloads.
+        assert_eq!(brew_progress_label("==> Downloading https://x/y.tar.gz"), None);
+        assert_eq!(brew_progress_label("==> Pouring aom--3.15.0.bottle.tar.gz").as_deref(), Some("aom"));
+        assert_eq!(brew_progress_label("==> Upgrading llvm dependency: xz").as_deref(), Some("xz"));
+        // A list header names no single item: its members each get their own line.
+        assert_eq!(brew_progress_label("==> Installing dependencies for llvm"), None);
+    }
+
+    /// A child with no parser still says where it is.
+    ///
+    /// `flatpak update` and `rpm-ostree uninstall` have no `==>` vocabulary, so
+    /// before the fallback they held their opening message for the whole run —
+    /// indistinguishable from wedged, and with nothing to show once the region
+    /// freezes.
+    #[test]
+    fn a_child_with_no_parser_falls_back_to_its_own_last_line() {
+        assert_eq!(
+            progress_label("Updating app/com.spotify.Client/x86_64/stable").as_deref(),
+            Some("Updating app/com.spotify.Client/x86_64/stable")
+        );
+        // Nothing worth showing: the label must not flicker to empty or to rules.
+        assert_eq!(progress_label(""), None);
+        assert_eq!(progress_label("   "), None);
+        assert_eq!(progress_label("-------"), None);
+        // A warning is printed properly by `noteworthy_lines`, not flashed past in
+        // a region that is about to be overwritten.
+        assert_eq!(progress_label("Warning: something is off"), None);
+    }
+
+    /// A long line is elided rather than shoving the region past the terminal.
+    #[test]
+    fn a_long_fallback_line_is_elided() {
+        let long = "Updating ".to_string() + &"x".repeat(200);
+        let got = progress_label(&long).expect("a label");
+        assert!(got.chars().count() <= 48, "elided to fit, got {} chars", got.chars().count());
+    }
 
     /// gext was the one manager reporting a single direction: declared-but-
     /// missing, never installed-but-undeclared. The extras side is user-scope

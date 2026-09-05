@@ -204,7 +204,7 @@ fn term_cols() -> Option<usize> {
 /// Shorten to `max`, marking the cut with `…`. A path-ish cell loses its **head**
 /// (`…/scripts/retire-sesh-tap.sh` still identifies the step, where
 /// `assets/scripts/retire-…` does not); anything else loses its tail.
-fn elide(s: &str, max: usize) -> String {
+pub fn elide(s: &str, max: usize) -> String {
     if width(s) <= max {
         return s.to_string();
     }
