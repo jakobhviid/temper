@@ -1,6 +1,7 @@
 //! The provider interface, as data.
 //!
-//! ARCHITECTURE describes eleven columns every provider must answer. Prose
+//! ARCHITECTURE describes eleven columns every provider must answer; ten are
+//! recorded here and `drift` is derived from them (see `ProviderSpec`). Prose
 //! cannot fail a build, so the table lives here and the tests below hold it to
 //! the finding registry in `plan::KIND_ANSWERS`.
 //!
@@ -69,6 +70,12 @@ pub struct ProviderSpec {
     pub reconcile: Col,
     /// 8: an ignore list, at machine scope.
     pub ignore: Col,
+    // 9 (drift) has no cell, and that is the answer rather than an omission: a
+    // provider reports drift exactly when it can observe (3) and something
+    // declares it (1/2), so a fourth cell would restate three others and could
+    // contradict them. The one part not implied by those — that a finding names
+    // the file its declaration lives in — is held per *kind* instead, by
+    // `plan::KIND_ANSWERS`, where `Answer::Hand` must name the file a human edits.
     /// 10: mutations are journaled and revertible.
     pub revertible: Col,
     /// 11: what happens to what it deployed when the declaration goes away.

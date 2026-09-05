@@ -28,29 +28,47 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 
 ## Bugs
 
-**An `exec` presence probe never passes.** `probe::passes` runs the probe's value
-as a **path**, not a command — `Command::new("sh").arg(home.join(script))` — so
-`when = { exec = "test -d /sys/class/power_supply/BAT0" }` executes
-`sh <temper-home>/test -d /sys/class/power_supply/BAT0`. There is no such file,
-`sh` exits non-zero, and the probe reports absent. `exec = "true"` fails
-identically. Every documented example is a command rather than a script path, so
-the probe is unusable as specified and an `exec`-gated step is skipped on every
-machine.
+**A password prompt in the package phase is invisible, and only its silence is
+reported.** `sudo`, `pkttyagent` and PAM write their prompt to `/dev/tty`, not to
+the pipes `providers::run_with_spinner` captures, so the question lands under the
+live region and the region's redraw erases it. `ui::StallWatch` bounds the damage
+— a child that says nothing for 90 seconds stops the animation and prints a line
+telling the user a hidden prompt may be waiting, and since a static line
+overwrites nothing, the password can be typed and the run continues. What the
+user never gets is the question itself: which account, which tool, which of three
+possible prompts. They are told to answer something, not what.
 
-It fails in the direction Principle #6 exists to prevent. The step reports
-`⚠ skipped: exec `…` absent`, which is exactly what a legitimate gate-miss looks
-like, so the recipe does nothing and reads healthy — the step's author is told
-their hardware is absent rather than that the gate cannot work. Found from the
-folder side, where a step gated on the RT1318 amplifier's sysfs path silently
-never ran; a `path` probe was the workaround.
+Two things would close the rest, and both are known:
 
-`sh -c` is the one-line fix, and the reason to look twice before making it is
-where the current semantic came from: a `[[step]]`'s `exec` genuinely **is** a
-script path relative to the temper-home, and the probe reuses that reading. So
-the two spellings of `exec` in the schema mean different things, and SPEC has to
-say which is which whichever way this lands. A probe taking a path would also
-duplicate `path`, which is the argument for the command reading.
-→ the check that decides it: gate a step on `exec = "true"` and assert it applies.
+- **Spend the signal temper already computes.** `sudo::reusable_by_children()`
+  answers whether a child can use a credential temper holds, and `acquire`'s doc
+  records the consequence when it cannot — "the run continues exactly as it did
+  before, with Homebrew prompting for itself when it gets there". A phase that
+  knows a prompt is coming could stream that child instead of animating it, the
+  way `-v` already does at all four `run_child` sites, and the prompt would arrive
+  intact rather than 90 seconds later in paraphrase.
+- **Decide what "could prompt" means for polkit.** It is not sudo, and
+  `sudo::cached()` says nothing about it, so `rpm-ostree` and a system-scope
+  `flatpak` need their own answer. flatpak's `--noninteractive` does not supply
+  one: it is documented as *"Produce minimal output and avoid most questions…
+  suitable for use in non-interactive situations, e.g. in a build script"* —
+  flatpak's own questions, with polkit unmentioned. The no-interaction flag that
+  lets GNOME Software avoid dialogs is library-side and nothing says the CLI
+  option sets it, so plan for flatpak being a prompter.
+  → `flatpak update --system --noninteractive` over ssh, with no polkit agent.
+
+Prior art agrees on the shape and only half of it transfers. Mole's `mo clean` hit
+this exactly (tw93/Mole#1084) and fixed it (#1085) by putting `sudo -n` on every
+privileged call so it fails closed, plus adopting a cached sudo session before the
+phase begins; the general CLI pattern is to probe `sudo -n true` and branch before
+any animation exists. temper cannot do the first half — Homebrew shells out to
+`/usr/bin/sudo` from its own Ruby, and there is no flag to add to someone else's
+invocation. The timing half is the part that applies.
+
+The step phase has the whole answer already, because there temper owns every
+escalation: `plan::apply_one` clears the region for any step `may_prompt` names —
+`exec` and `sysfile`, the two primitives that reach `sudo` — so a password or
+fingerprint asked there is legible.
 
 **A declared flatpak remote is added where the converge cannot use it.** temper
 adds remotes with `remote-add --user` (`providers::remotes_converge`) while
@@ -115,7 +133,7 @@ sudo already does; today it finds out when the removal fails.
   it is.
 
 **The provider trait is half built.** `interface.rs` records each provider's
-eleven answers as data and cross-checks them against the finding registry, so a
+answers as data and cross-checks them against the finding registry, so a
 claimed capability with nothing behind it fails a test. What remains is
 dispatch: the providers still have bespoke function signatures, so `install`,
 `prune` and the reconcile pair are wired per provider rather than driven from the
@@ -216,10 +234,13 @@ that would decide it. Run these on a Mac before trusting the corresponding cell
 in the feature matrix.
 
 - **`mas uninstall` arity.** `interface.rs` records `mas uninstall (<id>…|--all)`,
-  and `undo` passes the whole set in one invocation. mas 1.8's usage line reads
-  `mas uninstall [--dry-run] <app-id>` — singular. If that holds, a multi-app
-  revert fails argument parsing and, because `undo`'s package path has no
-  per-item fallback, reports the *whole* set as un-uninstallable.
+  and `undo` tries the whole set in one invocation. mas 1.8's usage line reads
+  `mas uninstall [--dry-run] <app-id>` — singular. The blast radius is one
+  invocation, not the run: `undo`'s package path is batch-then-isolate, so a
+  batch that fails argument parsing retries one id at a time and each app is
+  reverted or named individually. What is left to settle is whether the batch is
+  wasted work on every mas revert, and whether `interface.rs` is documenting an
+  arity mas does not have.
   → `mas uninstall --help`.
 - **`brew bundle cleanup --mas` / `--vscode`.** Homebrew documents those type
   flags for `install`/`list`/`dump`; `prune` passes them to `cleanup`, relying on
@@ -236,7 +257,11 @@ in the feature matrix.
   reports an applied change and an unrevertible one.
 - **`sudo temper …` splits the state root.** The journal, ledger and profile
   stamps land under `/var/root/Library/Application Support/temper`, so a later
-  unprivileged `undo` sees nothing to undo. Nothing detects the split. (Not
+  unprivileged `undo` sees nothing to undo. temper reports it at startup —
+  `journal::sudo_split_state_root` — naming the path the record went to and the
+  two ways out. What a Mac still has to settle is the *path*: the warning tests
+  for `/var/root`, which is root's home on macOS by convention, and no Linux box
+  can confirm that a Mac under `sudo` actually resolves `HOME` there. (Not
   mac-specific in principle, but that is where the path differs most.)
 
 Fixed blind, and portably, rather than left for the hardware: `sudo install -D`
@@ -252,7 +277,9 @@ here because the question recurs the moment anyone reads `providers.rs`, and the
 answer took measuring to reach.
 
 The contract is already explicit as **data**: `interface::PROVIDERS` gives every
-provider eleven columns, each `Yes` / `No(reason)` / `NA(reason)`, cross-checked
+provider ten columns, each `Yes` / `No(reason)` / `NA(reason)` — drift is derived
+from observe and the two declaration cells rather than declared a fourth time —
+cross-checked
 by tests against `plan::KIND_ANSWERS` so a provider cannot claim `prune` unless
 its kinds name `temper prune`. The restructuring would move that from data into
 types — `trait Provider { fn observe(&self) -> Option<Vec<Item>>; fn extras(…);
@@ -284,10 +311,14 @@ silent. Per-tool facts get pressed flat the same way — `brew bundle cleanup`
 exits **non-zero when it finds orphans**, and reading that as failure once zeroed
 brew extras on every machine.
 
-The gain is also smaller than a grep suggests. Of the ~48 per-manager match arms,
-**23 are in `packages.rs`** and are total mappings (`as_str`, `journal_provider`,
+The gain is also smaller than a grep suggests. Of the 55 per-manager match arms
+(`grep -cE 'Manager::[A-Za-z]+.*=>'` across `temper-core/src`), **28 are in
+`packages.rs`** and are total mappings (`as_str`, `journal_provider`,
 `ignore_list`) — already exhaustive, already a compile error on a new variant,
-and better left as matches. The real dispatch fan-out is closer to twenty sites.
+and better left as matches. The real dispatch fan-out is the remaining 27, split
+across `providers.rs` (18), `reconcile.rs` (8) and `plan.rs` (1). The counting
+command is written down because the ratio is the argument, and a bare number
+ages into something nobody can re-derive.
 
 **The narrow version, which is recommended.** Unify where the shape is genuinely
 shared, not where we wish it were. Exactly one question is common to every
