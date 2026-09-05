@@ -387,6 +387,21 @@ fn run(cli: Cli) -> Result<()> {
     // Before any output: the core's live renderers (progress regions, per-item
     // lines) must know to stay off stdout so `--json` is one document.
     ui::set_json(json);
+    // Before any verb runs: `sudo temper …` journals into root's state directory,
+    // so the unprivileged `temper undo` that follows reads a different one and
+    // finds nothing to revert. Say it up front, while the run can still be
+    // re-invoked without `sudo` — afterwards the record is already in the wrong
+    // place. stderr, so `--json` keeps one parseable document on stdout.
+    if let Some(root) = journal::sudo_split_state_root() {
+        eprintln!(
+            "{} running under sudo: this run's undo record goes to {}, not your own state directory — `temper undo` as yourself will not see it.",
+            ui::yellow(ui::g_warn()),
+            root.display()
+        );
+        eprintln!(
+            "  Re-run without `sudo` (temper escalates per-command where it needs root), or set TEMPER_STATE_DIR so both accounts resolve the same path."
+        );
+    }
     let _ = PULL_OVERRIDE.set(match (cli.pull, cli.no_pull) {
         (true, _) => Some(true),
         (_, true) => Some(false),

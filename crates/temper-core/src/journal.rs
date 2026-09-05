@@ -41,6 +41,41 @@ pub fn state_root() -> PathBuf {
     PathBuf::from(".temper-state")
 }
 
+/// The state root, when `sudo` has split it away from the invoking user's.
+///
+/// `state_root` resolves out of `HOME`, and `sudo` rewrites `HOME` to root's
+/// unless the sudoers policy preserves it. So `sudo temper …` journals into
+/// root's state directory, and the unprivileged `temper undo` that follows reads
+/// the user's — finds no run, and reports nothing to undo. The run is not lost;
+/// it is filed under an account the user never looks in.
+///
+/// Two things deliberately narrow it to the case that actually bites. An explicit
+/// `TEMPER_STATE_DIR` resolves to one path for both accounts, so there is no
+/// split to report. And a sudoers policy that preserves `HOME` keeps the state
+/// root where it was, which is why this tests the resolved path rather than the
+/// mere presence of `SUDO_USER` — warning on every `sudo` invocation would cry
+/// wolf on the configuration that has nothing wrong with it.
+pub fn sudo_split_state_root() -> Option<PathBuf> {
+    let root = state_root();
+    is_split(
+        std::env::var_os("TEMPER_STATE_DIR").is_some(),
+        std::env::var_os("SUDO_USER").is_some(),
+        &root,
+    )
+    .then_some(root)
+}
+
+/// The decision itself, over its three inputs rather than over the environment —
+/// so it is testable without mutating process-global state, which no test can do
+/// safely beside another.
+fn is_split(state_dir_set: bool, under_sudo: bool, root: &Path) -> bool {
+    if state_dir_set || !under_sudo {
+        return false;
+    }
+    // Root's home on each platform — `/var/root` on macOS, `/root` on Linux.
+    root.starts_with("/var/root") || root.starts_with("/root")
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "op")]
 enum Entry {
@@ -615,6 +650,26 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn sudo_split_is_reported_only_when_the_path_actually_moved() {
+        // Under sudo with HOME rewritten: the undo record lands where the user
+        // will not look for it.
+        assert!(is_split(false, true, Path::new("/root/.local/state/temper")));
+        assert!(is_split(
+            false,
+            true,
+            Path::new("/var/root/Library/Application Support/temper")
+        ));
+        // A sudoers policy that preserves HOME leaves the state root put, so
+        // there is nothing to warn about.
+        assert!(!is_split(false, true, Path::new("/home/j/.local/state/temper")));
+        // An explicit TEMPER_STATE_DIR resolves to one path for both accounts.
+        assert!(!is_split(true, true, Path::new("/root/.local/state/temper")));
+        // Not under sudo at all.
+        assert!(!is_split(false, false, Path::new("/root/.local/state/temper")));
+    }
+
     /// A package entry round-trips, and an empty install adds none.
     ///
     /// The claim that packages "cannot" be journaled was never examined: the set
