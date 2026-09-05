@@ -321,6 +321,90 @@ Ideas with a case behind them and no decision taken. Each names what it would
 fix, what it would cost, and what has to be answered before it could ship.
 Nothing here is scheduled, and nothing here is refused.
 
+### A way to declare a key *absent* — `setkey`'s missing delete
+
+**The defect that raised it.** `setkey` sets a key and can never unset one. Drop
+the step and the key stays on every machine that ever applied it, with nothing
+reporting it — the file primitives' residue problem one level down, inside a
+store temper does not own outright.
+
+A folder hit it removing an MCP server from an app's config. The entry temper had
+`setkey`'d carried a bearer token, so undeclaring it left a live credential in
+`~/Library/Application Support/<app>/config.json` on every Mac that had
+converged. Neither existing escape hatch fits. `retire` takes paths, and the path
+here is a file temper must not delete — the other twenty keys in it belong to the
+app. `exec` works, and is what the folder shipped: a `jq` one-liner, a second
+script as a `check` hook so a clean box stops reporting work it never did, a
+`run = "always"` step, and a TODO entry to delete the pair once the fleet is
+clean. Four artefacts, nothing journaled, nothing undoable, to express *this key
+must not exist*.
+
+**Why this is the cheap case and not the hard one.** `ARCHITECTURE.md` states the
+rule: *enumerable state needs no tombstone; non-enumerable state does.* A
+`setkey`-owned key is the most enumerable state temper has — the manifest names
+the backend, the file and the key, so what to remove is known exactly before the
+converge and checkable after it. `key absent` is a real drift answer, unlike an
+`exec`, where running it *is* the change. Every property that makes file residue
+expensive — a ledger to build, hashes to guard it, resolved-key comparison — is
+free here, because the declaration already *is* the enumeration.
+
+It is also the recurring defect `AGENTS.md` names, in a kind of state nobody
+checked for it: one direction of the matrix shipped and the other did not.
+`declared-but-absent` has an answer — apply writes the key. Present-but-no-longer-
+declared has none, in either column: no verb changes the machine, and the spec
+edit that would express it has no field to write.
+
+**The suggestion.** Two spellings, both worth writing out because they put the
+feature in different halves of the model.
+
+- **A step field** — `setkey = { backend, file, key, absent = true }`, or a
+  sibling `unsetkey`. Ordered among the bundle's other steps, gated by
+  `os`/`role`/`when` like anything else, and journaled as a file write exactly as
+  a `setkey` on that file is today, so `undo` needs nothing new. `value` and
+  `absent` are mutually exclusive: declaring both is a parse error, not a
+  precedence rule.
+- **A scope-level tombstone** — `retire_keys` on `[[machine]]`/bundle, beside
+  `retire` and `retire_packages`, enacted by `prune` with the same confirm and
+  listed by `temper retired`. The better classification, since this *is* a
+  tombstone: temporary, and deleted once the fleet is clean. The addressing
+  fights it, though — a key needs backend + file + key, which is three fields
+  crammed into one string, or a list of tables where every other retire list is
+  a list of strings.
+
+The step field is the smaller change and the one a folder reaches for mid-edit;
+the tombstone is the honest classification. They are not exclusive.
+
+**What has to be decided first.**
+
+- **Silent when already absent.** A delete on a missing key has to be in sync and
+  quiet, or every converged machine reports work forever — the exact failure the
+  `exec` workaround needs a hand-written `check` to dodge. That settles drift too:
+  `absent` is in sync when the key is gone, drifted when it is present.
+- **Does it remove a value temper never wrote?** The cautious reading is a value
+  guard — delete only what still matches what temper last wrote, *report*
+  otherwise, which is `undo`'s hash rule applied to a value. The case that raised
+  this argues the other way: the value was a secret that had since rotated, and
+  matching it would have been the one thing that failed. Unconditional deletion,
+  with the old value journaled so `undo` restores it, is the likelier answer.
+- **Empty ancestors.** Deleting `mcpServers.searxng` leaves `mcpServers: {}`. A
+  deep dotted `setkey` creates its intermediate objects, so a symmetric delete
+  should drop the ones it created — but nothing distinguishes those from a map
+  the app wrote. A decidable rule: prune an ancestor only when it is empty *and*
+  no other declaration names a key beneath it.
+- **Per backend, and only where it means one thing.** json/toml/ini delete
+  cleanly. `defaults` has `defaults delete`, but is not journaled, so `absent`
+  would be irreversible there — consistent with `setkey(defaults)`, and worth
+  saying out loud. dconf has no delete at all: `dconf reset` restores the
+  schema's default, which is a different claim, and it collides with snapshot
+  ownership (a `setkey`-owned key is stripped from a capture; an `absent` one
+  would have to be too). json/toml/ini first is defensible. Note this does not
+  fix the dconf `residue` ❌ above — a retired *subtree* is the case where
+  nothing enumerates the keys, which is the opposite problem.
+- **Ownership.** `absent` is an ownership claim like any other, so a folder
+  declaring both a `setkey` and an `absent` for one key is a two-owner conflict
+  and should fail the parse, exactly as the one-owner-per-key rule reads
+  everywhere else.
+
 ### Split `role` into purpose and graphical session (`headless`)
 
 **The defect that raised it.** `[[machine]]` carries `role = "desktop" |
