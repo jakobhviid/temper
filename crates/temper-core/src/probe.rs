@@ -55,9 +55,14 @@ pub fn passes(home: &Path, p: &Probe) -> bool {
     if let Some(x) = &p.rpm {
         return which("rpm").is_some() && succeeds("rpm", &["-q", x]);
     }
-    if let Some(script) = &p.exec {
+    if let Some(command) = &p.exec {
+        // A shell command, not a script path — the two `exec` spellings in the
+        // schema read differently. A `[[step]]`'s `exec` names a file relative to
+        // the temper-home; a probe's is the command line itself, so that a gate
+        // can be written inline without shipping a one-line script beside it.
         return Command::new("sh")
-            .arg(home.join(script))
+            .arg("-c")
+            .arg(command)
             .current_dir(home)
             .output()
             .map(|o| o.status.success())
@@ -125,6 +130,19 @@ mod tests {
         p.path = Some("/".into());
         assert!(passes(&PathBuf::from("/"), &p));
         p.path = Some("/no/such/path/xyz".into());
+        assert!(!passes(&PathBuf::from("/"), &p));
+    }
+
+    #[test]
+    fn exec_probe_runs_a_command_not_a_path() {
+        let mut p = empty();
+        // The command line itself, as every documented example writes it. Run as
+        // a path this resolves to <home>/true, which does not exist.
+        p.exec = Some("true".into());
+        assert!(passes(&PathBuf::from("/"), &p));
+        p.exec = Some("test -d /".into());
+        assert!(passes(&PathBuf::from("/"), &p));
+        p.exec = Some("test -d /no/such/dir/xyz".into());
         assert!(!passes(&PathBuf::from("/"), &p));
     }
 

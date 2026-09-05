@@ -388,7 +388,11 @@ looks for: `when = { path = "~/.ssh/config" }`, `when = { brew = "jq" }`,
 `when = { cask = "ghostty" }`, `when = { flatpak = "com.spotify.Client" }`,
 `when = { mas = "1333542190" }`, `when = { gext = "tilingshell@ferrarodomenico.com" }`
 (a GNOME extension uuid), `when = { rpm = "gnome-tweaks" }` (a layered rpm), and
-`when = { exec = "test -d /sys/class/power_supply/BAT0" }`. `always` re-applies every update (fixes drift); `ensure`
+`when = { exec = "test -d /sys/class/power_supply/BAT0" }` — a probe's `exec` is a
+**shell command** (run via `sh -c`, cwd = temper-home), which is a *different*
+reading from a `[[step]]`'s `exec`, where the value names a script file under the
+temper-home. A gate is a one-liner, so it is written inline rather than shipped
+as a script beside the bundle. `always` re-applies every update (fixes drift); `ensure`
 is **install-if-missing** on update (creates an absent target, never overwrites
 a present one — an `exec` `ensure` needs a `check` to be applied on update,
 without one it's skipped); `manual` is skipped by automated flows — run it only

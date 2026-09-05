@@ -98,3 +98,42 @@ fn when_absent_is_status_only_in_drift() {
         .success()
         .stdout(predicates::str::contains("0 out of sync"));
 }
+
+/// A probe's `exec` is a **shell command**, not a script path — the reading
+/// `SPEC.md` documents and every example writes.
+///
+/// The two `exec` spellings in the schema mean different things: a `[[step]]`'s
+/// names a file under the temper-home, a probe's is the command line itself. Run
+/// as a path, `exec = "true"` resolves to `<temper-home>/true`, which no folder
+/// contains — so `sh` exits non-zero and the gate reports the machine as lacking
+/// something it has. That failure is invisible, because a step skipped by a
+/// broken probe is indistinguishable from one skipped by a legitimate gate-miss.
+#[test]
+fn exec_probe_runs_a_command_not_a_path() {
+    let (home, fake_home, state) = setup(
+        "[[step]]\ncopy = \"assets/x.conf\"\nto = \"~/.config/x.conf\"\nwhen = { exec = \"true\" }\n",
+    );
+    temper(home.path(), fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .success();
+    assert!(
+        fake_home.path().join(".config/x.conf").exists(),
+        "a passing exec probe should apply the step"
+    );
+}
+
+/// The other half: a command that exits non-zero still gates the step out, so
+/// the fix does not turn every `exec` probe into a pass.
+#[test]
+fn failing_exec_probe_still_skips() {
+    let (home, fake_home, state) = setup(
+        "[[step]]\ncopy = \"assets/x.conf\"\nto = \"~/.config/x.conf\"\nwhen = { exec = \"test -d /no/such/dir/xyz\" }\n",
+    );
+    temper(home.path(), fake_home.path(), state.path())
+        .arg("install")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("skipped"));
+    assert!(!fake_home.path().join(".config/x.conf").exists());
+}
