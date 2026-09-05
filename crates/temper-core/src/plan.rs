@@ -348,14 +348,38 @@ fn warn_parent_scoped(beyond_temper: &[String]) {
     );
 }
 
-/// Apply one step, giving an `exec` the terminal to itself.
+/// Whether this step can put a question on `/dev/tty` — and so must be given the
+/// terminal rather than run under the live region.
 ///
-/// Every other primitive is a file/key write that cannot talk to the user, so it
-/// runs under the live region. `exec` is the escape hatch — arbitrary code that may
-/// invoke `sudo`, polkit or PAM, all of which prompt on `/dev/tty` where the region
-/// cannot see (or protect) them. So the region is cleared for its duration: the
-/// prompt gets a clean line, stays on screen, and leaves no fused progress line
-/// behind. See `ui::Checklist::suspend`.
+/// Named, rather than inlined into the branch, because it is an invariant a new
+/// primitive has to be measured against: anything that shells out to `sudo`,
+/// `pkexec` or a tool that authorizes through polkit belongs here, and a primitive
+/// that only writes a file from this process does not. Missing one does not fail
+/// loudly — it hangs a run on an erased prompt.
+fn may_prompt(step: &Step) -> bool {
+    step.exec.is_some() || step.sysfile.is_some()
+}
+
+/// Apply one step, giving the terminal to any step that can ask for a password.
+///
+/// Most primitives are a file/key write in this process, so they cannot talk to
+/// the user and run under the live region. Two can:
+///
+/// - **`exec`** — the escape hatch, arbitrary code that may invoke `sudo`, polkit
+///   or PAM.
+/// - **`sysfile`** — escalates on temper's own behalf, shelling out to
+///   `sudo install` on inherited stdio (`primitives::sysfile_apply`).
+///
+/// All of those prompt on `/dev/tty`, which the region cannot see or protect: the
+/// question lands on top of the animation and the next tick erases it, leaving a
+/// run blocked forever on a password nobody was shown. So the region is cleared
+/// for their duration — the prompt gets a clean line, stays on screen, and leaves
+/// no fused progress line behind. See `ui::Checklist::suspend`.
+///
+/// `sysfile` suspends whether or not it turns out to have work to do:
+/// `sysfile_apply` decides that itself, and asking here would cost a second
+/// stat-and-read of every declared system file to save a region redraw nobody can
+/// see at a 90 ms tick.
 fn apply_one(
     home: &Path,
     machine: &Machine,
@@ -365,10 +389,10 @@ fn apply_one(
     verbose: bool,
     cl: &crate::ui::Checklist,
 ) -> Result<Applied> {
-    if step.exec.is_some() {
+    if may_prompt(step) {
         return cl.suspend(|| {
-            // The script, not the whole aligned row: this is a subordinate detail
-            // line, not a second entry in the results list.
+            // The script or the destination, not the whole aligned row: this is a
+            // subordinate detail line, not a second entry in the results list.
             let _notice = crate::ui::WaitNotice::new(&step_parts(step).1);
             apply_step(home, machine, step, vars, journal, verbose)
         });
@@ -3236,6 +3260,37 @@ mod root_step_tests {
              [[step]]\ncopy = \"assets/f\"\nto = \"~/.f\"\n",
         );
         assert!(own.is_empty() && scripts.is_empty(), "{own:?} {scripts:?}");
+    }
+
+    /// Every primitive that can shell out to `sudo` gets the terminal to itself.
+    ///
+    /// `sysfile` is the one that is easy to miss: unlike `exec` it is not "user
+    /// code", so it reads like an ordinary file write — but it writes with
+    /// `sudo install`, on inherited stdio, and a password asked under a live
+    /// progress region is erased by the next tick and waits forever. A primitive
+    /// left off this list does not fail a test elsewhere; it hangs a run.
+    #[test]
+    fn every_step_that_can_ask_for_a_password_gets_the_terminal() {
+        let step = |src: &str| {
+            #[derive(serde::Deserialize)]
+            struct Bundle {
+                step: Vec<Step>,
+            }
+            toml::from_str::<Bundle>(src).unwrap().step.pop().unwrap()
+        };
+
+        assert!(may_prompt(&step("[[step]]\nexec = \"assets/s.sh\"\n")));
+        assert!(may_prompt(&step(
+            "[[step]]\nsysfile = \"assets/f\"\nto = \"/etc/f\"\n"
+        )));
+
+        // In-process writes: nothing to ask, so they keep the region.
+        assert!(!may_prompt(&step(
+            "[[step]]\ncopy = \"assets/f\"\nto = \"~/.f\"\n"
+        )));
+        assert!(!may_prompt(&step(
+            "[[step]]\nblock = \"assets/f\"\nin = \"~/.zshrc\"\nmarker = \"m\"\n"
+        )));
     }
 
     #[test]
