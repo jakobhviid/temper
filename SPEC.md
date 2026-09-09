@@ -105,7 +105,19 @@ mode = "prompt"             # off | warn | prompt (default) | auto
                             # Set via `temper configure set update.mode <…>`.
 
 [[machine]]
-name     = "chronos"        # required; resolved against `hostname -s`
+name     = "chronos"        # required; resolved against `hostname -s`.
+                            #   Exact match, with one deliberate fallback: where
+                            #   the folder declares EXACTLY ONE `[[machine]]`,
+                            #   that one is used whatever the host is called, so
+                            #   a single-machine folder needs no hostname at all
+                            #   and can be read on any box (handy with
+                            #   `TEMPER_DIR=… temper drift` to check a folder
+                            #   that is not this machine's). Declare a second
+                            #   machine and the fallback is gone: temper refuses
+                            #   to guess and lists the names it knows, because
+                            #   picking one would mean converging a box toward
+                            #   another box's intent. Pass `--machine <name>` to
+                            #   choose explicitly.
 os       = "mac"            # required; "mac" | "linux"
 role     = "desktop"        # optional; "desktop" | "server"
 apps     = ["shell", "ssh"] # bundle names in apps/
