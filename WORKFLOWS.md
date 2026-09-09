@@ -154,6 +154,15 @@ miss, and the keyboard may not still be there twenty minutes in. temper asks onl
 for root it will **really** need: an in-sync `sysfile`, or an `exec` whose `check`
 passes, costs no prompt at all, because that work won't happen.
 
+One exception, and it is permanent rather than a rough edge. Deciding a `sysfile` is
+in sync means reading the file it targets, and `drift` runs unprivileged on purpose.
+Where the *parent directory* denies an unprivileged stat — `/etc/sudoers.d` at `0750`
+is the case in practice — temper cannot compare, so it reports `unavailable` rather
+than guessing, and the converge writes the file and escalates to do it. That is one
+password per run for that step, for as long as it is declared. Everything under a
+world-readable parent (which is nearly all of `/etc`) resolves normally and stays
+silent once converged.
+
 > **Where one prompt isn't possible.** Reusing a credential across processes depends
 > on how this machine's sudo caches it. With `timestamp_type=tty` (sudo's documented
 > default) or global caching, temper's single up-front prompt covers everything. Where
@@ -161,9 +170,15 @@ passes, costs no prompt at all, because that work won't happen.
 > some Fedora builds regardless of what `man 5 sudoers` states), a script's own `sudo`
 > has a different parent and must authenticate again; no amount of asking early can
 > change that. temper measures this rather than assuming, and says so plainly instead
-> of promising a quiet run it can't deliver — `Defaults timestamp_type=tty` in sudoers
-> is the fix. Steps temper escalates *itself* (`sysfile`) are unaffected, since temper
-> is the parent. Homebrew asks per cask, and
+> of promising a quiet run it can't deliver. The sudoers fix depends on whether there
+> is a terminal: `Defaults timestamp_type=tty` covers a run you start yourself, and
+> **`global`** covers one where there may be no tty at all — an agent session, a
+> service, anything driving temper without a terminal. That distinction is load-bearing
+> rather than pedantic: `man 5 sudoers` says of `tty` that "if no terminal is present,
+> the behavior is the same as ppid", so `tty` collapses into exactly the problem it was
+> meant to fix, while `global` keys on the user and holds either way. Steps temper
+> escalates *itself* (`sysfile`, and a `block` with `owner`/`group`/`mode`) are
+> unaffected, since temper is the parent. Homebrew asks per cask, and
 and sudo's timestamp expires (5 min by default) during the multi-GB downloads in
 between, so a big converge would otherwise prompt over and over, hours apart.
 temper checks up front whether this run will touch any such package, names them,
