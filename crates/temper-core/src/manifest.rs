@@ -187,7 +187,18 @@ pub struct RpmRepo {
     /// cites it. That is the ordering bug one level down.
     ///
     /// A path, and only a path. Importing into rpm's keyring (`rpm --import`) is
-    /// machine state rather than a file, so it is not what this does.
+    /// machine state rather than a file, so it is not what this does — and it
+    /// would not help the case below, where importing was tried and failed too.
+    ///
+    /// **This satisfies `gpgcheck`, not necessarily `repo_gpgcheck`.** A key on
+    /// disk is what package-signature verification needs. A repo that also
+    /// verifies its *metadata* needs the key trusted before the first repomd
+    /// fetch, which a file arriving beside the repo is not always accepted for;
+    /// the observed failure is "repomd.xml GPG signature verification error:
+    /// Signing key not found", and it reproduces only on a machine that has not
+    /// imported the key before. SPEC lists the three shapes that bootstrap
+    /// cleanly. temper does not paper over it: the bytes are the vendor's
+    /// declaration, and choosing between them is the folder author's call.
     #[serde(default)]
     pub key: Option<String>,
 }

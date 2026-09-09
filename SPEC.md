@@ -368,6 +368,28 @@ rpm_repos = [
 #   Neither takes a `to`: the destination is not a choice, since a repo dnf does
 #   not read is not a repo.
 #
+#   `key` puts the key on disk, which is what `gpgcheck=1` needs to verify
+#   PACKAGE signatures. A repo that also sets `repo_gpgcheck=1` verifies its
+#   METADATA, and that key must be trusted before the first repomd fetch — a
+#   file dropped in beside the repo is not always accepted for it
+#   non-interactively, failing with "repomd.xml GPG signature verification
+#   error: Signing key not found". Three shapes bootstrap on a clean machine,
+#   and which one applies is the vendor's choice rather than temper's:
+#
+#     - the repo sets `repo_gpgcheck=0` with `gpgcheck=1`, so packages are still
+#       verified against the on-disk key. This is what most third-party repos
+#       ship: every COPR, Fedora's own updates, negativo17, Proton.
+#     - the repo fetches its own key over https (`gpgkey=https://...`), so there
+#       is nothing to bootstrap.
+#     - the vendor's release package owns the key, and you declare THAT as an
+#       `rpm_ostree` package instead of hand-writing the repo (Terra ships
+#       `RPM-GPG-KEY-terra` in `terra-release`).
+#
+#   The trap: a machine that imported the key earlier appears to work, so a repo
+#   that cannot bootstrap fails only on a from-scratch machine — the one this
+#   category exists to serve. Verify a `repo_gpgcheck=1` repo on a clean box,
+#   not on the one you authored it from.
+#
 #   The declaration points at the file the vendor publishes rather than at dnf
 #   fields (`{ id, baseurl, gpgcheck, … }`) because a repo file often has to be
 #   byte-faithful — Vivaldi's %post rewrites its own unconditionally, so a spec

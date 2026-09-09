@@ -157,6 +157,41 @@ sudo already does; today it finds out when the removal fails.
   declares repos identically today, and a future `apt_sources` is a schema
   addition beside it reusing the same file primitive and the same pre-package
   stage, not a new mechanism.
+- **Two declared repos may define the same repo id, and nothing says so.**
+  `rpm_repos` deduplicates by destination *filename*, so two bundles shipping
+  `brave.repo` and `brave-browser.repo` that both contain `[brave-browser]`
+  install two files defining one repo. rpm-ostree tolerates the duplicate
+  silently — it appears twice in the daemon's enabled-repo list and nothing
+  errors — which is exactly the shape that has to be caught declaratively,
+  because the machine will not complain. Duplicate GNOME extension uuids are
+  rejected at load for the same reason, which is the sibling to copy.
+  Not a load-time check as written: the id lives inside the asset, and a folder
+  must still load where an asset has not synced yet. So it belongs in `drift`,
+  as a finding over the declared set — one `rpm-repo` kind already exists to
+  carry it.
+- **`repo_gpgcheck=1` cannot be bootstrapped by a `key` entry alone**, and SPEC
+  says so rather than temper working around it. A key on disk satisfies
+  `gpgcheck` (packages); metadata verification needs it trusted before the first
+  repomd fetch. Papering over it would mean either editing the vendor's bytes —
+  which the byte-faithful decision forbids — or importing into dnf's mutable
+  keyring, which was tried and fails too. The author picks among the three
+  shapes SPEC lists. Field-observed on Bazzite against Proton's fedora-43 and
+  fedora-44 stable repos, with the key both on disk and `rpm --import`ed.
+- **No metadata-cache invalidation is needed between writing a repo and
+  installing from it**, which is why there is no refresh step to find. Recorded
+  because its absence looks like an oversight: `rpm-ostreed` re-reads
+  `/etc/yum.repos.d` per package transaction and fetches metadata for any repo
+  it has no cache for, without a daemon restart. Observed on one long-lived
+  daemon (pid 13246, chronos-redux, 2026-09-09): six transactions enumerated a
+  fixed repo set at 140360 solvables, the ghostty COPR file appeared, and the
+  next transaction on the same process listed it and reported 140379. Adding a
+  speculative `refresh-md` would cost a network round trip on every converge to
+  guard a bug that does not exist.
+- **Cold one-pass is not field-confirmed yet.** The ordering guarantee is pinned
+  by test (`rpm_repos_order.rs`) and both fleet specs are converted, but every
+  machine converted so far already had its repo files on disk, so none of them
+  exercised a genuinely empty `/etc/yum.repos.d`. The next from-scratch
+  converge is the real test.
 - **The repo-retention guard has no integration test.** When an un-layer fails,
   `prune` keeps a repo a still-layered package needs to re-resolve. The branch is
   written and the un-layer's honesty is covered
