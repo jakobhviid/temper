@@ -98,6 +98,7 @@ mod tests {
             brew_trust: Vec::new(),
             rpm_ostree: Vec::new(),
             flatpak_remotes: Vec::new(),
+            rpm_repos: Vec::new(),
             retire: Vec::new(),
             retire_packages: Vec::new(),
             ignore: Default::default(),

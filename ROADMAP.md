@@ -123,6 +123,47 @@ sudo already does; today it finds out when the removal fails.
   a retired subtree leaves its keys behind and nothing enumerates them.
 - **`ignore` on `deployed-files`** — deliberate: an edited file is *reported*
   rather than removed, which covers the case that matters.
+- **`rpm-repo`'s four `n/a` columns** — deliberate, and each one a decision worth
+  recording rather than re-arguing:
+  - *No `prune`, no `[ignore].rpm_repo`.* An undeclared file in
+    `/etc/yum.repos.d` is the base image's — fedora, updates, rpmfusion, terra —
+    not residue. Enumerating the directory as extras would report a wall of state
+    temper never wrote and must not remove, and the ignore list would exist only
+    to silence it again. What temper *did* write is in the ledger, which is the
+    `residue` column.
+  - *No `reconcile`.* Absorbing a repo means copying a file **into** the folder
+    and declaring it. Every existing reconcile appends a token to a list; this is
+    authoring, and closer to what `snapshot` does. If it is ever built, it is that
+    shape, not this one.
+  - *No `enabled` / `disabled` field.* A disabled repo is a file whose bytes say
+    `enabled=0`, and the declaration is byte-faithful by design — a flag would
+    mean temper editing the file it just promised to reproduce. The case that
+    motivated it (a vendor `%post` that rewrites its own repo with a dead URL) is
+    two owners for one file, which PATTERNS names as an anti-pattern. Owning the
+    path stays a deliberate hack rather than becoming a feature.
+  - *No `install --config-only`.* Repos converge before the packages that resolve
+    from them, so a flag for splitting the two phases by hand has no caller. Not
+    to be confused with `update --config-only` above, which is a different verb
+    for a different caller and still open.
+- **`apt` has the same hole, and is not filled.** "Where do this provider's
+  packages come from" is a per-provider prerequisite; `flatpak-remote` and
+  `rpm-repo` are two instances of it and apt would be a third. It is not a cheap
+  third: deb822 `.sources` files, dearmored binary keyrings under
+  `/etc/apt/keyrings` referenced by `Signed-By:`, and a mandatory `apt update`
+  refresh. Forcing it into `rpm_repos` would need either a wrong name or a fake
+  abstraction over one real instance, so it waits for a real apt target. What is
+  already paid for: `rpm_repos` is named for the **format**, not the tool, and its
+  capability gate is rpm-ness rather than atomic-ness — so a plain dnf/yum host
+  declares repos identically today, and a future `apt_sources` is a schema
+  addition beside it reusing the same file primitive and the same pre-package
+  stage, not a new mechanism.
+- **The repo-retention guard has no integration test.** When an un-layer fails,
+  `prune` keeps a repo a still-layered package needs to re-resolve. The branch is
+  written and the un-layer's honesty is covered
+  (`rpm_repos_order.rs`), but reaching the guard itself needs residue at a real
+  `/etc/yum.repos.d` path, which a sandboxed test cannot create. Covering it means
+  a root-prefix seam for the file primitives — worth doing when something else
+  needs the same seam.
 - **`profile`** is the weakest row and is honestly scored: no machine scope, a
   GUI-gated apply, no prune, no reconcile, no ignore, not revertible, no
   residue story. It now carries a `ProviderSpec` saying so in seven written

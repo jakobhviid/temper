@@ -1829,6 +1829,167 @@ pub fn gext_converge(effective: &[String], dry_run: bool, verbose: bool) -> Resu
     Ok(installed)
 }
 
+// --- rpm repos: where layered packages come from (the prerequisite) ----------
+
+/// The mode/owner every repo and key file is installed with.
+///
+/// Not configurable. dnf reads these paths as root and a repo file is not a
+/// place for per-machine policy, so exposing `mode`/`owner` the way `sysfile`
+/// does would only add ways to write a repo dnf then refuses to read.
+fn rpm_repo_opts() -> crate::primitives::SysfileOpts<'static> {
+    crate::primitives::SysfileOpts {
+        mode: Some("0644"),
+        owner: Some("root"),
+        group: Some("root"),
+    }
+}
+
+/// What this host can do about RPM repositories, answered once.
+///
+/// Gated on **rpm-ness, not atomic-ness**. `/etc/yum.repos.d` is dnf's
+/// directory and means the same thing on Bazzite, on CoreOS and on a plain
+/// Fedora box; only the consumer of what it declares differs. Gating this on
+/// `have("rpm-ostree")` would make the whole category *vanish* on a host that
+/// can hold repos perfectly well — the mistake `rpm_ostree_caps` documents one
+/// section down, one kind of state earlier.
+pub fn rpm_repo_caps() -> RpmRepoCaps {
+    let rpm = have("rpm");
+    RpmRepoCaps {
+        observe: rpm,
+        converge: rpm,
+    }
+}
+
+/// Its own type, not `RpmOstreeCaps`, for the reason the category exists: a
+/// repo's capabilities are not the layering tool's. Sharing the struct would
+/// have read as "repos are an rpm-ostree feature" on the one host where that is
+/// most wrong — a plain dnf box, which has repos and no layering at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RpmRepoCaps {
+    /// Can read `/etc/yum.repos.d`.
+    pub observe: bool,
+    /// Can write it.
+    pub converge: bool,
+}
+
+/// Every repo this machine declares — its bundles' (gated), then its own.
+///
+/// Deduped by **destination**, not by source path: two bundles naming the same
+/// vendor file from different asset paths still install one repo, and the first
+/// declaration wins, which is the rule `effective_rpm` and `effective_remotes`
+/// already use.
+pub fn effective_rpm_repos(home: &Path, machine: &Machine) -> Result<Vec<manifest::RpmRepo>> {
+    let mut out: Vec<manifest::RpmRepo> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut push = |r: &manifest::RpmRepo, out: &mut Vec<manifest::RpmRepo>| {
+        if seen.insert(r.dest()) {
+            out.push(r.clone());
+        }
+    };
+    for app in &machine.apps {
+        let bundle = manifest::load_bundle(home, app)?;
+        if manifest::gated(&bundle.os, &bundle.role, machine) {
+            continue;
+        }
+        for r in &bundle.rpm_repos {
+            push(r, &mut out);
+        }
+    }
+    for r in &machine.rpm_repos {
+        push(r, &mut out);
+    }
+    Ok(out)
+}
+
+/// Every declared repo/key file paired with its destination and drift state,
+/// in apply order.
+///
+/// Three-valued through `FileState`: a destination temper cannot read is
+/// `Unavailable`, never `Missing` — reading "cannot look" as "not there" is what
+/// makes a converge rewrite state it never inspected.
+pub fn rpm_repos_state(
+    home: &Path,
+    effective: &[manifest::RpmRepo],
+) -> Result<Vec<(PathBuf, crate::primitives::FileState)>> {
+    let mut out = Vec::new();
+    for repo in effective {
+        for (src, dest) in repo.files() {
+            let state =
+                crate::primitives::sysfile_state(&home.join(&src), &dest, &rpm_repo_opts())?;
+            out.push((dest, state));
+        }
+    }
+    Ok(out)
+}
+
+/// The destinations a converge would write — what the root ask has to cover.
+///
+/// `plan::root_steps` derives the "one password for the whole run" ask from the
+/// step list, and a repo is not a step. Without this the ask misses it, and a
+/// machine with no root-needing casks and no `sudo` step gets its password
+/// prompt in the middle of the converge instead of at the keyboard before
+/// anything downloads.
+pub fn rpm_repos_pending(home: &Path, effective: &[manifest::RpmRepo]) -> Vec<String> {
+    if !rpm_repo_caps().converge {
+        return Vec::new();
+    }
+    rpm_repos_state(home, effective)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, s)| *s != crate::primitives::FileState::InSync)
+        .map(|(d, _)| d.display().to_string())
+        .collect()
+}
+
+/// Install every declared repo, key first. Returns the destinations written.
+///
+/// Runs **before** any package converge. A layered package resolves against
+/// what is in `/etc/yum.repos.d` at the moment `rpm-ostree install` runs, so a
+/// repo written afterwards is a repo that did not exist for the only call that
+/// needed it: every package from it fails to resolve, and — because a failed
+/// batch is retried per item — fails once each, burying any genuine failure in
+/// a wall of expected ones.
+pub fn rpm_repos_converge(
+    home: &Path,
+    effective: &[manifest::RpmRepo],
+    dry_run: bool,
+) -> Result<Vec<String>> {
+    if dry_run || effective.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !rpm_repo_caps().converge {
+        eprintln!(
+            "{} no rpm on this host — {} declared repo(s) cannot be installed",
+            crate::ui::yellow(crate::ui::g_warn()),
+            effective.len()
+        );
+        return Ok(Vec::new());
+    }
+    let mut written = Vec::new();
+    for repo in effective {
+        // `files()` yields the key before the repo that cites it. A
+        // `gpgkey=file:///etc/pki/rpm-gpg/…` reference is checked when the repo
+        // is first consulted, so a key installed after its repo is the same
+        // ordering bug one level down.
+        for (src, dest) in repo.files() {
+            match crate::primitives::sysfile_apply(&home.join(&src), &dest, &rpm_repo_opts()) {
+                Ok(true) => written.push(dest.display().to_string()),
+                Ok(false) => {}
+                // Warned and skipped rather than fatal, like a remote that
+                // fails to add: one unreadable asset must not strand the repos
+                // that are fine, and the package that needed it will report
+                // itself missing in the same run.
+                Err(e) => eprintln!(
+                    "{} could not install {}: {e}",
+                    crate::ui::yellow(crate::ui::g_warn()),
+                    dest.display()
+                ),
+            }
+        }
+    }
+    Ok(written)
+}
+
 // --- rpm-ostree: layered rpms that can't be image-baked (Linux) ---------------
 
 pub fn effective_rpm(home: &Path, machine: &Machine) -> Result<Vec<String>> {
@@ -2371,8 +2532,18 @@ pub fn rpm_ostree_uninstall(pkgs: &[String], verbose: bool) -> Result<bool> {
     for p in pkgs {
         cmd.arg(p);
     }
-    run_child(cmd, verbose, "rpm-ostree uninstall", "un-layering rpms");
-    Ok(true) // a staged deployment needs a reboot, same as layering
+    // The exit status is the answer, not a detail to discard. `run_child` has
+    // always returned it; returning `Ok(true)` regardless meant a failed
+    // un-layer was counted as items removed and reported "reboot required
+    // (rpm-ostree staged a deployment)" for a deployment that was never staged.
+    // The layering side was fixed for exactly this and the un-layering side was
+    // not — the mirror-half defect PATTERNS warns about.
+    Ok(run_child(
+        cmd,
+        verbose,
+        "rpm-ostree uninstall",
+        "un-layering rpms",
+    ))
 }
 
 /// Layered rpms no bundle or machine declares — the extras direction.
@@ -2778,6 +2949,7 @@ mod gating_tests {
             brew_trust: Vec::new(),
             rpm_ostree: Vec::new(),
             flatpak_remotes: Vec::new(),
+            rpm_repos: Vec::new(),
             retire: Vec::new(),
             retire_packages: Vec::new(),
             ignore: Default::default(),

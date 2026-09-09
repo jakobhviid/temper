@@ -86,6 +86,15 @@ fn every_spec_example_loads_as_a_real_folder() {
     ] {
         fs::write(h.join("assets").join(f), "# fixture\n").unwrap();
     }
+    // `rpm_repos` names its assets in a subdirectory, and a repo's source is
+    // read to compare it against the installed file — so these have to exist
+    // for the same reason the flat ones above do.
+    fs::create_dir_all(h.join("assets/rpm-repos")).unwrap();
+    for f in [
+        "brave-browser.repo", "RPM-GPG-KEY-brave", "ghostty-copr.repo", "terra.repo",
+    ] {
+        fs::write(h.join("assets/rpm-repos").join(f), "# fixture\n").unwrap();
+    }
 
     // SPEC's `setkey` example renders `{{ which "ghostty" }}`, which resolves at
     // load — so on a host without ghostty the folder fails to load and this test
@@ -178,4 +187,67 @@ fn binaries_spec_resolves(spec: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Every ```toml block in every doc must be valid TOML.
+///
+/// `every_spec_example_loads_as_a_real_folder` covers SPEC, which is the
+/// parser-of-record — but the examples a folder author is most likely to COPY
+/// are the ones in WORKFLOWS, beside the loop that explains them, and nothing
+/// checked those. An `rpm_repos` example there split an inline table across two
+/// lines, which TOML rejects outright: the sample teaching the feature could not
+/// have been pasted into a folder, and the whole suite was green.
+///
+/// Syntax only, deliberately. These blocks are fragments — a lone `[[step]]`, a
+/// `[[machine]]` with one key — so they cannot be *loaded* as folders, and
+/// demanding that would either fail on every fragment or need the assembly
+/// `every_spec_example_loads_as_a_real_folder` already does for SPEC. Parsing is
+/// the half that was missing and the half that caught something.
+#[test]
+fn every_toml_block_in_the_docs_is_valid_toml() {
+    // Every doc compiled into `--llm`, plus the ones that are not: a broken
+    // example misleads a reader wherever it lives.
+    let docs: [(&str, &str); 8] = [
+        ("SPEC.md", include_str!("../../../SPEC.md")),
+        ("WORKFLOWS.md", include_str!("../../../WORKFLOWS.md")),
+        ("ARCHITECTURE.md", include_str!("../../../ARCHITECTURE.md")),
+        ("README.md", include_str!("../../../README.md")),
+        ("PATTERNS.md", include_str!("../../../PATTERNS.md")),
+        ("PRINCIPLES.md", include_str!("../../../PRINCIPLES.md")),
+        ("ROADMAP.md", include_str!("../../../ROADMAP.md")),
+        ("INTERNALS.md", include_str!("../../../INTERNALS.md")),
+    ];
+    let mut bad: Vec<String> = Vec::new();
+    let mut checked = 0;
+    for (name, src) in docs {
+        // Fenced blocks opened with ```toml, closed by the next fence.
+        let mut rest = src;
+        let mut line_of_start = 1;
+        while let Some(i) = rest.find("```toml\n") {
+            line_of_start += rest[..i].matches('\n').count();
+            let after = &rest[i + "```toml\n".len()..];
+            let Some(end) = after.find("```") else { break };
+            let block = &after[..end];
+            checked += 1;
+            if let Err(e) = block.parse::<toml::Value>() {
+                bad.push(format!("{name}:{} — {e}", line_of_start + 1));
+            }
+            line_of_start += 1 + block.matches('\n').count();
+            rest = &after[end..];
+        }
+    }
+    // A floor, not a count — it exists to catch the scrape matching nothing,
+    // which would make this test vacuous. Twelve blocks across four docs today;
+    // lower it only when one is deliberately deleted, never to make a red run
+    // green, because "the scrape went blind" and "there are fewer" look
+    // identical here and only one of them is fine.
+    assert!(
+        checked >= 10,
+        "the scrape found only {checked} toml blocks — it has stopped seeing them"
+    );
+    assert!(
+        bad.is_empty(),
+        "these documented examples are not valid TOML, so nobody can paste them \
+         into a folder: {bad:#?}"
+    );
 }

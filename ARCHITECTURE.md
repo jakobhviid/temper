@@ -206,9 +206,26 @@ above.
 | `mas` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `gnome-extensions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `rpm-ostree` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
+| `rpm-repo` | n/a | ✅ | ✅ | ✅ | n/a | n/a | n/a | n/a | ✅ | ❌ | ✅ |
 | `dconf` | ✅ | ✅ | ✅ | ⚠ | ❌ | ✅ | ✅ | ⚠ | ✅ | ✅ | ❌ |
 | `deployed-files` (`copy` / `sysfile` / `block`) | ✅ | n/a | ✅ | ✅ | ✅ | n/a | n/a | ❌ | ✅ | ✅ | ✅ |
 | `profile` | ✅ | ❌ | ✅ | ⚠ | ❌ | ❌ | ❌ | ❌ | ⚠ | ❌ | ❌ |
+
+`rpm-repo` carries four `n/a` columns, which is unusual enough to say why in
+prose. A repo is *declared* like a package and *deployed* like a file, so its
+removal direction belongs to the ledger rather than to extras: only repos temper
+wrote are ever reported, which is what keeps the base image's own — fedora,
+updates, rpmfusion — out of the report. That answers columns 5, 8 and 11
+together, and it is why there is no `[ignore]` list for repos to need. Column 6
+is authoring: absorbing a repo means copying a file *into* the folder, which no
+`reconcile` does.
+
+The ordering is the feature, in both directions. Repos converge **before** any
+package, because `rpm-ostree install` resolves against `/etc/yum.repos.d` as it
+stands when the call is made. `prune` takes them **after** the un-layer, because
+un-layering recomposes a deployment and re-resolves everything still layered —
+so removing a repo first can strand a package nobody asked to remove. One
+invariant, stated once: repos go first on the way in and last on the way out.
 
 **One command per type, not one per item.** Nearly every provider's CLI takes a
 list — `gext install UUID [UUID…]`, `mas install <id>…`,

@@ -190,6 +190,12 @@ flatpak_remotes = ["vendor https://example.com/vendor.flatpakrepo"]
 rpm_ostree = ["proton-vpn"] # optional; rpms THIS machine layers, unioned with its
                             #   bundles' lists. Machine scope, so reconcile absorbs
                             #   and drops here.
+rpm_repos = [{ repo = "assets/rpm-repos/terra.repo" }]
+                            # optional; RPM repos THIS machine supplies, unioned
+                            #   with its bundles'. Installed BEFORE any package
+                            #   converge, because a package cannot resolve from a
+                            #   repo that is not on disk yet. See `rpm_repos`
+                            #   under the bundle below for the fields.
 brew_trust = ["me/tap"]     # optional; taps THIS machine trusts, unioned with
                             #   [brew].trust. Machine scope, so `reconcile` both
                             #   absorbs into and drops from it — the fleet list
@@ -350,6 +356,30 @@ packages_linux = []                  # linux-only
 gnome_extensions = ["ext@uuid"]      # GNOME extensions (Linux) — os/role-gated
 rpm_ostree     = ["proton-vpn-gnome-desktop"]  # rpm-ostree layered (Linux) — os/role-gated
                                      #   (old name `rpm` still parses)
+# RPM repos this bundle's packages come from — GROUP scope, gated with the bundle.
+rpm_repos = [
+    { repo = "assets/rpm-repos/brave-browser.repo", key = "assets/rpm-repos/RPM-GPG-KEY-brave" },
+    { repo = "assets/rpm-repos/ghostty-copr.repo" },
+]
+# `repo` is the `.repo` file, relative to the temper-home; it is installed
+#   root-owned 0644 to /etc/yum.repos.d/<basename>. `key` is optional and is
+#   installed the same way to /etc/pki/rpm-gpg/<basename>, BEFORE the repo that
+#   cites it — a gpgkey=file:// reference is useless if the key lands later.
+#   Neither takes a `to`: the destination is not a choice, since a repo dnf does
+#   not read is not a repo.
+#
+#   The declaration points at the file the vendor publishes rather than at dnf
+#   fields (`{ id, baseurl, gpgcheck, … }`) because a repo file often has to be
+#   byte-faithful — Vivaldi's %post rewrites its own unconditionally, so a spec
+#   that bootstraps it must write exactly what the package would write. There is
+#   no `enabled` field for the same reason: a disabled repo is a file whose bytes
+#   say `enabled=0`.
+#
+#   Named for the format, not the tool: /etc/yum.repos.d is dnf's directory and
+#   means the same on an atomic host and a plain Fedora or RHEL one. Only the
+#   consumer differs — `rpm-ostree install` stages a deployment needing a reboot,
+#   `dnf install` does not — and that belongs to the package converge, never to
+#   the repo. So repos are declared identically everywhere rpm is.
 
 # Every bundle-level key must come BEFORE the first table header: once `[ignore]`
 # is open, TOML reads what follows as belonging to it, so a `packages` line below
@@ -590,5 +620,14 @@ Unknown fields are a parse error. `when` / `needs` (step presence-gating) and
 `owner` / `group` (on a `sysfile` step) **are** valid — they're documented above.
 A few names from older design notes are **not** fields and will error: `dict_add`
 / `domain` on `setkey`, `mode_lifecycle`, and `owner` as an *assert* check (owner
-is a `sysfile` field, not an assertion). When in doubt, the parser is the
-authority — an unknown field names itself in the error.
+is a `sysfile` field, not an assertion).
+
+An `rpm_repos` entry takes `repo` and `key` and nothing else. The plausible
+guesses are all errors, each for a reason: no `to` (both destinations are fixed —
+a repo dnf does not read is not a repo), no `enabled` / `disabled` (a disabled
+repo is a file whose bytes say `enabled=0`, and the declaration reproduces the
+vendor's file rather than editing it), and no dnf fields — `id`, `baseurl`,
+`gpgcheck`, `priority` — because the file is the declaration.
+
+When in doubt, the parser is the authority — an unknown field names itself in the
+error.

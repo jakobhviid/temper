@@ -229,6 +229,18 @@ fn root_steps(
     update: bool,
 ) -> Result<(Vec<String>, Vec<String>)> {
     let (mut own, mut scripts) = (Vec::new(), Vec::new());
+    // Repos are written as root and are not steps, so the step walk below cannot
+    // see them. Without this the "one password for the whole run" ask misses
+    // them, and a machine with no root-needing cask and no `sudo = true` step
+    // gets its prompt partway through the converge instead of at the keyboard
+    // before anything downloads. Skipped on the `update` path, which does not
+    // converge packages and so never needs a repo in place.
+    if !update {
+        own.extend(providers::rpm_repos_pending(
+            home,
+            &providers::effective_rpm_repos(home, machine)?,
+        ));
+    }
     for (_, step) in &resolved.steps {
         if !is_step(step) {
             continue;
@@ -472,6 +484,29 @@ fn deployed_paths(home: &Path, machine: &Machine) -> Result<crate::ledger::Ledge
             },
         );
     }
+    // Repos and their keys are deployed files like any other, so the ledger is
+    // what gives the category its residue direction: un-declare a repo and the
+    // file temper wrote becomes reportable and removable, while the base image's
+    // own repos — which temper never wrote — stay invisible. That is the reason
+    // there is no `[ignore].rpm_repo` list: enumerating `/etc/yum.repos.d` as
+    // extras would report fedora, updates and rpmfusion on every run.
+    for repo in providers::effective_rpm_repos(home, machine)? {
+        for (src, dest) in repo.files() {
+            let target = dest.display().to_string();
+            let hash = std::fs::read(home.join(&src))
+                .ok()
+                .map(|b| blake3::hash(&b).to_hex().to_string());
+            out.insert(
+                crate::ledger::Deployed::key(&target, None),
+                crate::ledger::Deployed {
+                    hash: hash.unwrap_or_default(),
+                    kind: "rpm-repo".to_string(),
+                    path: target,
+                    marker: None,
+                },
+            );
+        }
+    }
     Ok(out)
 }
 
@@ -508,10 +543,22 @@ fn packages_only_unrevertible(
         &crate::providers::effective_extension_specs(home, machine).unwrap_or_default(),
     )
     .is_empty();
-    let touched: [(&str, bool); 3] = [
+    // A repo is root-owned state written outside the journal, so a run that
+    // writes one cannot take it back — and the user has to learn that at plan
+    // time rather than from a later `undo` that reverts less than it reported
+    // (AGENTS.md question 7). Keyed on what this run would actually write, like
+    // its three neighbours: a machine whose repos are already in place is told
+    // nothing, because nothing is about to happen.
+    let repos_to_write = !crate::providers::rpm_repos_pending(
+        home,
+        &crate::providers::effective_rpm_repos(home, machine).unwrap_or_default(),
+    )
+    .is_empty();
+    let touched: [(&str, bool); 4] = [
         ("brew-trust", untrusted),
         ("flatpak-remote", remotes_to_add),
         ("gnome-extensions", switches_to_flip),
+        ("rpm-repo", repos_to_write),
     ];
     touched
         .iter()
@@ -696,6 +743,18 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         absorb: &[Answer::Hand {
             file: "the step's source file in the temper folder",
             why: "no verb captures a root-owned /etc file back into the folder",
+        }],
+    },
+    // One kind covers missing and edited alike, the way every file primitive
+    // does: `Detects::Differs` is what a `FileState` reports through.
+    KindSpec {
+        name: "rpm-repo",
+        detects: Detects::Differs,
+        converge: &[Answer::Verb("temper install")],
+        absorb: &[Answer::Hand {
+            file: "the `.repo` asset in the temper folder, declared in `rpm_repos`",
+            why: "absorbing a repo means copying a file INTO the folder and \
+                  declaring it — authoring, which no reconcile does",
         }],
     },
     KindSpec {
@@ -1217,7 +1276,12 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
     if converges("temper install") {
         push(
             &mut out,
-            "re-apply the drifted config steps above (copy/block/setkey/sysfile/exec/profile)",
+            // No primitive enumeration here. The report lists every drifted
+            // item and its kind directly above this line, so the list added
+            // nothing a reader could not see — and being hand-written, it went
+            // one member short the moment a category was added, which is the
+            // failure mode PATTERNS names for by-hand enumerations.
+            "re-apply the drifted items above",
             "temper install",
         );
         push(
@@ -1557,6 +1621,29 @@ pub fn run_drift(
             detail: None,
         });
     }
+    // Repos first, because a missing repo is the *cause* of the missing packages
+    // reported just below: reading them in this order is reading the diagnosis
+    // before the symptoms.
+    let effective_repos = providers::effective_rpm_repos(home, machine)?;
+    if !effective_repos.is_empty() {
+        let app = "rpm-repo";
+        if providers::rpm_repo_caps().observe {
+            for (dest, state) in providers::rpm_repos_state(home, &effective_repos)? {
+                findings.push(Finding::state(app, "rpm-repo", dest.display().to_string(), state));
+            }
+        } else {
+            // Cannot be read here, so it is `unavailable` and never absent —
+            // Principle #12. A macOS host declaring no repos never reaches this.
+            for (dest, _) in providers::rpm_repos_state(home, &effective_repos)? {
+                findings.push(Finding::state(
+                    app,
+                    "rpm-repo",
+                    dest.display().to_string(),
+                    crate::primitives::FileState::Unavailable,
+                ));
+            }
+        }
+    }
     let effective_rpm = providers::effective_rpm(home, machine)?;
     for pkg in providers::rpm_ostree_extras(&effective_rpm, ignore) {
         findings.push(Finding {
@@ -1795,6 +1882,11 @@ pub fn run_install(
     // Resolved here rather than in phase 2, so a `sysfile`/`sudo = true` step's
     // password request joins the package one in a single ask before any work starts.
     let resolved = resolve(home, machine)?;
+    // Captured BEFORE any converge, because every entry is keyed on work that is
+    // still pending: computing it after the converge asks "is there anything left
+    // to do?", which is always no by then, and the report would be empty exactly
+    // when it had something to say.
+    let phase1_unrevertible = packages_only_unrevertible(brew_trust, home, machine);
     let _sudo = if dry_run {
         None
     } else {
@@ -1815,6 +1907,18 @@ pub fn run_install(
     // (best-effort, warned), the remote appeared, and only a SECOND converge
     // installed it. Same reason tap-trust runs before brew.
     providers::remotes_converge(&providers::effective_remotes(home, machine)?, dry_run)?;
+    // Repos before the packages that resolve from them — the rpm-side sibling of
+    // the remote converge above, and the same bug: `rpm-ostree install` resolves
+    // against `/etc/yum.repos.d` as it stands when the call is made, so a repo
+    // expressed as a phase-2 `sysfile` step arrived one phase too late. Every
+    // package from it failed, and because a failed batch is retried per item,
+    // failed once each — burying any genuine failure in a wall of expected ones.
+    // Repos go first on the way in; `prune` takes them last on the way out.
+    providers::rpm_repos_converge(
+        home,
+        &providers::effective_rpm_repos(home, machine)?,
+        dry_run,
+    )?;
     // The journal opens BEFORE the converge, not after it. It used to be created
     // for the config-step phase only, so `install --packages-only` returned
     // without ever journaling anything — packages were unrevertible because
@@ -1883,14 +1987,20 @@ pub fn run_install(
             // things that are not, and claiming an empty list said `undo` would
             // cover them. `interface.rs` scores brew-trust and flatpak-remote
             // `revertible: No` in as many words.
-            unrevertible: packages_only_unrevertible(brew_trust, home, machine),
+            unrevertible: phase1_unrevertible,
         });
     }
 
     // Phase 2 — config steps (`resolved` was needed above, for the root ask).
     let (mut changed, mut total, mut ran) = (0usize, 0usize, 0usize);
     let mut skipped = Vec::new();
-    let mut unrevertible: Vec<(String, &'static str)> = Vec::new();
+    // Phase 1's unrevertible work counts on this path too. It was reported only
+    // under `--packages-only`, so a full `install` that trusted a tap, added a
+    // remote, flipped an extension switch or wrote a repo said nothing about any
+    // of it — and `undo` then reverted less than the run appeared to promise,
+    // which is the whole point of AGENTS.md question 7. The phase happens either
+    // way; only the reporting was conditional.
+    let mut unrevertible: Vec<(String, &'static str)> = phase1_unrevertible;
     // Candidates are known before any of them runs, so the phase has an honest
     // denominator. A dry-run reports rather than applies — no live region for it.
     let planned: Vec<(String, &'static str)> = resolved
@@ -2578,6 +2688,22 @@ pub fn commit_prune(
     if !plan.extensions.is_empty() {
         providers::gext_uninstall(&plan.extensions)?;
     }
+    // Un-layer BEFORE removing any deployed file, because a repo is one of those
+    // files. `rpm-ostree uninstall` recomposes a deployment, which re-resolves
+    // every package still layered — so deleting a repo first can leave that
+    // re-resolve with no provider for a package nobody asked to remove. The `?`
+    // is load-bearing in the same direction: a failed un-layer aborts before the
+    // repo is deleted, rather than leaving the machine with neither.
+    //
+    // This is the mirror of the install ordering above. Repos go first on the
+    // way in and last on the way out; getting only the first half right would
+    // have shipped one direction of the matrix, which is the defect AGENTS.md
+    // question 1 exists to catch.
+    // `false` here is a real un-layer that did not land, not "nothing to do":
+    // both mean no deployment was staged, and the repos below key off it.
+    let unlayered = providers::rpm_ostree_uninstall(&plan.rpm_ostree, false)?;
+    let unlayer_failed = !plan.rpm_ostree.is_empty() && !unlayered;
+    let reboot = unlayered;
     // A retired target is as often a directory (`~/.config/old-app`) as a file,
     // and `sysfile` retires root-owned ones — `remove_file` alone failed both,
     // warned, and let the run report them removed.
@@ -2600,6 +2726,24 @@ pub fn commit_prune(
         let Some(rec) = recorded.get(key).cloned() else {
             continue;
         };
+        // A repo whose package is still layered must stay. The un-layer above
+        // failed, so `rpm-ostree` will re-resolve that package on the next
+        // upgrade — and it cannot, if the repo it came from has been deleted
+        // in the meantime. Left in place and reported, which is a state a
+        // later `prune` recovers from; deleted, it is one no verb does.
+        //
+        // Scoped to repos on purpose: an unrelated `copy` residue is harmless
+        // to remove either way, and letting one bad un-layer block every file
+        // cleanup would trade this bug for a broader one.
+        if unlayer_failed && rec.kind == "rpm-repo" {
+            eprintln!(
+                "{} keeping {key} — the un-layer failed, and a still-layered \
+                 package needs its repo to re-resolve",
+                crate::ui::yellow(crate::ui::g_warn())
+            );
+            failed.push(key.clone());
+            continue;
+        }
         match crate::ledger::remove(&rec) {
             // What is gone stops being recorded. Leaving the entry made the next
             // `drift` report a file prune had just deleted, as one the user had
@@ -2618,7 +2762,6 @@ pub fn commit_prune(
     }
     let _ = crate::ledger::save(&machine.name, &recorded);
     providers::remotes_delete(&plan.flatpak_remotes)?;
-    let reboot = providers::rpm_ostree_uninstall(&plan.rpm_ostree, false)?;
     Ok(PruneOutcome { reboot, failed })
 }
 

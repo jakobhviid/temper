@@ -152,6 +152,78 @@ pub struct BrewConfig {
     pub trust: Vec<String>,
 }
 
+/// One RPM repository this spec supplies, as the file the vendor publishes.
+///
+/// The declaration points at an **asset**, not at a set of dnf fields, and that
+/// is deliberate. A vendor's `.repo` file often has to be byte-faithful —
+/// Vivaldi's `%post` rewrites its own unconditionally, so a spec that bootstraps
+/// it must write exactly what the package would write or the two fight forever.
+/// Rendering one from `{ id, baseurl, gpgcheck, … }` would mean temper owning a
+/// model of dnf's format, keeping up with `priority`, modularity and every
+/// vendor quirk, for no gain over shipping the file upstream publishes.
+///
+/// It is named for the **domain, not the tool**: `/etc/yum.repos.d/*.repo` is
+/// dnf's format and dnf's directory, identical on an atomic host and a plain
+/// Fedora or RHEL one. What differs is the consumer — `rpm-ostree install`
+/// stages a deployment, `dnf install` does not — and that difference belongs in
+/// the converge, never in the declaration. So there is no `reboot` field here,
+/// and no `enabled`: an `enabled=0` stub is expressed by the file's own bytes.
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RpmRepo {
+    /// The `.repo` file, relative to the temper-home. Installed root-owned
+    /// `0644` to `/etc/yum.repos.d/<basename>`.
+    ///
+    /// The destination is inferred rather than given a `to`, unlike `sysfile`,
+    /// because it is not a choice: a repo dnf does not read is not a repo. One
+    /// less field is one less way to typo a path that only fails at resolve time.
+    pub repo: String,
+    /// This repo's GPG key, relative to the temper-home. Installed root-owned
+    /// `0644` to `/etc/pki/rpm-gpg/<basename>`, **before** the repo file.
+    ///
+    /// The key travels with the repo rather than being a separate `sysfile` for
+    /// the same reason the repo is not a step: a `gpgkey=file:///etc/pki/rpm-gpg/…`
+    /// reference is useless if the key lands in a later phase than the repo that
+    /// cites it. That is the ordering bug one level down.
+    ///
+    /// A path, and only a path. Importing into rpm's keyring (`rpm --import`) is
+    /// machine state rather than a file, so it is not what this does.
+    #[serde(default)]
+    pub key: Option<String>,
+}
+
+impl RpmRepo {
+    /// Where the `.repo` file is installed.
+    pub fn dest(&self) -> PathBuf {
+        Path::new(RPM_REPOS_DIR).join(basename(&self.repo))
+    }
+    /// Where the GPG key is installed, if one is declared.
+    pub fn key_dest(&self) -> Option<PathBuf> {
+        self.key
+            .as_deref()
+            .map(|k| Path::new(RPM_GPG_DIR).join(basename(k)))
+    }
+    /// Source/destination pairs in **apply order**: key before repo.
+    pub fn files(&self) -> Vec<(String, PathBuf)> {
+        let mut out = Vec::new();
+        if let (Some(k), Some(d)) = (self.key.as_deref(), self.key_dest()) {
+            out.push((k.to_string(), d));
+        }
+        out.push((self.repo.clone(), self.dest()));
+        out
+    }
+}
+
+/// Where dnf reads repository definitions, on every rpm host, atomic or not.
+pub const RPM_REPOS_DIR: &str = "/etc/yum.repos.d";
+/// Where a `gpgkey=file://…` reference conventionally points.
+pub const RPM_GPG_DIR: &str = "/etc/pki/rpm-gpg";
+
+/// Last path component, as a plain string — the destination basename.
+fn basename(p: &str) -> &str {
+    p.rsplit('/').next().unwrap_or(p)
+}
+
 /// A declared GNOME extension.
 ///
 /// A bare uuid string is the common case and still parses, so no folder has to
@@ -373,6 +445,13 @@ pub struct Machine {
     /// Flatpak remotes THIS machine adds, as `"<name> <url>"`.
     #[serde(default)]
     pub flatpak_remotes: Vec<String>,
+    /// RPM repositories THIS machine supplies, on top of its bundles'.
+    ///
+    /// Machine scope matters here for the ordinary case: "this one box layers a
+    /// package from Terra" is a per-machine fact, and declaring it in a shared
+    /// bundle would write a repo onto every machine in the group.
+    #[serde(default)]
+    pub rpm_repos: Vec<RpmRepo>,
     /// Extras THIS machine should not be told about, on top of the fleet
     /// `[ignore]`. Same reason: silencing something is a per-machine judgement
     /// far more often than a fleet one, and the fleet list could not express
@@ -491,6 +570,14 @@ pub struct Bundle {
     /// the same way, rather than fleet-wide on every machine.
     #[serde(default)]
     pub flatpak_remotes: Vec<String>,
+    /// RPM repositories this bundle's packages come from.
+    ///
+    /// The exact sibling of `flatpak_remotes`, for the same reason and at the
+    /// same scope: a repo belongs with the bundle whose packages need it, gated
+    /// by that bundle's `os`/`role`. Converged **before** any package, because a
+    /// package cannot resolve from a repo that is not on disk yet.
+    #[serde(default)]
+    pub rpm_repos: Vec<RpmRepo>,
     #[serde(default)]
     pub step: Vec<Step>,
     /// Drift-only assertions (no converge action).
@@ -1585,6 +1672,7 @@ mod tests {
             brew_trust: Vec::new(),
             rpm_ostree: Vec::new(),
             flatpak_remotes: Vec::new(),
+            rpm_repos: Vec::new(),
             retire: Vec::new(),
             retire_packages: Vec::new(),
             ignore: Default::default(),
@@ -1813,6 +1901,7 @@ gnome_extensions = [
             brew_trust: Vec::new(),
             rpm_ostree: Vec::new(),
             flatpak_remotes: Vec::new(),
+            rpm_repos: Vec::new(),
             retire: Vec::new(),
             retire_packages: Vec::new(),
             ignore: Default::default(),

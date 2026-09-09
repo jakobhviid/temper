@@ -93,7 +93,7 @@ on **reality** (`when` probes), not on assumptions about the machine.
 ## Adding a provider (tool authors)
 
 A *provider* is a kind of state temper manages — `brew`, `flatpak`,
-`gnome-extensions`, `rpm-ostree`, `flatpak-remote`. Adding one is meant to be
+`gnome-extensions`, `rpm-ostree`, `flatpak-remote`, `rpm-repo`. Adding one is meant to be
 routine (Principle #1's third tier): you answer the eleven columns of the feature
 interface rather than inventing a verb set, and the existing tests catch most of
 what you forget.

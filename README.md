@@ -22,15 +22,20 @@ temper undo       # revert the last run
   `starship.toml`, a real dconf dump, a real Brewfile, tied together by one
   manifest. No new language to learn.
 - **Packages *and* config, one tool.** brew / cask / tap / flatpak / mas /
-  VS Code / GNOME extensions / rpm-ostree, plus file, key, marker-block, and
-  root-owned `/etc` config primitives.
+  VS Code / GNOME extensions / rpm-ostree — and where they come from, since a
+  flatpak remote and an RPM repo are declared alongside the packages that need
+  them and converged before them. Plus file, key, marker-block, and root-owned
+  `/etc` config primitives.
 - **Drift is first-class.** `temper drift` is read-only and tells you what's out
   of sync **and the exact command to fix it** — in both directions.
 - **Two directions.** Converge the machine toward the spec, *or* absorb the
   machine's live state back into the spec (`temper reconcile`) — packages,
   tap-trust, *and* whole-desktop GNOME state, per key.
-- **Reversible.** Every file write (and every dconf key) is journaled; `temper
-  undo` rolls back the last run, guarded so it never clobbers a since-changed file.
+- **Reversible, and it says where it isn't.** File writes, dconf keys and package
+  installs are journaled; `temper undo` rolls back the last run, guarded so it
+  never clobbers a since-changed file. A few things are root-owned state written
+  outside the journal — `sysfile`, RPM repos — and a run that touches one says so
+  *before* you confirm rather than after.
 - **Keeps the spec in git (if it is git).** Spec-side writes can auto-commit +
   push a git-backed folder (`temper save`, or `temper configure set
   git.auto_commit true`), and `temper refresh` pulls the latest from anywhere —

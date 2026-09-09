@@ -199,6 +199,46 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         residue: Col::NA(NO_RESIDUE),
     },
     ProviderSpec {
+        name: "rpm-repo",
+        kinds: &["rpm-repo"],
+        // The sibling scoping of `flatpak-remote`, for the sibling reason: a
+        // repo belongs with the bundle whose packages resolve from it, which is
+        // group scope and gated. A fleet-wide repo nobody can gate would write
+        // `/etc/yum.repos.d` on a Mac.
+        fleet_scope: Col::NA(
+            "a repo belongs to the bundle whose packages need it — group scope, gated",
+        ),
+        machine_scope: Col::Yes,
+        // Gated on rpm-ness, not atomic-ness: a plain dnf host has repos and no
+        // layering. Where the directory cannot be read the state is
+        // `unavailable`, never absent.
+        observe: Col::Yes,
+        install: Col::Yes,
+        // Not this provider's verb, and deliberately so. An undeclared file in
+        // `/etc/yum.repos.d` is the base image's — fedora, updates, rpmfusion —
+        // not residue, so enumerating the directory as extras would report a
+        // wall of state temper never wrote and must not remove. What temper DID
+        // write is in the ledger, and that is the `residue` column below.
+        prune: Col::NA(
+            "an undeclared repo is the image's, not an extra; what temper wrote is residue",
+        ),
+        reconcile: Col::NA(
+            "absorbing a repo means copying a file INTO the folder and declaring it —              authoring, which no reconcile does",
+        ),
+        ignore: Col::NA(
+            "nothing to silence: only repos temper deployed are ever reported, so the              image's own never appear",
+        ),
+        // Same reason as its `sysfile` sibling, named rather than inherited.
+        // Stated at plan time (AGENTS.md question 7), not discovered after.
+        revertible: Col::No(
+            "a repo is root-owned state written outside the journal, like `sysfile`",
+        ),
+        // The column the ledger earns: un-declare a repo and the file temper
+        // wrote is reported as `deployed-file-extra` and removed by `prune` —
+        // after the un-layer, never before it.
+        residue: Col::Yes,
+    },
+    ProviderSpec {
         name: "rpm-ostree",
         kinds: &["rpm-ostree", "rpm-ostree-extra"],
         fleet_scope: Col::Yes,

@@ -610,6 +610,39 @@ tap-trust runs before brew. Remotes are read from **both** installations — one
 the image provides already satisfies a declaration — and written to, and removed
 from, your **user** one, which is the only one temper may touch.
 
+## 9b. Declare where layered rpms come from
+
+**When:** an `rpm_ostree` package needs a repo the machine does not have.
+
+```toml
+[[machine]]
+rpm_repos = [
+    { repo = "assets/rpm-repos/brave-browser.repo", key = "assets/rpm-repos/RPM-GPG-KEY-brave" },
+]
+```
+
+The rpm-side sibling of `flatpak_remotes`, at the same two scopes: put a repo in
+the bundle whose packages resolve from it (gated with that bundle), or in
+`[[machine]]` for one box only. Ship the `.repo` file the vendor publishes —
+the declaration points at an asset, not at dnf fields, because a repo file often
+has to be byte-faithful. A disabled repo is one whose bytes say `enabled=0`.
+
+Repos are installed **before** any package converge, so a clean machine
+resolves its layered packages on the **first** run. The key lands before the
+repo that cites it. Both go to fixed destinations
+(`/etc/yum.repos.d/`, `/etc/pki/rpm-gpg/`) and take no `to`.
+
+Layering stages a deployment, so a run that layered anything asks you to reboot —
+that is rpm-ostree's model, and temper reports it rather than working around it.
+One converge stages one deployment: the repo is in place for the call that
+resolves against it, so the packages land on the same pass that writes it.
+
+Removal runs the other way round: `prune` un-layers the packages first and only
+then removes the repo file, because un-layering re-resolves everything still
+layered. A repo temper deployed and the spec no longer declares is residue —
+reported, and removed if you have not edited it. Repos the *image* provides are
+never touched, and never reported, so there is no ignore list to maintain.
+
 ## 10. Per-machine versions of the fleet lists
 
 **When:** you want something on one box only.
@@ -617,7 +650,11 @@ from, your **user** one, which is the only one temper may touch.
 Every category exists at both scopes, because "on this machine only" is an
 ordinary thing to want. Declared in a bundle, a thing belongs to the group and
 `reconcile` will never edit it from one machine; declared on the machine, that
-machine's `reconcile` owns both directions.
+machine's `reconcile` owns both directions — for every category `reconcile`
+reaches. The exception is `rpm_repos`: it has both scopes like the rest, and you
+edit it by hand at either, because absorbing a repo means copying a file *into*
+the folder rather than adding a token to a list. The matrix in
+`ARCHITECTURE.md` is the per-category answer.
 
 ```toml
 [[machine]]
@@ -735,6 +772,7 @@ which is why it has verbs of its own.
 | desktop dconf subtrees | `restore-dconf` | `snapshot-dconf`, or `reconcile` per key — a bundle-owned settings file needs `snapshot-dconf --include-shared` |
 | flatpak remotes | `install` (remove: `prune`) | `reconcile` — machine scope |
 | rpm-ostree layered packages | `install` (remove: `prune`, which stages a deployment) | `reconcile` — machine scope |
+| rpm repos (`rpm_repos`) | `install`, before any package (remove: `prune`, after the un-layer) | you author it by hand — absorbing one means copying a file into the folder |
 | brew tap-trust | `install` / `update` (remove: `prune`) | `reconcile` — the fleet list needs `--include-trust` |
 | deployed-file residue | n/a — it is what a *dropped* step left | `prune` removes it if untouched, reports it if you edited it |
 | retirements (`retire`, `retire_packages`) | `prune` enacts them | you author them by hand; `temper retired` reviews them |
