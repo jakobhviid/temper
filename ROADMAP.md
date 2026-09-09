@@ -201,6 +201,22 @@ sudo already does; today it finds out when the removal fails.
   machine converted so far already had its repo files on disk, so none of them
   exercised a genuinely empty `/etc/yum.repos.d`. The next from-scratch
   converge is the real test.
+- **`retire` cannot be made to refuse a path a declared package provides**, and
+  the reason is worth keeping so it is not re-proposed. The ask came from a real
+  incident: two `.desktop` launchers a spec wrote itself, which the vendors later
+  began shipping at the same paths, leaving `retire` pointed at two working files.
+  The obvious check is to resolve the path's owning package at plan time and
+  refuse. It does not work, measured rather than reasoned: `rpm -qf` on a
+  launcher in `~/.local/share/applications` answers "not owned by any package"
+  and exits 1, because rpm installs into `/usr` and `/etc` and never into a home
+  directory — so the query is blind to precisely the case that caused the
+  incident. Building it would add a subprocess call per retired path to every
+  prune, catch system-path collisions only, and read as protection where there is
+  none. A recurrence check ("prune removed this and it came back") is
+  manager-agnostic and does fire, but only *after* the first deletion, which is
+  the harm. So this is a spec-authoring hazard, documented in SPEC where the
+  field is defined, and `retire_packages` is the declaration for the intent
+  behind it.
 - **The repo-retention guard has no integration test.** When an un-layer fails,
   `prune` keeps a repo a still-layered package needs to re-resolve. The branch is
   written and the un-layer's honesty is covered

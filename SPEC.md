@@ -184,6 +184,20 @@ retire = ["~/.config/old-app"]  # optional; paths that must NOT exist. `prune`
                             #   every machine. `""`, `~` and `/` are rejected when
                             #   the folder LOADS, so the message names the machine
                             #   rather than arriving at the end of a converge.
+                            #   DO NOT retire a path a declared package provides.
+                            #   "Must not exist" against a file a package owns is
+                            #   a fight the package wins: it reinstalls the file,
+                            #   `prune` deletes it, forever, and the deletion may
+                            #   break the package. temper cannot warn you — no
+                            #   package database can be asked "who will provide
+                            #   this path", and for anything under your home the
+                            #   answer is "nothing owns it" even after the app has
+                            #   put it there. The declaration for "I do not want
+                            #   this package" is `retire_packages`; removing one
+                            #   of its files is the wrong tool for it. The case
+                            #   to watch is a launcher or config you once wrote
+                            #   yourself and the vendor later began shipping at
+                            #   the same path.
 flatpak_remotes = ["vendor https://example.com/vendor.flatpakrepo"]
                             # optional; remotes THIS machine adds, as "<name> <url>".
                             #   The name is the identity; the url can drift.
