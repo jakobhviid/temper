@@ -210,6 +210,16 @@ rpm_repos = [{ repo = "assets/rpm-repos/terra.repo" }]
                             #   converge, because a package cannot resolve from a
                             #   repo that is not on disk yet. See `rpm_repos`
                             #   under the bundle below for the fields.
+                            #   APPLIES TO: any host with `rpm` — every Fedora
+                            #   family machine, atomic or not. It is NOT gated on
+                            #   `rpm-ostree`, `dnf` or `yum`: the consumer of
+                            #   /etc/yum.repos.d differs per host, the directory
+                            #   does not. So a Bazzite or CoreOS box manages repos
+                            #   even though it layers with rpm-ostree rather than
+                            #   installing with dnf. Where `rpm` is absent (a Mac),
+                            #   declared repos report `unavailable` — never
+                            #   "absent", which would invite a converge to write
+                            #   them — and a converge says so and installs none.
 brew_trust = ["me/tap"]     # optional; taps THIS machine trusts, unioned with
                             #   [brew].trust. Machine scope, so `reconcile` both
                             #   absorbs into and drops from it — the fleet list
