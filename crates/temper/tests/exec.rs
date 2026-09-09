@@ -323,17 +323,29 @@ fn one_reason_is_printed_once_however_many_steps_share_it() {
     for n in ["one.sh", "two.sh", "three.sh"] {
         assert!(text.contains(n), "step `{n}` is not named:\n{text}");
     }
-    // A blank line separates the rows from the legend. Dimmed and outdented was
-    // not enough on its own: sitting directly under the last row, the legend
-    // read as one more row, which is the confusion the legend exists to remove.
+    // The whole report is two lines: the items, then the reason. It used to be
+    // one row per item plus a spaced legend, so a successful eleven-step run
+    // ended in fourteen flagged lines and read as a wall of failures. Every one
+    // of those changes had succeeded.
     let lines: Vec<&str> = text.lines().collect();
+    let head = lines
+        .iter()
+        .position(|l| l.contains("cannot revert") || l.contains("able to revert"))
+        .expect("the summary line");
     let legend = lines
         .iter()
         .position(|l| l.contains(reason))
-        .expect("the legend line");
+        .expect("the reason line");
+    assert_eq!(
+        legend,
+        head + 1,
+        "the reason belongs directly under the summary, with nothing between:\n{text}"
+    );
+    // It is a notice, not a warning: these changes worked, and the state being
+    // reported is what `undo` covers — not a defect in the run.
     assert!(
-        legend > 0 && lines[legend - 1].trim().is_empty(),
-        "the legend must be separated from the rows by a blank line:\n{text}"
+        !lines[head].contains('⚠'),
+        "a successful run's undo caveat must not be flagged as a warning:\n{text}"
     );
 }
 

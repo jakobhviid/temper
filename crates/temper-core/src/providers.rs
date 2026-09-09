@@ -77,27 +77,53 @@ fn run_lines(cmd: &str, args: &[&str]) -> Result<Vec<String>> {
 ///
 /// Returns the items that actually landed — which is what gets journaled, so a
 /// failed install never leaves an undo entry for something that was never there.
-fn batch_then_isolate<F>(items: &[String], label: &str, build: F) -> Vec<String>
+fn batch_then_isolate<F>(items: &[String], label: &str, verbose: bool, build: F) -> Vec<String>
 where
     F: Fn(&[String]) -> Command,
 {
     if items.is_empty() {
         return Vec::new();
     }
-    let ok = |mut c: Command| {
-        c.stdin(Stdio::null())
-            .output()
-            .map(|o| o.status.success())
+    // Under a spinner, like every other converge child. `.output()` blocks until
+    // the child exits and draws nothing while it does, so the longest operation
+    // temper performs — `rpm-ostree install`, which downloads and then composes
+    // an entire deployment — printed *nothing at all* for minutes. Not a frozen
+    // spinner: no line. A run indistinguishable from a hang is a run people kill
+    // halfway, and `mas install`, `gext install` and `gext uninstall` all came
+    // through here the same way.
+    //
+    // No failure replay, unlike `run_child`. A failed **batch** is a probe, not
+    // a verdict: the isolating pass below is what decides, so replaying the
+    // batch's log would report a failure that is about to be recovered — and
+    // where it is not, the per-item line names the item, which is the useful
+    // half.
+    //
+    // The batch carries the phase alone and lets the child's own output name the
+    // item it is on; the isolating pass names the item itself, because there the
+    // point IS which one is being retried.
+    let ok = |mut c: Command, doing: &str| -> bool {
+        if verbose {
+            c.stdin(Stdio::null());
+            if crate::ui::json_mode() {
+                c.stdout(stderr_stdio());
+            }
+            return c.status().map(|s| s.success()).unwrap_or(false);
+        }
+        run_with_spinner(c, label, doing)
+            .map(|(ok, _)| ok)
             .unwrap_or(false)
     };
-    if ok(build(items)) {
+    if ok(build(items), label) {
         return items.to_vec();
     }
     // The batch failed: find out which ones, rather than reporting the whole set
     // as lost or the whole set as fine.
     let mut landed = Vec::new();
     for item in items {
-        if ok(build(std::slice::from_ref(item))) {
+        if ok(
+            build(std::slice::from_ref(item)),
+            &format!("{label}: {item}"),
+        ) {
             landed.push(item.clone());
         } else {
             eprintln!(
@@ -729,7 +755,7 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize
             .iter()
             .map(|p| p.id.clone().unwrap_or_else(|| p.name.clone()))
             .collect();
-        batch_then_isolate(&ids, "mas install", |batch| {
+        batch_then_isolate(&ids, "mas install", verbose, |batch| {
             let mut cmd = Command::new("mas");
             // Quiet by default: mute mas's post-install "not indexed in Spotlight"
             // warnings. `--verbose` lets them through.
@@ -1763,7 +1789,7 @@ pub fn gext_uninstall(uuids: &[String]) -> Result<()> {
     if !gext_caps().converge {
         bail!("gext not found — cannot uninstall GNOME extensions on this host");
     }
-    let landed = batch_then_isolate(uuids, "gext uninstall", |batch| {
+    let landed = batch_then_isolate(uuids, "gext uninstall", false, |batch| {
         let mut c = Command::new("gext");
         c.arg("uninstall");
         for u in batch {
@@ -1815,7 +1841,7 @@ pub fn gext_converge(effective: &[String], dry_run: bool, verbose: bool) -> Resu
     if let Some(pb) = &pb {
         pb.set_message(format!("Installing {} extension(s)", missing.len()));
     }
-    let installed = batch_then_isolate(&missing, "gext install", |batch| {
+    let installed = batch_then_isolate(&missing, "gext install", verbose, |batch| {
         let mut c = Command::new("gext");
         c.arg("install");
         for u in batch {
@@ -2275,7 +2301,7 @@ pub fn remotes_delete(names: &[String]) -> Result<()> {
     if !have("flatpak") {
         bail!("flatpak not found — cannot remove remotes on this host");
     }
-    let landed = batch_then_isolate(names, "flatpak remote-delete", |batch| {
+    let landed = batch_then_isolate(names, "flatpak remote-delete", false, |batch| {
         let mut c = Command::new("flatpak");
         c.args(["remote-delete", "--user", "--force"]);
         for n in batch {
@@ -2673,7 +2699,7 @@ mod progress_tests {
 
         // Happy path: one invocation, everything lands.
         let calls = AtomicUsize::new(0);
-        let landed = batch_then_isolate(&items, "t", |batch| {
+        let landed = batch_then_isolate(&items, "t", false, |batch| {
             calls.fetch_add(1, Ordering::SeqCst);
             assert_eq!(batch.len(), 3, "the happy path must not split the batch");
             let mut c = Command::new("true");
@@ -2685,14 +2711,14 @@ mod progress_tests {
 
         // Failure path: the batch is retried per item, and only the ones that
         // succeed are returned — so a failed install never gets journaled.
-        let landed = batch_then_isolate(&items, "t", |batch| {
+        let landed = batch_then_isolate(&items, "t", false, |batch| {
             // Fails for the whole batch and for "b" alone; succeeds otherwise.
             let fail = batch.len() > 1 || batch[0] == "b";
             Command::new(if fail { "false" } else { "true" })
         });
         assert_eq!(landed, vec!["a".to_string(), "c".to_string()]);
 
-        assert!(batch_then_isolate(&[], "t", |_| Command::new("true")).is_empty());
+        assert!(batch_then_isolate(&[], "t", false, |_| Command::new("true")).is_empty());
     }
 
     #[test]
@@ -3012,8 +3038,7 @@ pub fn rpm_converge(effective: &[String], dry_run: bool, verbose: bool) -> Resul
     // was journaled as installed (undo would then try to un-layer packages that
     // were never there) and reported "reboot required (rpm-ostree layered a
     // package)" for a deployment that was never staged.
-    let _ = verbose;
-    let landed = batch_then_isolate(&missing, "rpm-ostree install", |items| {
+    let landed = batch_then_isolate(&missing, "rpm-ostree install", verbose, |items| {
         let mut cmd = Command::new("rpm-ostree");
         cmd.args(["install", "--idempotent"]);
         for p in items {

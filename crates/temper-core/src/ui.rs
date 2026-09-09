@@ -421,6 +421,22 @@ const QUIET_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
 /// notice users learn to ignore protects nobody.
 const STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(90);
 
+/// How often a quiet child reports that it is still there.
+///
+/// Stopping the ticker rescues a hidden prompt, and on its own it leaves a
+/// frozen line with no elapsed time and nothing to distinguish "downloading a
+/// 400 MB bottle" from "wedged". That is the state users kill a run in — and
+/// killing a converge halfway is worse than any prompt the stand-down protects.
+///
+/// The dichotomy was false. Redrawing is hostile to an unseen prompt because it
+/// *overwrites a line*; appending a new one is not, which is why the stall
+/// notice could always be printed safely through `suspend`. So silence keeps its
+/// static line and gains an append-only heartbeat: liveness, elapsed time, and
+/// the last thing the child was seen doing, at a cadence that stays out of the
+/// way. It claims nothing it has not observed — the elapsed time is a fact, and
+/// the label is a quotation.
+const HEARTBEAT_EVERY: std::time::Duration = std::time::Duration::from_secs(20);
+
 impl WaitNotice {
     pub fn new(label: &str) -> WaitNotice {
         let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -428,21 +444,48 @@ impl WaitNotice {
             return WaitNotice { done, handle: None };
         }
         let flag = done.clone();
-        let line = dim(&format!("      … still working: {label}"));
+        let label = label.to_string();
         let handle = std::thread::spawn(move || {
+            use std::sync::atomic::Ordering;
             // Ticked rather than slept whole, so a fast unit's notice is cancelled
             // promptly instead of holding the thread for the full window.
             let tick = std::time::Duration::from_millis(100);
-            let mut waited = std::time::Duration::ZERO;
-            while waited < WAIT_NOTICE_AFTER {
-                if flag.load(std::sync::atomic::Ordering::Relaxed) {
+            let started = std::time::Instant::now();
+            let mut said = false;
+            let mut next = WAIT_NOTICE_AFTER;
+            loop {
+                if flag.load(Ordering::Relaxed) {
                     return;
                 }
                 std::thread::sleep(tick);
-                waited += tick;
-            }
-            if !flag.load(std::sync::atomic::Ordering::Relaxed) {
-                eprintln!("{line}"); // stderr: progress, so `--json` stays clean
+                if flag.load(Ordering::Relaxed) {
+                    return;
+                }
+                if started.elapsed() < next {
+                    continue;
+                }
+                // This path has no live region at all: the step phase stands it
+                // down for the whole `exec`, because arbitrary code prompts and a
+                // redraw erases the question. So one line at three seconds was
+                // the *only* thing a ten-minute script ever printed, and a run
+                // that says nothing for ten minutes is a run people kill. It
+                // keeps reporting, with the elapsed time as the proof.
+                if said {
+                    eprintln!(
+                        "{}",
+                        dim(&format!(
+                            "      {} still working: {label} · {}",
+                            g_working(),
+                            human_secs(started.elapsed())
+                        ))
+                    );
+                } else {
+                    // The first line stays as it was: at three seconds "1s" adds
+                    // nothing, and the point is only that something is running.
+                    eprintln!("{}", dim(&format!("      … still working: {label}")));
+                    said = true;
+                }
+                next = started.elapsed() + HEARTBEAT_EVERY;
             }
         });
         WaitNotice {
@@ -483,6 +526,13 @@ impl Drop for WaitNotice {
 /// leave a prompt erasable for a minute and a half to protect a message that has
 /// nothing to do with it.
 ///
+/// **A third response, because stopping is not the same as saying nothing.**
+/// While quiet, the watcher appends a heartbeat every [`HEARTBEAT_EVERY`] naming
+/// the elapsed time and what the child was last seen doing. Appending never
+/// overwrites, so it is exactly as safe for a hidden prompt as the frozen line
+/// was — and it is the difference between a converge that looks wedged and one
+/// that is visibly working.
+///
 /// Animation resumes on the next byte, so a merely slow child gets its spinner
 /// back.
 pub struct StallWatch {
@@ -502,6 +552,10 @@ pub struct Beat {
     last: std::sync::Arc<std::sync::Mutex<std::time::Instant>>,
     quiet: std::sync::Arc<std::sync::atomic::AtomicBool>,
     noticed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Heartbeats emitted for the current silence. Reset when the child speaks,
+    /// so a test can assert both that it reports repeatedly and that output
+    /// stands it down — the seam `quiet` and `noticed` already give.
+    beats: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pb: indicatif::ProgressBar,
 }
 
@@ -518,6 +572,7 @@ impl Beat {
         }
         // A later silence is a new silence, and earns its own notice.
         self.noticed.store(false, Ordering::Relaxed);
+        self.beats.store(0, Ordering::Relaxed);
     }
 }
 
@@ -525,7 +580,7 @@ impl StallWatch {
     /// Watch `pb`'s child. Inert under `--json`, which has no region to quiet and
     /// owes stdout exactly one document.
     pub fn new(pb: &indicatif::ProgressBar) -> StallWatch {
-        StallWatch::spawn(pb, QUIET_AFTER, STALL_AFTER)
+        StallWatch::spawn(pb, QUIET_AFTER, STALL_AFTER, HEARTBEAT_EVERY)
     }
 
     /// A handle to hand to whoever else is reading from the child.
@@ -544,6 +599,7 @@ impl StallWatch {
         pb: &indicatif::ProgressBar,
         quiet_after: std::time::Duration,
         notice_after: std::time::Duration,
+        heartbeat_every: std::time::Duration,
     ) -> StallWatch {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::{Arc, Mutex};
@@ -552,6 +608,7 @@ impl StallWatch {
             last: Arc::new(Mutex::new(std::time::Instant::now())),
             quiet: Arc::new(AtomicBool::new(false)),
             noticed: Arc::new(AtomicBool::new(false)),
+            beats: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             pb: pb.clone(),
         };
         let stop = Arc::new(AtomicBool::new(false));
@@ -563,6 +620,11 @@ impl StallWatch {
             // Ticked rather than slept whole, so dropping the guard does not block
             // for the rest of the window — the same shape as `WaitNotice`.
             let tick = (quiet_after / 4).min(std::time::Duration::from_millis(200));
+            let started = std::time::Instant::now();
+            // When the last heartbeat went out. Seeded when the region goes
+            // quiet, so the first one lands a full interval later rather than
+            // immediately.
+            let mut beat_at: Option<std::time::Instant> = None;
             while !st.load(Ordering::Relaxed) {
                 std::thread::sleep(tick);
                 if st.load(Ordering::Relaxed) {
@@ -573,7 +635,14 @@ impl StallWatch {
                 // First window: stop redrawing, so a prompt beneath us survives.
                 if idle >= quiet_after && !b.quiet.swap(true, Ordering::Relaxed) {
                     bar.disable_steady_tick();
+                    beat_at = Some(std::time::Instant::now());
                 }
+                if idle < quiet_after {
+                    // Talking again: the spinner says it better than a heartbeat
+                    // can, so stand the heartbeat down rather than doubling up.
+                    beat_at = None;
+                }
+
                 // Second: name what the silence might mean. Through `suspend`, so
                 // the line does not land on the region's own.
                 if idle >= notice_after && !b.noticed.swap(true, Ordering::Relaxed) {
@@ -584,6 +653,33 @@ impl StallWatch {
                                  password, it may be hidden — try answering here.")
                         );
                     });
+                }
+
+                // Third: prove it is still there. Appended through `suspend`,
+                // never drawn over the region, so a prompt already on screen
+                // keeps its line.
+                if let Some(since) = beat_at {
+                    if since.elapsed() >= heartbeat_every {
+                        beat_at = Some(std::time::Instant::now());
+                        b.beats.fetch_add(1, Ordering::Relaxed);
+                        // The child's own last words, where the parser caught
+                        // any — `bar`'s message is what the region was showing.
+                        // A quotation, not a claim about progress.
+                        let doing = bar.message();
+                        let elapsed = human_secs(started.elapsed());
+                        bar.suspend(|| {
+                            let line = if doing.trim().is_empty() {
+                                format!("      {} still working · {elapsed}", g_working())
+                            } else {
+                                format!(
+                                    "      {} still working · {} · {elapsed}",
+                                    g_working(),
+                                    doing.trim()
+                                )
+                            };
+                            eprintln!("{}", dim(&line));
+                        });
+                    }
                 }
             }
         });
@@ -759,7 +855,7 @@ mod stall_tests {
     #[test]
     fn redrawing_stops_long_before_the_notice_is_printed() {
         let pb = spinner("test");
-        let w = StallWatch::spawn(&pb, Duration::from_millis(40), Duration::from_secs(30));
+        let w = StallWatch::spawn(&pb, Duration::from_millis(40), Duration::from_secs(30), Duration::from_secs(30));
 
         std::thread::sleep(Duration::from_millis(500));
         assert!(
@@ -777,7 +873,7 @@ mod stall_tests {
     #[test]
     fn output_resumes_the_animation() {
         let pb = spinner("test");
-        let w = StallWatch::spawn(&pb, Duration::from_millis(40), Duration::from_millis(80));
+        let w = StallWatch::spawn(&pb, Duration::from_millis(40), Duration::from_millis(80), Duration::from_secs(30));
 
         std::thread::sleep(Duration::from_millis(500));
         assert!(w.beat.quiet.load(Ordering::Relaxed));
@@ -796,13 +892,74 @@ mod stall_tests {
     #[test]
     fn a_busy_child_is_never_called_stalled() {
         let pb = spinner("test");
-        let w = StallWatch::spawn(&pb, Duration::from_millis(120), Duration::from_millis(150));
+        let w = StallWatch::spawn(&pb, Duration::from_millis(120), Duration::from_millis(150), Duration::from_secs(30));
         for _ in 0..10 {
             std::thread::sleep(Duration::from_millis(30));
             w.activity();
         }
         assert!(!w.beat.quiet.load(Ordering::Relaxed), "steady output is not a stall");
         assert!(!w.beat.noticed.load(Ordering::Relaxed));
+        pb.finish_and_clear();
+    }
+
+    /// A quiet child keeps saying it is there, repeatedly.
+    ///
+    /// Stopping the ticker rescues a hidden prompt and leaves a frozen line
+    /// behind, which is indistinguishable from a wedged run — and a user who
+    /// concludes that kills the converge halfway, which is worse than anything
+    /// the stand-down protects. So silence reports: appended, never drawn over
+    /// the region, so it is as safe for a prompt as the frozen line was.
+    #[test]
+    fn a_quiet_child_keeps_reporting_that_it_is_alive() {
+        let pb = spinner("test");
+        let w = StallWatch::spawn(
+            &pb,
+            Duration::from_millis(40),
+            Duration::from_secs(30), // no notice — this is about the heartbeat
+            Duration::from_millis(60),
+        );
+
+        std::thread::sleep(Duration::from_millis(600));
+        let beats = w.beat.beats.load(Ordering::Relaxed);
+        assert!(
+            beats >= 2,
+            "a child quiet for ten heartbeat windows must report more than once, got {beats}"
+        );
+        pb.finish_and_clear();
+    }
+
+    /// …and stops the moment it speaks again, because the spinner says it better.
+    ///
+    /// Two liveness signals at once is worse than either: the heartbeat exists
+    /// only for the window where the animation has stood down.
+    #[test]
+    fn output_stands_the_heartbeat_down() {
+        let pb = spinner("test");
+        let w = StallWatch::spawn(
+            &pb,
+            Duration::from_millis(40),
+            Duration::from_secs(30),
+            Duration::from_millis(60),
+        );
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(w.beat.beats.load(Ordering::Relaxed) >= 1, "it should have reported");
+
+        w.activity();
+        assert_eq!(
+            w.beat.beats.load(Ordering::Relaxed),
+            0,
+            "output re-arms the count, so a later silence reports from scratch"
+        );
+        // And with the child talking steadily, nothing further is appended.
+        for _ in 0..10 {
+            std::thread::sleep(Duration::from_millis(20));
+            w.activity();
+        }
+        assert_eq!(
+            w.beat.beats.load(Ordering::Relaxed),
+            0,
+            "a talking child needs no heartbeat — it has a spinner"
+        );
         pb.finish_and_clear();
     }
 
@@ -813,7 +970,7 @@ mod stall_tests {
     #[test]
     fn a_cloned_beat_speaks_for_the_same_child() {
         let pb = spinner("test");
-        let w = StallWatch::spawn(&pb, Duration::from_millis(40), Duration::from_secs(30));
+        let w = StallWatch::spawn(&pb, Duration::from_millis(40), Duration::from_secs(30), Duration::from_secs(30));
         let from_stderr = w.beat();
 
         std::thread::sleep(Duration::from_millis(500));

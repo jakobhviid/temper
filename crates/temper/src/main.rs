@@ -1041,41 +1041,66 @@ fn save_and_report(target: &std::path::Path, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// Print the unrevertible changes as rows, then each distinct reason once.
+/// How many affected items to name before the rest become a count.
 ///
-/// The reason belongs to the primitive, not the step: every `exec` is
-/// unrevertible in the same words. Printed per row it repeated itself, pushed
-/// the step's own name off to the left of a long sentence, and made three
-/// affected steps look like three different problems. As a legend it is said
-/// once and the rows stay scannable — the shape `grove` uses, where the table is
-/// terse and what it means lives underneath it.
+/// Enough to identify the usual case at a glance, few enough to stay on one
+/// line. Past this the names stop being information and become a wall.
+const UNREVERTIBLE_NAMED: usize = 3;
+
+/// Say what `undo` will not cover, in two lines: the items, then why.
+///
+/// **A notice, not a warning.** This reports a *state* — `exec` runs arbitrary
+/// code, `sysfile` writes root-owned `/etc` — and every one of those changes
+/// succeeded. Rendered as a yellow warning over one row per item plus a spaced
+/// reason legend, a successful eleven-step run ended in fourteen flagged lines
+/// and read as a wall of failures. It is the cyan notice the drift report
+/// already uses for "a state, not a defect", and it fits on one line.
+///
+/// Reasons stay, deduplicated onto a second line: the reason belongs to the
+/// primitive, not the step, so every `exec` is unrevertible in the same words
+/// and repeating it per row made three affected steps look like three different
+/// problems. The full list survives in `--json`, which is where something
+/// parsing this should look anyway.
 fn print_unrevertible(items: &[(String, &'static str)], cannot: &str) {
     if items.is_empty() {
         return;
     }
+    // Labels arrive padded for the checklist's columns, which is right in a
+    // table and wrong in a sentence: `"a  exec     s.sh"` inline reads as a
+    // typo. And the same label can appear many times over — one script composed
+    // by several bundles — where repeating it fills the line without adding
+    // anything. Squashed and deduplicated, order preserved.
+    let mut uniq: Vec<String> = Vec::new();
+    for (label, _) in items {
+        let flat = label.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !uniq.contains(&flat) {
+            uniq.push(flat);
+        }
+    }
+    let rest = uniq.len().saturating_sub(UNREVERTIBLE_NAMED);
+    let mut list = uniq
+        .iter()
+        .take(UNREVERTIBLE_NAMED)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if rest > 0 {
+        list.push_str(&format!(", +{rest} more"));
+    }
     println!(
-        "  {} {} change(s) `temper undo` {cannot}:",
-        ui::yellow(ui::g_warn()),
+        "  {} `temper undo` {cannot} {} of this run's change(s): {list}",
+        ui::cyan(ui::g_info()),
         items.len()
     );
-    for (label, _) in items {
-        println!("      {label}");
-    }
-    // Deduplicated, order preserved: two different reasons are two lines, and
-    // the common case of one reason is one line.
+    // Deduplicated, order preserved, joined — two distinct reasons are rare and
+    // still fit beside each other; one is the common case.
     let mut seen: Vec<&str> = Vec::new();
     for (_, why) in items {
         if !seen.contains(why) {
             seen.push(why);
         }
     }
-    // A blank line first. Dimmed and outdented was not enough separation on its
-    // own — the legend sat directly under the last row and read as another one,
-    // which is the thing being fixed rather than a smaller version of it.
-    println!();
-    for why in seen {
-        println!("    {}", ui::dim(why));
-    }
+    println!("    {}", ui::dim(&seen.join(" · ")));
 }
 
 /// How to phrase `undo`'s limits. A dry run is a forecast, so the same list has
