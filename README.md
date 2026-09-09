@@ -16,6 +16,15 @@ temper install    # converge the machine to the spec
 temper undo       # revert the last run
 ```
 
+**A folder you can read end to end:** [jakobhviid/alloy](https://github.com/jakobhviid/alloy)
+is a complete temper home for a stock Bazzite desktop — MIT, clone it and cut it
+down. It is one shape rather than the shape; what makes it worth reading is that
+it works through the awkward cases, each with the reasoning inline: a repo file
+that has to be byte-identical to what a package's `%post` writes, a path the spec
+owns that a package also writes, a marker region inside a root-owned file a
+vendor co-authors. Maintained separately from this tool — `temper --llm` is the
+contract, that folder is one application of it.
+
 ## Why temper
 
 - **Real files, not a DSL.** A recipe is "as readable as a Brewfile" — an actual

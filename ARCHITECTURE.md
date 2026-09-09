@@ -70,8 +70,11 @@ Folder discovery (built, `discovery.rs`) — first hit wins:
    `/run/media/$USER`.
 
    `steel` is in that list because it is the name of the folder temper was built
-   for — the author's own fleet spec. Nothing about temper depends on it: name
-   yours `temper-home` or `.temper` for the same zero-config discovery, or call it
+   for — the author's own fleet spec, which is private. Its public sibling is
+   [alloy](https://github.com/jakobhviid/alloy), a readable folder for a stock
+   Bazzite desktop, for anyone who wants to see a whole one rather than the
+   fragments these docs quote. Nothing about temper depends on either: name yours
+   `temper-home` or `.temper` for the same zero-config discovery, or call it
    whatever you like and point temper at it with `temper setup` or `$TEMPER_DIR`.
    Where these docs show a path like `~/Developer/steel`, read it as "wherever
    your folder lives".
