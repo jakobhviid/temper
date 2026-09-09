@@ -484,11 +484,39 @@ mode     = "0600"            # optional octal file mode. Drift-checked as well a
                              #   converge and anything it enforces it must also be
                              #   able to report (Principle #7).
 
-# block: ensure a marker-delimited region in a user file (idempotent)
+# block: ensure a marker-delimited region in a file (idempotent)
 [[step]]
 block  = "assets/snippet"    # content to place inside the markers
-in     = "~/.ssh/config"     # the user-owned file
+in     = "~/.ssh/config"     # the file the region lives in
 marker = "ssh-include"       # marker label
+
+# A ROOT-owned block: the same region semantics, written as root. Add any of
+# `owner`/`group`/`mode` and the write goes through `sudo install` like a
+# `sysfile`, joining the one up-front password ask.
+[[step]]
+block  = "assets/browsers"
+in     = "/etc/1password/custom_allowed_browsers"
+marker = "temper"
+owner  = "root"
+group  = "root"
+mode   = "0644"
+# This is the primitive for a file a PACKAGE owns and you own a few lines of.
+#   1Password's cask installs `custom_allowed_browsers` with its own header and
+#   entries; a spec adds browser basenames. A whole-file `sysfile` would clobber
+#   the vendor's content and fight the cask on every update, so the region is
+#   what you want — and it has to be written as root.
+#
+#   Two consequences worth knowing before you use it:
+#     - `undo` does NOT cover it. An ordinary block journals its region and
+#       reverts; a root-owned one writes outside the journal, because undo
+#       restores a file with an unprivileged write and cannot touch a root path.
+#       The run says so at plan time, before you confirm.
+#     - markers are comments, so the target must tolerate them. 1Password ignores
+#       `#` lines; a strict-parsing file may not, and that is a judgement per
+#       file. Where markers cannot go, the choice is a whole-file `sysfile` or
+#       nothing — there is deliberately no "ensure this line exists" primitive,
+#       because "present somewhere" has no meaningful drift once the vendor
+#       reorders the file.
 
 # setkey: set ONE key in a structured store, preserving siblings.
 # Exactly one `setkey` table per step. One worked example per backend:

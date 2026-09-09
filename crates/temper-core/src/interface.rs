@@ -270,7 +270,15 @@ pub const PROVIDERS: &[ProviderSpec] = &[
             "no ignore list for deployed paths yet; an edited file is reported rather than removed, \
              which covers the case that matters",
         ),
-        revertible: Col::Yes,
+        // Split by target, not by primitive: `copy` and a plain `block` journal
+        // their write and revert; `sysfile` and a root-owned `block` go through
+        // `sudo install` and are not journaled, because `undo` restores with an
+        // unprivileged write and an entry for a root path would be a revert
+        // record certain to fail. Named at plan time instead.
+        revertible: Col::No(
+            "root-owned writes (`sysfile`, a `block` with owner/group/mode) are not journaled; \
+             `copy` and a plain `block` are",
+        ),
         residue: Col::Yes,
     },
     ProviderSpec {

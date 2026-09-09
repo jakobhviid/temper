@@ -161,7 +161,12 @@ fn step_finding(
     }
     if let (Some(block), Some(in_file)) = (&step.block, &step.in_file) {
         let marker = step.marker.as_deref().unwrap_or("block");
-        let state = primitives::block_state(&home.join(block), &expand_tilde(in_file), marker)?;
+        let state = primitives::block_state(
+            &home.join(block),
+            &expand_tilde(in_file),
+            marker,
+            &sysfile_opts(step),
+        )?;
         return Ok(Some(Finding::state(app, "block", in_file.clone(), state)));
     }
     if let Some(sk) = &step.setkey {
@@ -262,6 +267,24 @@ fn root_steps(
             continue;
         }
 
+        // A root-owned `block` escalates exactly like a `sysfile`, so it belongs
+        // in the same up-front ask. Missing here, the fingerprint prompt arrives
+        // mid-converge — and on a parent-keyed sudo cache it is a second scan
+        // rather than a reuse of the credential already held.
+        if let (Some(block), Some(in_file)) = (&step.block, &step.in_file) {
+            let opts = sysfile_opts(step);
+            if primitives::block_is_escalated(&opts) {
+                let state = primitives::block_state(
+                    &home.join(block),
+                    &expand_tilde(in_file),
+                    step.marker.as_deref().unwrap_or(""),
+                    &opts,
+                )?;
+                if state != FileState::InSync {
+                    own.push(in_file.clone());
+                }
+            }
+        }
         if let (Some(sysfile), Some(to)) = (&step.sysfile, &step.to) {
             // In sync → nothing to write → no root needed. `sysfile_state` answers
             // this without privilege when the destination is readable, and degrades
@@ -582,6 +605,12 @@ fn unrevertible_reason(step: &Step) -> Option<&'static str> {
     }
     if step.sysfile.is_some() {
         return Some("`sysfile` writes root-owned state outside the journal");
+    }
+    // Only the escalated case. An ordinary `block` journals its region and
+    // reverts cleanly, so reporting every block here would warn about work
+    // `undo` covers perfectly well.
+    if step.block.is_some() && primitives::block_is_escalated(&sysfile_opts(step)) {
+        return Some("a root-owned `block` writes outside the journal, like `sysfile`");
     }
     if let Some(sk) = &step.setkey {
         if sk.backend == "defaults" {
@@ -1747,7 +1776,13 @@ fn apply_step(
     if let (Some(block), Some(in_file)) = (&step.block, &step.in_file) {
         let marker = step.marker.as_deref().unwrap_or("block");
         let changed =
-            primitives::block_apply(&home.join(block), &expand_tilde(in_file), marker, journal)?;
+            primitives::block_apply(
+                &home.join(block),
+                &expand_tilde(in_file),
+                marker,
+                &sysfile_opts(step),
+                journal,
+            )?;
         return Ok(Applied::from_changed(changed));
     }
     if let Some(sk) = &step.setkey {

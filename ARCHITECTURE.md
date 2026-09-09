@@ -208,8 +208,18 @@ above.
 | `rpm-ostree` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `rpm-repo` | n/a | ✅ | ✅ | ✅ | n/a | n/a | n/a | n/a | ✅ | ❌ | ✅ |
 | `dconf` | ✅ | ✅ | ✅ | ⚠ | ❌ | ✅ | ✅ | ⚠ | ✅ | ✅ | ❌ |
-| `deployed-files` (`copy` / `sysfile` / `block`) | ✅ | n/a | ✅ | ✅ | ✅ | n/a | n/a | ❌ | ✅ | ✅ | ✅ |
+| `deployed-files` (`copy` / `sysfile` / `block`) | ✅ | n/a | ✅ | ✅ | ✅ | n/a | n/a | ❌ | ✅ | ⚠ | ✅ |
 | `profile` | ✅ | ❌ | ✅ | ⚠ | ❌ | ❌ | ❌ | ❌ | ⚠ | ❌ | ❌ |
+
+`deployed-files` scores ⚠ on **revertible** because the class is split, and
+which half you are in is a property of the target rather than the primitive. A
+`copy` and an ordinary `block` journal what they wrote and revert cleanly. A
+`sysfile`, and a `block` that declares `owner`/`group`/`mode`, write root-owned
+state through `sudo install` and are not journaled — `undo` restores a file with
+an unprivileged write, so an entry for a root path would be an undo record
+guaranteed to fail, which is worse than none. The run names them at plan time
+instead (Principle #7, AGENTS.md question 7), so the limit is known before it is
+accepted. Teaching `undo` to escalate is the follow-on and is in `ROADMAP.md`.
 
 `rpm-repo` carries four `n/a` columns, which is unusual enough to say why in
 prose. A repo is *declared* like a package and *deployed* like a file, so its

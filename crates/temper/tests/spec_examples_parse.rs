@@ -82,7 +82,7 @@ fn every_spec_example_loads_as_a_real_folder() {
     // cannot be mistaken for a schema error.
     for f in [
         "x.conf", "snippet", "setup.sh", "check.sh", "x.mobileconfig",
-        "1password.policy", "reference.json",
+        "1password.policy", "reference.json", "browsers",
     ] {
         fs::write(h.join("assets").join(f), "# fixture\n").unwrap();
     }

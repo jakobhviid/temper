@@ -390,28 +390,74 @@ pub fn block_removed(existing: &str, marker: &str) -> Result<Option<(String, Str
     }
 }
 
-pub fn block_state(body_src: &Path, target: &Path, marker: &str) -> Result<FileState> {
+/// Whether this block is written as root, and with what ownership.
+///
+/// `None` is the ordinary user-owned block. `Some` means the target belongs to
+/// root — a vendor-installed file in `/etc` whose content is mostly the
+/// vendor's and a few lines of which are the spec's.
+pub fn block_is_escalated(opts: &SysfileOpts) -> bool {
+    opts.owner.is_some() || opts.group.is_some() || opts.mode.is_some()
+}
+
+pub fn block_state(
+    body_src: &Path,
+    target: &Path,
+    marker: &str,
+    opts: &SysfileOpts,
+) -> Result<FileState> {
     let body = fs::read_to_string(body_src)
         .with_context(|| format!("reading block source {}", body_src.display()))?;
-    if !target.exists() {
-        return Ok(FileState::Missing);
+    // Same three-way as `sysfile_state`, and for the same reason: a root-only
+    // parent must not make a present region read as absent.
+    match presence(target) {
+        Presence::Absent => return Ok(FileState::Missing),
+        Presence::Unreadable => return Ok(FileState::Unavailable),
+        Presence::There => {}
     }
-    let existing =
-        fs::read_to_string(target).with_context(|| format!("reading {}", target.display()))?;
+    // And "cannot look" is not "not in sync" — Principle #12. Reading unreadable
+    // as drifted would escalate on every run to rewrite content nobody compared.
+    let Ok(existing) = fs::read_to_string(target) else {
+        return Ok(FileState::Unavailable);
+    };
     let (begin, end) = markers(marker);
     let want = block_desired(&existing, &begin, &end, &body)
         .with_context(|| format!("in {}", target.display()))?;
-    Ok(if existing == want {
-        FileState::InSync
-    } else {
-        FileState::Drifted
-    })
+    if existing != want {
+        return Ok(FileState::Drifted);
+    }
+    // Ownership and mode are part of the declaration where they are given, so
+    // they are part of drift too — the region can match byte for byte on a file
+    // whose owner has been changed underneath it.
+    #[cfg(unix)]
+    if block_is_escalated(opts) {
+        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::fs::PermissionsExt;
+        let md = fs::metadata(target)?;
+        if let Some(m) = opts.mode {
+            let want = u32::from_str_radix(m.strip_prefix("0o").unwrap_or(m), 8)?;
+            if md.permissions().mode() & 0o777 != want {
+                return Ok(FileState::Drifted);
+            }
+        }
+        if let Some(o) = opts.owner {
+            if uid_of(o).is_some_and(|u| u != md.uid()) {
+                return Ok(FileState::Drifted);
+            }
+        }
+        if let Some(g) = opts.group {
+            if gid_of(g).is_some_and(|gid| gid != md.gid()) {
+                return Ok(FileState::Drifted);
+            }
+        }
+    }
+    Ok(FileState::InSync)
 }
 
 pub fn block_apply(
     body_src: &Path,
     target: &Path,
     marker: &str,
+    opts: &SysfileOpts,
     journal: &mut Journal,
 ) -> Result<bool> {
     let body = fs::read_to_string(body_src)
@@ -430,6 +476,55 @@ pub fn block_apply(
         .with_context(|| format!("in {}", target.display()))?;
     if before.as_deref() == Some(want.as_bytes()) {
         return Ok(false);
+    }
+    // The escalated path: a marker region inside a file root owns. `owner`/
+    // `group`/`mode` are how the author says so, and they used to parse and be
+    // silently ignored — the step loaded, drift reported it, and `install`
+    // attempted an unprivileged `fs::write` to `/etc` with no password even
+    // requested. A declaration that looks present and does nothing.
+    if block_is_escalated(opts) {
+        // Staged through a temp file because `sudo install` copies a source; the
+        // desired content is computed here rather than being an asset, since a
+        // block's content is the region, not the file.
+        let staged = std::env::temp_dir().join(format!(
+            "temper-block-{}-{}",
+            std::process::id(),
+            target.file_name().and_then(|n| n.to_str()).unwrap_or("region")
+        ));
+        fs::write(&staged, want.as_bytes())
+            .with_context(|| format!("staging {}", staged.display()))?;
+        if let Some(mk) = sysfile_mkdir_argv(target) {
+            let ok = std::process::Command::new(&mk[0])
+                .args(&mk[1..])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !ok {
+                let _ = fs::remove_file(&staged);
+                bail!(
+                    "could not create {} for {}",
+                    target.parent().unwrap_or(target).display(),
+                    target.display()
+                );
+            }
+        }
+        let argv = sysfile_install_argv(&staged, target, opts);
+        let status = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .status()
+            .with_context(|| format!("running {}", argv.join(" ")));
+        let _ = fs::remove_file(&staged);
+        if !status?.success() {
+            bail!("sudo install of {} failed", target.display());
+        }
+        // Deliberately NOT journaled. `undo` reverts a file write with a plain
+        // `fs::write`, which cannot touch a root-owned target — so recording one
+        // would create an undo entry guaranteed to fail, which is worse than
+        // recording none: the run would promise a revert it cannot perform.
+        // `plan::unrevertible_reason` names it at plan time instead, so the user
+        // learns before confirming (AGENTS.md question 7). Teaching `undo` to
+        // escalate is the follow-on, tracked in ROADMAP.
+        return Ok(true);
     }
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
@@ -1501,9 +1596,43 @@ fn gid_of(name: &str) -> Option<u32> {
 
 /// Drift for a `sysfile`: Missing (absent), Unavailable (present but unreadable
 /// without escalation — degrade, don't prompt), else content + mode + owner/group.
+/// Whether a destination is there — distinguishing "no" from "cannot tell".
+///
+/// `Path::exists()` answers any stat error as `false`, so a root-only parent
+/// directory makes a file that is present and byte-identical read as **absent**.
+/// A `sysfile` under `/etc/sudoers.d` (0750) therefore reported `missing`
+/// forever: drift never showed it in sync, and every converge rewrote it and
+/// escalated to do so. The `Unavailable` branch written for this sat behind the
+/// `exists()` check and could only ever be reached for an unreadable file inside
+/// a *readable* parent — the case that does not happen.
+///
+/// Three answers, because the caller needs all three and two of them were being
+/// folded together (Principle #12).
+enum Presence {
+    There,
+    Absent,
+    /// Present or not — the probe was refused, and that is not evidence of
+    /// absence.
+    Unreadable,
+}
+
+fn presence(p: &Path) -> Presence {
+    match fs::symlink_metadata(p) {
+        Ok(_) => Presence::There,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Presence::Absent,
+        Err(_) => Presence::Unreadable,
+    }
+}
+
 pub fn sysfile_state(src: &Path, dest: &Path, opts: &SysfileOpts) -> Result<FileState> {
-    if !dest.exists() {
-        return Ok(FileState::Missing);
+    match presence(dest) {
+        Presence::Absent => return Ok(FileState::Missing),
+        // Reported rather than converged-around: comparing it would mean reading
+        // a root-only path, and drift is unprivileged on purpose. So the honest
+        // answer is "cannot tell", and a converge still writes — identical bytes
+        // where it was already in sync, which costs an escalation and no harm.
+        Presence::Unreadable => return Ok(FileState::Unavailable),
+        Presence::There => {}
     }
     let want = fs::read(src).with_context(|| format!("reading source {}", src.display()))?;
     let have = match fs::read(dest) {

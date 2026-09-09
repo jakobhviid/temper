@@ -217,6 +217,24 @@ sudo already does; today it finds out when the removal fails.
   the harm. So this is a spec-authoring hazard, documented in SPEC where the
   field is defined, and `retire_packages` is the declaration for the intent
   behind it.
+- **`undo` cannot revert a root-owned write — the one open gap in
+  `deployed-files`.** `sysfile` and a `block` declaring `owner`/`group`/`mode`
+  both write through `sudo install`; neither is journaled, because `undo`
+  restores a file with an unprivileged `fs::write` and an entry for a root path
+  would be a revert record certain to fail — worse than none, since the run would
+  promise a revert it cannot perform. Both are named at plan time instead.
+  The follow-on is precise: record on the journal entry that the write was
+  root-owned (an optional field, so existing runs still parse) and have the
+  revert use `sudo install` for those. `undo` is user-invoked and interactive, so
+  prompting there is expected rather than a surprise — `mas` already does.
+  That would make a root-owned `block` the first root write `undo` covers, which
+  is worth more than the one call site it was asked for.
+- **A root-only parent still costs one escalation per converge.** `sysfile_state`
+  and `block_state` report `unavailable` rather than `missing` for a target they
+  cannot stat, which is honest — but a converge cannot compare what it cannot
+  read, so it writes identical bytes and escalates to do it. Comparing would mean
+  reading a root-only path during `drift`, and drift is unprivileged on purpose.
+  The trade is deliberate; the cost is one `sudo install` per such step per run.
 - **The repo-retention guard has no integration test.** When an un-layer fails,
   `prune` keeps a repo a still-layered package needs to re-resolve. The branch is
   written and the un-layer's honesty is covered
