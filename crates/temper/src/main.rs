@@ -1041,6 +1041,27 @@ fn save_and_report(target: &std::path::Path, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Say which providers could not finish, and that the run is therefore short of
+/// the declared state.
+///
+/// A converge that partly fails no longer aborts — one bad cask must not skip
+/// flatpak, rpm-ostree and every config step. That only makes it better if the
+/// summary says so: a run that prints "install m: 30 package(s) declared" and
+/// exits 0 with the reason buried in stderr is the quieter half of the same
+/// lie, and quieter is not better. So it is a warning, and it names `drift`,
+/// because temper does not parse which entries a package manager lost — the
+/// probe is what knows, and `drift` is the probe.
+fn print_failed_providers(failed: &[&'static str]) {
+    if failed.is_empty() {
+        return;
+    }
+    println!(
+        "  {} {} could not finish — the machine is short of the spec; run `temper drift` to see what is missing",
+        ui::yellow(ui::g_warn()),
+        failed.join(" and ")
+    );
+}
+
 /// How many affected items to name before the rest become a count.
 ///
 /// Enough to identify the usual case at a glance, few enough to stay on one
@@ -1176,7 +1197,8 @@ fn cmd_install(
                 "unrevertible": r.unrevertible.iter()
                     .map(|(label, why)| format!("{label} — {why}"))
                     .collect::<Vec<_>>(),
-                "skipped": r.skipped
+                "skipped": r.skipped,
+                "failed": r.failed
             })
         );
     } else if packages_only {
@@ -1190,6 +1212,7 @@ fn cmd_install(
             "install-missing {}: {verb} {} declared package(s), config skipped",
             m.name, r.packages
         );
+        print_failed_providers(&r.failed);
         print_unrevertible(&r.unrevertible, cannot);
         if r.reboot {
             println!("  ! reboot required (rpm-ostree layered a package)");
@@ -1228,6 +1251,7 @@ fn cmd_install(
             "install {}: {} package(s) declared, {steps}",
             m.name, r.packages
         );
+        print_failed_providers(&r.failed);
         print_unrevertible(&r.unrevertible, cannot);
         if r.reboot {
             println!("  ! reboot required (rpm-ostree layered a package)");
@@ -1255,7 +1279,8 @@ fn cmd_update(json: bool, verbose: bool) -> Result<()> {
                 // What the run actually changed, beside what the machine declares.
                 "upgraded": r.upgraded,
                 "reapplied": r.steps_changed, "total": r.steps_total,
-                "skipped": r.skipped
+                "skipped": r.skipped,
+                "failed": r.failed
             })
         );
     } else {
@@ -1276,6 +1301,7 @@ fn cmd_update(json: bool, verbose: bool) -> Result<()> {
             "update {}: {pkgs}, re-applied {} step(s), {} changed",
             m.name, r.steps_total, r.steps_changed
         );
+        print_failed_providers(&r.failed);
     }
     remind_if_dirty(&home, &manifest::effective_git(&ft.git, &m.git));
     Ok(())

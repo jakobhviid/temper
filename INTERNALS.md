@@ -34,7 +34,14 @@ and every phase reports its own effect in temper's words. Three rules fall out,
 and they apply to new code as much as old:
 
 1. **A child's output never stands as temper's.** Capture, replay on failure, and
-   let warnings through. Stream only where the child's output *is* the operation:
+   let warnings through — and keep the child's *verdict*, which is the half that
+   is easy to drop. Replaying a log tells the person at the terminal; it tells
+   `--json` nothing, and it does not decide what the run does next. A provider
+   that could not finish is recorded and named in the summary, and the converge
+   continues to the providers and phases that do not depend on it. Aborting and
+   reporting success are both wrong, in opposite directions: one skipped every
+   later phase for a single bad cask, the other would bury the failure in
+   stderr behind a summary that read as clean. Stream only where the child's output *is* the operation:
    `prune`'s removals (destructive, confirmed, the user is watching) and the
    self-update's `brew upgrade temper -y`.
 

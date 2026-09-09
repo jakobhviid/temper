@@ -1846,6 +1846,14 @@ pub struct InstallReport {
     /// Steps skipped because their `when` probe failed (app not present) —
     /// announced loudly (Principle #6). Each entry is a probe description.
     pub skipped: Vec<String>,
+    /// Providers whose converge reported failure, by name.
+    ///
+    /// The run continues past one — a bad cask is not a reason to skip flatpak,
+    /// rpm-ostree and every config step — so the summary has to say the machine
+    /// did not reach the declared state. Without this, the only alternative to
+    /// aborting was reporting success, which is the quieter half of the same
+    /// lie. Mirrors `PruneOutcome::failed`, which already answers this shape.
+    pub failed: Vec<&'static str>,
 }
 
 /// Install flow: phase 1 converges packages (whole-machine), phase 2 applies
@@ -1936,7 +1944,8 @@ pub fn run_install(
             .map(|p| (p.manager, p.match_name()))
             .collect()
     };
-    let packages = providers::converge(&effective, dry_run, verbose)?;
+    let converged = providers::converge(&effective, dry_run, verbose)?;
+    let packages = converged.considered;
     // Journal per provider, so undo dispatches to the right uninstall. Recorded
     // after the converge and only for managers whose install is not also an
     // upgrade path — see `Entry::PackagesInstalled`.
@@ -1977,6 +1986,7 @@ pub fn run_install(
         journal.commit()?;
         return Ok(InstallReport {
             packages,
+            failed: converged.failed.clone(),
             upgraded: None, // `install-missing` adds, never upgrades
             steps_changed: 0,
             steps_ran: 0,
@@ -2103,6 +2113,7 @@ pub fn run_install(
     }
     Ok(InstallReport {
         packages,
+        failed: converged.failed,
         upgraded: None, // `install` converges the declared set; `update` upgrades
         steps_changed: changed,
         steps_ran: ran,
@@ -2882,10 +2893,14 @@ pub fn run_update(
     // `brew outdated` was observed reporting nothing while `brew upgrade` upgraded
     // twelve packages — see `installed_versions`.
     let mut upgraded = None;
+    // Same channel `install` reports on: `update`'s upgrade is best-effort per
+    // provider, so a brew or flatpak that could not finish has to reach the
+    // report rather than only the terminal.
+    let mut failed: Vec<&'static str> = Vec::new();
     if !effective.is_empty() {
         providers::trust_taps(brew_trust, verbose)?;
         let before = providers::installed_versions();
-        providers::upgrade(verbose)?;
+        failed = providers::upgrade(verbose)?;
         let after = providers::installed_versions();
         upgraded = Some(providers::upgraded_between(&before, &after));
     }
@@ -2969,6 +2984,7 @@ pub fn run_update(
     }
     Ok(InstallReport {
         packages: effective.len(),
+        failed,
         upgraded,
         steps_changed: changed,
         steps_ran: ran,

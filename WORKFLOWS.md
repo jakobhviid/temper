@@ -71,7 +71,14 @@ temper restore-dconf # Linux desktop only: load the dconf snapshot back
 ```
 
 `install` adds missing packages (brew/flatpak/mas/gext/rpm), applies every
-config step, and runs one-time setup. `manual` steps (e.g. `speaker-eq`) are
+config step, and runs one-time setup. **One provider failing does not cancel the
+rest.** An unavailable cask, a remote that has gone away, an rpm nothing
+provides — each is reported and the run carries on, so the other managers and
+every config step still converge. The summary then names the provider that could
+not finish and points at `temper drift`, which lists exactly what is still
+missing: temper does not parse a package manager's output to guess which entries
+it lost, because the probe is what knows. `--json` carries the same list as
+`failed`, so a caller can tell a short converge from a complete one. `manual` steps (e.g. `speaker-eq`) are
 skipped — run them by hand. On a fresh desktop, `restore-dconf` reloads GNOME/Ptyxis
 state from the snapshot (it's a separate, confirm-gated verb because it clobbers
 live tweaks). *(RIS: `bootstrap.sh` → `just install` → `just gnome-restore`.)*

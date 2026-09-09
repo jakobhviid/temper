@@ -653,7 +653,31 @@ fn converge_via(m: Manager) -> ConvergeVia {
     }
 }
 
-pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize> {
+/// What a package converge achieved, and what it could not.
+///
+/// The second field exists because a converge that partly failed used to be
+/// expressible only two ways, and both were wrong. brew `bail!`ed, which stopped
+/// every provider after it and the whole config phase for one bad cask; flatpak
+/// discarded its child's verdict, so the failure reached the terminal and
+/// nothing else. Neither could tell `--json` that the machine did not reach the
+/// declared state.
+///
+/// Only the providers that run ONE aggregate child are named here, because for
+/// them the child's exit status is the only signal there is. `mas`, `rpm-ostree`
+/// and `gext` go through `batch_then_isolate`, which retries per item and warns
+/// with the item's own name — that information is already delivered, and
+/// repeating it as a provider-level failure would say less, not more.
+pub struct Converged {
+    /// Declared packages considered by this converge.
+    pub considered: usize,
+    /// Providers whose aggregate child reported failure. Named rather than
+    /// counted: "brew could not finish" and "flatpak could not finish" send you
+    /// to different places.
+    pub failed: Vec<&'static str>,
+}
+
+pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<Converged> {
+    let mut failed: Vec<&'static str> = Vec::new();
     let brewish: Vec<&Pkg> = effective
         .iter()
         .filter(|p| converge_via(p.manager) == ConvergeVia::BrewBundle)
@@ -684,12 +708,28 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize
         };
         let _ = std::fs::remove_file(&tmp);
         if let Some(log) = failed_log {
-            // Replay everything the capture swallowed, then fail (the exec-step
-            // contract: quiet on success, the full story on failure).
+            // Replay everything the capture swallowed (the exec-step contract:
+            // quiet on success, the full story on failure) — then carry on.
+            //
+            // This used to `bail!`, and `run_install` calls `converge` with `?`,
+            // so one failing entry aborted the entire converge: flatpak, GNOME
+            // extensions and rpm-ostree never ran, and neither did a single
+            // config step. brew does not behave that way itself — it attempts
+            // every Brewfile entry and reports how many failed — so the
+            // all-or-nothing was temper's alone, and brew was the only provider
+            // that had it. Measured, because guessing a tool's unhappy path is
+            // how the last defect here got in: two bad entries yield "Installing
+            // <a> has failed! / Installing <b> has failed! / `brew bundle`
+            // failed! 2 Brewfile dependencies failed to install", exit 1.
+            //
+            // Which entries failed is deliberately not parsed out of that. A
+            // package manager's verdict is never temper's; the probe is. So the
+            // honest report is "brew could not finish", and `drift` names every
+            // package still missing from its own observation.
             if !log.is_empty() {
                 eprint!("{log}");
             }
-            bail!("brew bundle failed");
+            failed.push("brew");
         }
     }
 
@@ -710,9 +750,14 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize
         for f in &flatpaks {
             cmd.arg(f);
         }
-        // best-effort: a missing remote or app shouldn't abort the whole run —
-        // but it must be *reported*, not swallowed the way `let _ = status()` did.
-        run_child(cmd, verbose, "flatpak install", "installing flatpaks");
+        // Best-effort: a missing remote or app must not abort the whole run —
+        // but it must be *reported*, and reaching the terminal is only half of
+        // that. `run_child` replays the log and warns; discarding its verdict
+        // meant nothing recorded the failure, so `--json` described a converge
+        // that had not happened.
+        if !run_child(cmd, verbose, "flatpak install", "installing flatpaks") {
+            failed.push("flatpak");
+        }
     }
 
     // Forgiving mas: install each App Store app on its own; a failure is warned
@@ -773,7 +818,7 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<usize
         }
     }
 
-    Ok(effective.len())
+    Ok(Converged { considered: effective.len(), failed })
 }
 
 /// `brew trust` third-party taps before any converge/upgrade. Homebrew 5.2+
@@ -922,7 +967,8 @@ pub fn upgraded_between(
 /// Upgrade installed packages (brew + flatpak). Best-effort; VM-verified. The
 /// caller only invokes this when packages are actually declared, so a machine
 /// with an empty set never triggers a global upgrade.
-pub fn upgrade(verbose: bool) -> Result<()> {
+pub fn upgrade(verbose: bool) -> Result<Vec<&'static str>> {
+    let mut failed: Vec<&'static str> = Vec::new();
     if have("brew") {
         let mut cmd = Command::new("brew");
         cmd.arg("upgrade");
@@ -935,7 +981,9 @@ pub fn upgrade(verbose: bool) -> Result<()> {
         if !verbose {
             cmd.arg("--quiet");
         }
-        run_child(cmd, verbose, "brew upgrade", "upgrading packages");
+        if !run_child(cmd, verbose, "brew upgrade", "upgrading packages") {
+            failed.push("brew");
+        }
     }
     if have("flatpak") {
         let mut cmd = Command::new("flatpak");
@@ -944,10 +992,13 @@ pub fn upgrade(verbose: bool) -> Result<()> {
         // its remotes carry nothing new, which — mid-run, in flatpak's voice —
         // reads as temper's verdict on a converge that is about to install and
         // upgrade plenty. The download progress it prints instead becomes a
-        // spinner, and a real failure is now reported rather than discarded.
-        run_child(cmd, verbose, "flatpak update", "upgrading flatpaks");
+        // spinner, and a real failure is reported rather than discarded — which
+        // means keeping the verdict, not only replaying the log to the terminal.
+        if !run_child(cmd, verbose, "flatpak update", "upgrading flatpaks") {
+            failed.push("flatpak");
+        }
     }
-    Ok(())
+    Ok(failed)
 }
 
 /// Remove installed-but-not-declared packages. brew-family goes through

@@ -604,9 +604,11 @@ this can't be replaced by naive set subtraction*.")
 
 **MAS.** `mas` is converged **separately** from the aggregate `brew bundle`, in
 its own `mas install` loop, because it is the flakiest provider (no App Store
-sign-in, an app not tied to the Apple ID). A MAS failure is **warned (to stderr)
-and skipped**, never fatal — so it can't abort the rest of a converge
-(Principle #6). Sign in to the App Store first for the installs to succeed.
+sign-in, an app not tied to the Apple ID). No provider's failure aborts a
+converge; what is particular to MAS is that a failure here is an ordinary
+*condition* rather than an error — warned to stderr and skipped, with nothing
+for the summary to add (Principle #6). Sign in to the App Store first for the
+installs to succeed.
 
 ### The gate: presence probes config
 
