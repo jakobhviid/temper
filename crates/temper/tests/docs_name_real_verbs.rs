@@ -166,3 +166,106 @@ fn every_doc_is_embedded_in_the_llm_guide_or_exempt() {
          {missing:?}"
     );
 }
+
+/// Every `--flag` the docs show inside a `temper …` command is one temper accepts.
+///
+/// The sibling of the verb check above, and it was missing. A doc could name a
+/// flag temper has never had and nothing would notice — which is not
+/// hypothetical: SPEC told the reader to select a machine with
+/// `--machine <name>` when the machine name is a **positional** argument, so the
+/// one instruction in that paragraph errored with "unexpected argument". It
+/// shipped into `temper --llm`, where every agent reading the guide would copy
+/// it, and a user found it by running it.
+///
+/// **Acceptance, not the help listing.** The first version of this compared
+/// against `--help` and failed on `--csw`, which works perfectly well — clap
+/// takes it as an alias and simply does not print it. The property worth
+/// asserting is the one that bites a reader: does the command they were told to
+/// run do something other than error. So each flag is put to the parser with the
+/// verb it was documented beside. Unlike the verb check, an alias IS good enough
+/// here: `--csw` is introduced in the same document that uses it, so it teaches
+/// a live spelling rather than keeping a dead one alive.
+///
+/// Scoped to flags inside a `` `temper …` `` span on purpose. These docs quote
+/// other tools constantly — `brew bundle --quiet`, `flatpak install -y
+/// --noninteractive`, `rpm -qf`, `install -Dm0644`, `Defaults timestamp_type=tty`
+/// — and none of those are temper's to validate. The verb check draws the
+/// boundary the same way and for the same reason.
+#[test]
+fn every_documented_flag_exists() {
+    let verbs = canonical_verbs();
+    let docs: [(&str, &str); 6] = [
+        ("WORKFLOWS.md", include_str!("../../../WORKFLOWS.md")),
+        ("README.md", include_str!("../../../README.md")),
+        ("ARCHITECTURE.md", include_str!("../../../ARCHITECTURE.md")),
+        ("SPEC.md", include_str!("../../../SPEC.md")),
+        ("PATTERNS.md", include_str!("../../../PATTERNS.md")),
+        ("ROADMAP.md", include_str!("../../../ROADMAP.md")),
+    ];
+
+    // (verb, flag) pairs, deduplicated — the same flag is documented many times
+    // and each probe is a process spawn.
+    let mut pairs: BTreeSet<(String, String)> = BTreeSet::new();
+    for (name, doc) in docs {
+        for line in doc.lines() {
+            for (i, _) in line.match_indices("temper ") {
+                let rest = &line[i + "temper ".len()..];
+                // Stop at the closing backtick where there is one, else end of
+                // line — a fenced `sh` block has no backticks around it.
+                let span = &rest[..rest.find('`').unwrap_or(rest.len())];
+                let mut words = span.split_whitespace();
+                let Some(first) = words.next() else { continue };
+                // A global-only invocation (`temper --llm`) has no verb.
+                let verb = verbs.contains(first).then(|| first.to_string());
+                for tok in span.split_whitespace() {
+                    if !tok.starts_with("--") {
+                        continue;
+                    }
+                    // Trim trailing punctuation and any `=value`.
+                    let flag: String = tok
+                        .trim_end_matches(|c: char| ",.;:)".contains(c))
+                        .split('=')
+                        .next()
+                        .unwrap_or(tok)
+                        .to_string();
+                    if flag.len() <= 2 {
+                        continue;
+                    }
+                    let _ = name;
+                    pairs.insert((verb.clone().unwrap_or_default(), flag));
+                }
+            }
+        }
+    }
+    assert!(
+        pairs.len() > 8,
+        "the scrape found only {} flags in temper commands — it has stopped seeing them: {pairs:?}",
+        pairs.len()
+    );
+
+    let mut bad: Vec<String> = Vec::new();
+    for (verb, flag) in &pairs {
+        // `--help` makes clap parse the arguments and then exit, so an accepted
+        // flag succeeds and an unknown one errors. Nothing is converged.
+        let mut c = Command::cargo_bin("temper").unwrap();
+        if !verb.is_empty() {
+            c.arg(verb);
+        }
+        let out = c.arg(flag).arg("--help").output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        if err.contains("unexpected argument") || err.contains("unrecognized") {
+            let shown = if verb.is_empty() {
+                format!("`temper {flag}`")
+            } else {
+                format!("`temper {verb} {flag}`")
+            };
+            bad.push(format!("{shown} — {}", err.lines().next().unwrap_or("").trim()));
+        }
+    }
+    bad.sort();
+    bad.dedup();
+    assert!(
+        bad.is_empty(),
+        "these docs tell the reader to run something that errors: {bad:#?}"
+    );
+}

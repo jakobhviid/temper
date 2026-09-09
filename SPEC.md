@@ -116,8 +116,11 @@ name     = "chronos"        # required; resolved against `hostname -s`.
                             #   machine and the fallback is gone: temper refuses
                             #   to guess and lists the names it knows, because
                             #   picking one would mean converging a box toward
-                            #   another box's intent. Pass `--machine <name>` to
-                            #   choose explicitly.
+                            #   another box's intent. The machine name is a
+                            #   POSITIONAL argument, not a flag: `temper drift
+                            #   <name>`. It selects which spec to evaluate, never
+                            #   a remote target — every verb runs against the
+                            #   machine it is on.
 os       = "mac"            # required; "mac" | "linux"
 role     = "desktop"        # optional; "desktop" | "server"
 apps     = ["shell", "ssh"] # bundle names in apps/
