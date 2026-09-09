@@ -392,7 +392,14 @@ fn warn_parent_scoped(beyond_temper: &[String]) {
 /// that only writes a file from this process does not. Missing one does not fail
 /// loudly — it hangs a run on an erased prompt.
 fn may_prompt(step: &Step) -> bool {
-    step.exec.is_some() || step.sysfile.is_some()
+    step.exec.is_some()
+        || step.sysfile.is_some()
+        // A root-owned `block` shells out to the same `sudo install` on the same
+        // inherited stdio, so it prompts for the same reason and needs the same
+        // clear line. Adding the escalation without adding it here would have
+        // put the password request back under the animation for the one
+        // primitive that had just gained the ability to ask for it.
+        || (step.block.is_some() && primitives::block_is_escalated(&sysfile_opts(step)))
 }
 
 /// Apply one step, giving the terminal to any step that can ask for a password.
@@ -402,8 +409,9 @@ fn may_prompt(step: &Step) -> bool {
 ///
 /// - **`exec`** — the escape hatch, arbitrary code that may invoke `sudo`, polkit
 ///   or PAM.
-/// - **`sysfile`** — escalates on temper's own behalf, shelling out to
-///   `sudo install` on inherited stdio (`primitives::sysfile_apply`).
+/// - **`sysfile`**, and a **`block` declaring `owner`/`group`/`mode`** — both
+///   escalate on temper's own behalf, shelling out to `sudo install` on
+///   inherited stdio (`primitives::sysfile_apply`, `primitives::block_apply`).
 ///
 /// All of those prompt on `/dev/tty`, which the region cannot see or protect: the
 /// question lands on top of the animation and the next tick erases it, leaving a
@@ -2448,6 +2456,54 @@ mod revertibility_tests {
 
     fn step(src: &str) -> Step {
         toml::from_str(src).unwrap()
+    }
+
+    /// Every step that can ask for a password gives the terminal up.
+    ///
+    /// `sudo` prompts on `/dev/tty`, which the live region cannot see: the
+    /// question lands on the animation and the next tick erases it, leaving a
+    /// run blocked on a password nobody was shown. So the decision is not
+    /// cosmetic, and it is one a new escalating primitive is easy to leave out
+    /// of — a root-owned `block` gained the ability to prompt and would have
+    /// prompted under the animation, because the list named `exec` and
+    /// `sysfile` by hand.
+    #[test]
+    fn anything_that_can_escalate_gets_the_terminal() {
+        for src in [
+            r#"exec = "setup.sh""#,
+            r#"sysfile = "assets/x"
+to = "/etc/x""#,
+            // The escalated block: any one of the three ownership fields is the
+            // author saying "this target belongs to root".
+            r#"block = "assets/x"
+in = "/etc/x"
+marker = "m"
+owner = "root""#,
+            r#"block = "assets/x"
+in = "/etc/x"
+marker = "m"
+mode = "0644""#,
+        ] {
+            assert!(
+                may_prompt(&step(src)),
+                "this step escalates, so it must get a clean line: {src}"
+            );
+        }
+        // …and nothing else does. A `copy` or a plain `block` writes in-process
+        // and cannot talk to the user, so suspending the region for it would
+        // cost a redraw for no reason.
+        for src in [
+            r#"copy = "assets/x"
+to = "~/x""#,
+            r#"block = "assets/x"
+in = "~/.zshrc"
+marker = "m""#,
+        ] {
+            assert!(
+                !may_prompt(&step(src)),
+                "this step cannot prompt and must not stand the region down: {src}"
+            );
+        }
     }
 
     /// AGENTS.md question 7: a run whose only changes were unrevertible reverts
