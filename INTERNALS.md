@@ -27,9 +27,11 @@ about *its remotes*, `git pull` says "Already up to date." about *the folder's
 upstream*, `brew trust` says "Already trusted tap". Left on the terminal, any of
 them reads as temper's verdict on the run, moments before temper installs and
 upgrades plenty — and, going to temper's stdout, breaks `--json` outright. So
-every converge child goes through one door (`providers::run_child`) and every
-phase reports its own effect in temper's words. Three rules fall out, and they
-apply to new code as much as old:
+every converge child is captured and rendered by `providers::run_with_spinner`,
+reached either through `run_child` (one command, log replayed on failure) or
+through `batch_then_isolate` (a list, retried per item to find which one failed),
+and every phase reports its own effect in temper's words. Three rules fall out,
+and they apply to new code as much as old:
 
 1. **A child's output never stands as temper's.** Capture, replay on failure, and
    let warnings through. Stream only where the child's output *is* the operation:
@@ -43,8 +45,16 @@ apply to new code as much as old:
    clears its region for the duration of an `exec`, and `sudo::acquire` asks up
    front, before any region exists. An animated line is not an option there — the
    prompt arrives at a moment we cannot predict (in practice within the first
-   seconds), so a slow step is announced **once**, in the same shape as its `✓`
-   (`⋯ <label>` then `✓ <label>`), which is the safe half of a spinner.
+   seconds) — so a slow step **appends** instead, in the same shape as its `✓`
+   (`⋯ <label>` then `✓ <label>`): the safe half of a spinner. It appends again
+   every 20s with the elapsed time, because appending is what makes it safe and a
+   line printed once says nothing about the next ten minutes.
+
+   The same split governs a captured child (`ui::StallWatch`). Silence stops the
+   animation after 10s, since redrawing is precisely what erases a prompt, and
+   then a heartbeat appends the elapsed time and the child's own last line. Both
+   halves matter: a frozen line is as unreadable as an erased prompt, and a
+   converge people kill halfway costs more than either.
 
    Rows are aligned by `ui::Columns`, shared with `drift` so both views measure the
    same way rather than each hard-coding a width. It works because temper **plans
