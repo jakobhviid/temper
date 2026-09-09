@@ -180,13 +180,6 @@ jobs:
           gh release create "v$VERSION" art/*.tar.gz \
             --title "v$VERSION" --notes "Automated build from ${GITHUB_SHA:0:7}" \
             || gh release upload "v$VERSION" art/*.tar.gz --clobber
-      - name: Prune old releases (keep the latest 10)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for t in $(gh release list --json tagName,createdAt -q 'sort_by(.createdAt) | reverse | .[10:] | .[].tagName'); do
-            gh release delete "$t" --cleanup-tag -y || true
-          done
       - name: Update Homebrew tap
         env:
           TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
