@@ -380,7 +380,14 @@ rpm_repos = [
 #       verified against the on-disk key. This is what most third-party repos
 #       ship: every COPR, Fedora's own updates, negativo17, Proton.
 #     - the repo fetches its own key over https (`gpgkey=https://...`), so there
-#       is nothing to bootstrap.
+#       is nothing to bootstrap — but only where the chain STAYS https. A key
+#       fetched over plain http authenticates nothing, and paired with
+#       `repo_gpgcheck=1` that is worse than no metadata check at all, because
+#       it reads as verified: whoever answers on-path supplies both the
+#       signature and the key that approves it. An https url in the file is not
+#       the same as an https fetch — follow the redirects and look at where you
+#       land (`curl -sIL <gpgkey>`). Seen in the wild: a github.io key url that
+#       301s to plain http on another domain.
 #     - the vendor's release package owns the key, and you declare THAT as an
 #       `rpm_ostree` package instead of hand-writing the repo (Terra ships
 #       `RPM-GPG-KEY-terra` in `terra-release`).

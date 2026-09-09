@@ -125,12 +125,21 @@ sudo already does; today it finds out when the removal fails.
   rather than removed, which covers the case that matters.
 - **`rpm-repo`'s four `n/a` columns** — deliberate, and each one a decision worth
   recording rather than re-arguing:
-  - *No `prune`, no `[ignore].rpm_repo`.* An undeclared file in
-    `/etc/yum.repos.d` is the base image's — fedora, updates, rpmfusion, terra —
-    not residue. Enumerating the directory as extras would report a wall of state
-    temper never wrote and must not remove, and the ignore list would exist only
-    to silence it again. What temper *did* write is in the ledger, which is the
-    `residue` column.
+  - *No `prune`, no `[ignore].rpm_repo`.* Most of `/etc/yum.repos.d` is the base
+    image's — fedora, updates, rpmfusion, terra — so enumerating the directory as
+    extras would report a wall of state temper never wrote and must not remove,
+    and the ignore list would exist only to silence it again. What temper *did*
+    write is in the ledger, which is the `residue` column.
+
+    A third kind exists, and this rationale must not read as though it does not:
+    a repo left by whatever managed the machine before temper is neither image
+    content nor ledger residue, so no direction reports it and no verb removes
+    it. `retire` is its answer — the primitive for exactly the state the ledger
+    structurally cannot see — and it composes with a provider that declines
+    prune, reporting `retired-present` with a remedy. Exercised on a real
+    machine against a stale `claude-desktop.repo`. If the decision is ever
+    revisited, the distinction that carries it is temper-written or not, and the
+    ledger already draws that line.
   - *No `reconcile`.* Absorbing a repo means copying a file **into** the folder
     and declaring it. Every existing reconcile appends a token to a list; this is
     authoring, and closer to what `snapshot` does. If it is ever built, it is that
