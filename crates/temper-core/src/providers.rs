@@ -1949,18 +1949,46 @@ pub struct RpmRepoCaps {
     pub converge: bool,
 }
 
+/// A declared repo and the spec unit that declared it.
+///
+/// The owner travels with the repo because the dedup below is what decides it:
+/// re-deriving "who declared this" from a second walk of the bundles can name a
+/// different file than the one whose copy actually converges, and a finding that
+/// names the wrong file to edit is worse than one that names none.
+#[derive(Debug, Clone)]
+pub struct OwnedRepo {
+    /// The bundle that declared it, or `None` for the machine's own `rpm_repos`.
+    pub from: Option<String>,
+    pub repo: manifest::RpmRepo,
+}
+
+/// One declared repo/key file: where it goes, how it compares, and who declared
+/// it. A repo and the key it cites are one declaration, so both rows carry the
+/// same owner.
+#[derive(Debug, Clone)]
+pub struct RepoState {
+    /// The bundle that declared it, or `None` for the machine's own `rpm_repos`.
+    pub from: Option<String>,
+    pub dest: PathBuf,
+    pub state: crate::primitives::FileState,
+}
+
 /// Every repo this machine declares — its bundles' (gated), then its own.
 ///
 /// Deduped by **destination**, not by source path: two bundles naming the same
 /// vendor file from different asset paths still install one repo, and the first
 /// declaration wins, which is the rule `effective_rpm` and `effective_remotes`
-/// already use.
-pub fn effective_rpm_repos(home: &Path, machine: &Machine) -> Result<Vec<manifest::RpmRepo>> {
-    let mut out: Vec<manifest::RpmRepo> = Vec::new();
+/// already use. The winner is the one that carries its declaring bundle forward,
+/// so the report names the file whose bytes are on disk.
+pub fn effective_rpm_repos(home: &Path, machine: &Machine) -> Result<Vec<OwnedRepo>> {
+    let mut out: Vec<OwnedRepo> = Vec::new();
     let mut seen = HashSet::new();
-    let mut push = |r: &manifest::RpmRepo, out: &mut Vec<manifest::RpmRepo>| {
+    let mut push = |from: Option<&str>, r: &manifest::RpmRepo, out: &mut Vec<OwnedRepo>| {
         if seen.insert(r.dest()) {
-            out.push(r.clone());
+            out.push(OwnedRepo {
+                from: from.map(str::to_string),
+                repo: r.clone(),
+            });
         }
     };
     for app in &machine.apps {
@@ -1969,31 +1997,33 @@ pub fn effective_rpm_repos(home: &Path, machine: &Machine) -> Result<Vec<manifes
             continue;
         }
         for r in &bundle.rpm_repos {
-            push(r, &mut out);
+            push(Some(app), r, &mut out);
         }
     }
     for r in &machine.rpm_repos {
-        push(r, &mut out);
+        push(None, r, &mut out);
     }
     Ok(out)
 }
 
-/// Every declared repo/key file paired with its destination and drift state,
-/// in apply order.
+/// The drift state of every declared repo/key file, in apply order.
 ///
 /// Three-valued through `FileState`: a destination temper cannot read is
 /// `Unavailable`, never `Missing` — reading "cannot look" as "not there" is what
-/// makes a converge rewrite state it never inspected.
-pub fn rpm_repos_state(
-    home: &Path,
-    effective: &[manifest::RpmRepo],
-) -> Result<Vec<(PathBuf, crate::primitives::FileState)>> {
+/// makes a converge rewrite state it never inspected. Each row keeps the repo's
+/// declaring bundle, since a key and the repo that cites it are one declaration
+/// and answer to one file.
+pub fn rpm_repos_state(home: &Path, effective: &[OwnedRepo]) -> Result<Vec<RepoState>> {
     let mut out = Vec::new();
-    for repo in effective {
-        for (src, dest) in repo.files() {
+    for owned in effective {
+        for (src, dest) in owned.repo.files() {
             let state =
                 crate::primitives::sysfile_state(&home.join(&src), &dest, &rpm_repo_opts())?;
-            out.push((dest, state));
+            out.push(RepoState {
+                from: owned.from.clone(),
+                dest,
+                state,
+            });
         }
     }
     Ok(out)
@@ -2006,15 +2036,15 @@ pub fn rpm_repos_state(
 /// machine with no root-needing casks and no `sudo` step gets its password
 /// prompt in the middle of the converge instead of at the keyboard before
 /// anything downloads.
-pub fn rpm_repos_pending(home: &Path, effective: &[manifest::RpmRepo]) -> Vec<String> {
+pub fn rpm_repos_pending(home: &Path, effective: &[OwnedRepo]) -> Vec<String> {
     if !rpm_repo_caps().converge {
         return Vec::new();
     }
     rpm_repos_state(home, effective)
         .unwrap_or_default()
         .into_iter()
-        .filter(|(_, s)| *s != crate::primitives::FileState::InSync)
-        .map(|(d, _)| d.display().to_string())
+        .filter(|r| r.state != crate::primitives::FileState::InSync)
+        .map(|r| r.dest.display().to_string())
         .collect()
 }
 
@@ -2028,7 +2058,7 @@ pub fn rpm_repos_pending(home: &Path, effective: &[manifest::RpmRepo]) -> Vec<St
 /// a wall of expected ones.
 pub fn rpm_repos_converge(
     home: &Path,
-    effective: &[manifest::RpmRepo],
+    effective: &[OwnedRepo],
     dry_run: bool,
 ) -> Result<Vec<String>> {
     if dry_run || effective.is_empty() {
@@ -2043,12 +2073,12 @@ pub fn rpm_repos_converge(
         return Ok(Vec::new());
     }
     let mut written = Vec::new();
-    for repo in effective {
+    for owned in effective {
         // `files()` yields the key before the repo that cites it. A
         // `gpgkey=file:///etc/pki/rpm-gpg/…` reference is checked when the repo
         // is first consulted, so a key installed after its repo is the same
         // ordering bug one level down.
-        for (src, dest) in repo.files() {
+        for (src, dest) in owned.repo.files() {
             match crate::primitives::sysfile_apply(&home.join(&src), &dest, &rpm_repo_opts()) {
                 Ok(true) => written.push(dest.display().to_string()),
                 Ok(false) => {}

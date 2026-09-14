@@ -132,7 +132,24 @@ registry answers per kind, so it can say "a missing extension is absorbed by
 reconcile's candidates are machine-scope only. A drift finding therefore carries
 the file where its declaration actually lives, and names that instead of a verb
 with no code path for it. `gnome-extension`, `rpm-ostree` and `flatpak-remote`
-answer this per item.
+answer this per item, naming the declaring file in the finding's detail.
+
+`rpm-repo` answers it one step further up, in the finding's **app**: a repo is a
+file the spec deploys to a path, so the bundle that declared it is the group the
+report files it under, exactly as a `sysfile` step is filed under its bundle.
+The two shapes are not interchangeable. An item that composes into a
+whole-machine set — a package, an extension, a remote — has no single owner once
+three bundles declare it, so attribution there is advisory and belongs in the
+detail. A repo dedups by destination with one declaration winning, so the owner
+is a fact, and the group is the file a reader opens. The rule that decides which
+you are holding: can two declarations of this produce one converged item that
+neither of them solely owns?
+
+A corollary for anything that reports an in-sync state rather than only drift: a
+finding group is not an app. The aggregate categories group under a provider
+label, and the "in sync" summary counts apps the machine composes — so a label
+never enters it, and a count that names a file the folder does not contain is
+impossible rather than merely unlikely.
 
 Getting this wrong is the tool's recurring defect. Every category that was built
 before this rule was written down re-decided its own verb set, and each got it

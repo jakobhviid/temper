@@ -121,6 +121,38 @@ impl Finding {
     }
 }
 
+/// The apps a drift report may call **in sync**, in first-seen order.
+///
+/// A finding group is not an app. The aggregate categories group under a
+/// provider label — `packages`, `brew-trust`, `deployed`, a machine's own
+/// `rpm_repos` — and one of those counted as an app in sync names a file the
+/// reader does not have, while the count stays plausible enough that nobody
+/// checks it. So a group earns the line only if the machine actually composes
+/// it, which is what `composed` is.
+///
+/// Two further rules: a group with any drift is not in sync, and a group whose
+/// every finding is status-only was not verified — an `unavailable` backend is a
+/// skip, and counting a skip as green is the silent cap Principle #6 is about.
+pub fn in_sync_apps<'a>(items: &'a [Finding], composed: &[String]) -> Vec<&'a str> {
+    let mut order: Vec<&str> = Vec::new();
+    for f in items {
+        if !order.contains(&f.app.as_str()) {
+            order.push(f.app.as_str());
+        }
+    }
+    order
+        .into_iter()
+        .filter(|app| {
+            composed.iter().any(|a| a == app)
+                && items.iter().filter(|f| f.app == *app).all(|f| f.ok)
+                && items
+                    .iter()
+                    .filter(|f| f.app == *app)
+                    .any(|f| f.ok && !f.status_only())
+        })
+        .collect()
+}
+
 /// The outcome of a step's presence gate (`when`/`needs`).
 enum Gate {
     /// Apply/evaluate the step normally.
@@ -522,8 +554,8 @@ fn deployed_paths(home: &Path, machine: &Machine) -> Result<crate::ledger::Ledge
     // own repos — which temper never wrote — stay invisible. That is the reason
     // there is no `[ignore].rpm_repo` list: enumerating `/etc/yum.repos.d` as
     // extras would report fedora, updates and rpmfusion on every run.
-    for repo in providers::effective_rpm_repos(home, machine)? {
-        for (src, dest) in repo.files() {
+    for owned in providers::effective_rpm_repos(home, machine)? {
+        for (src, dest) in owned.repo.files() {
             let target = dest.display().to_string();
             let hash = std::fs::read(home.join(&src))
                 .ok()
@@ -1664,22 +1696,30 @@ pub fn run_drift(
     // before the symptoms.
     let effective_repos = providers::effective_rpm_repos(home, machine)?;
     if !effective_repos.is_empty() {
-        let app = "rpm-repo";
-        if providers::rpm_repo_caps().observe {
-            for (dest, state) in providers::rpm_repos_state(home, &effective_repos)? {
-                findings.push(Finding::state(app, "rpm-repo", dest.display().to_string(), state));
-            }
-        } else {
-            // Cannot be read here, so it is `unavailable` and never absent —
-            // Principle #12. A macOS host declaring no repos never reaches this.
-            for (dest, _) in providers::rpm_repos_state(home, &effective_repos)? {
-                findings.push(Finding::state(
-                    app,
-                    "rpm-repo",
-                    dest.display().to_string(),
-                    crate::primitives::FileState::Unavailable,
-                ));
-            }
+        // Grouped under the bundle that declared it, the way a `sysfile` step is
+        // — a repo is a file the spec deploys to a path, and the bundle is the
+        // file a reader edits. Grouping by the kind would merge two bundles'
+        // repos under one label and drop a repo-only bundle out of the report,
+        // leaving a name that matches no file in the folder.
+        let observe = providers::rpm_repo_caps().observe;
+        for r in providers::rpm_repos_state(home, &effective_repos)? {
+            // A repo the machine declares itself has no bundle, and the machine
+            // is not an app: the provider name labels the group, and the in-sync
+            // list — which counts apps — leaves it out.
+            let app = r.from.as_deref().unwrap_or("rpm-repo");
+            // Where the directory cannot be read the state is `unavailable` and
+            // never absent — Principle #12. A macOS host declaring no repos
+            // never reaches this.
+            let state = if observe {
+                r.state
+            } else {
+                crate::primitives::FileState::Unavailable
+            };
+            let target = r.dest.display().to_string();
+            // One line, because the kind-coverage scrape reads
+            // `Finding::state(app, "…")` as a literal — split it and `rpm-repo`
+            // stops being a kind anything checks.
+            findings.push(Finding::state(app, "rpm-repo", target, state));
         }
     }
     let effective_rpm = providers::effective_rpm(home, machine)?;
@@ -3606,5 +3646,73 @@ mod remediation_label_tests {
                 assert!(!r.label.contains("()"), "{kind}: {}", r.label);
             }
         }
+    }
+}
+
+/// A finding group is not an app, and the "in sync" line counts apps.
+///
+/// The case that motivated the rule: `rpm_repos` reported under the provider
+/// kind, so a bundle whose only declaration was a repo dropped out of the list
+/// and a name matching no file in the folder took its place. The count stayed
+/// right — one real bundle out, one label in — which is exactly what kept it
+/// from being noticed.
+#[cfg(test)]
+mod in_sync_tests {
+    use super::*;
+
+    fn f(app: &str, ok: bool, status: &str) -> Finding {
+        Finding {
+            app: app.to_string(),
+            kind: "copy",
+            target: "t".into(),
+            ok,
+            status: status.into(),
+            detail: None,
+        }
+    }
+
+    fn composed(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_verified_app_the_machine_composes_is_in_sync() {
+        let items = vec![f("shell", true, "in sync")];
+        assert_eq!(in_sync_apps(&items, &composed(&["shell"])), vec!["shell"]);
+    }
+
+    #[test]
+    fn a_group_the_machine_does_not_compose_is_never_counted() {
+        // An aggregate label with a green finding behind it — the shape that
+        // put a provider kind in a list of apps.
+        let items = vec![f("rpm-repo", true, "in sync")];
+        assert!(in_sync_apps(&items, &composed(&["proton-vpn"])).is_empty());
+    }
+
+    #[test]
+    fn one_drifted_finding_disqualifies_the_whole_app() {
+        let items = vec![f("shell", true, "in sync"), f("shell", false, "drifted")];
+        assert!(in_sync_apps(&items, &composed(&["shell"])).is_empty());
+    }
+
+    #[test]
+    fn an_app_that_was_only_skipped_was_not_verified() {
+        // `unavailable` is a skip, not a pass: counting it green is the silent
+        // cap Principle #6 names.
+        let items = vec![f("ghostty", true, "unavailable — no dconf")];
+        assert!(in_sync_apps(&items, &composed(&["ghostty"])).is_empty());
+    }
+
+    #[test]
+    fn order_is_first_seen_and_each_app_appears_once() {
+        let items = vec![
+            f("zsh", true, "in sync"),
+            f("shell", true, "in sync"),
+            f("zsh", true, "in sync"),
+        ];
+        assert_eq!(
+            in_sync_apps(&items, &composed(&["shell", "zsh"])),
+            vec!["zsh", "shell"]
+        );
     }
 }

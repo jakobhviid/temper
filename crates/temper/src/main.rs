@@ -1337,7 +1337,7 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
             })
         );
     } else {
-        render_drift(&m.name, &items);
+        render_drift(&m.name, &items, &m.apps);
     }
     remind_if_dirty(&home, &manifest::effective_git(&ft.git, &m.git));
     Ok(())
@@ -1347,7 +1347,12 @@ fn cmd_drift(machine: Option<String>, json: bool) -> Result<()> {
 /// apps collapsed to one green line, status-only items (manual / unavailable /
 /// no-drift-check) called out separately so they read as neither green nor red.
 /// `--json` never reaches here, so ANSI is safe (and gated on a real tty by `ui`).
-fn render_drift(machine: &str, items: &[plan::Finding]) {
+/// `composed` is the machine's app list — what the "in sync" line is allowed to
+/// count. A finding group is not the same thing as an app: the aggregate
+/// categories (`packages`, `brew-trust`, `deployed`, a machine's own repos) group
+/// under a provider label, and one of them reading as an app in sync means the
+/// count is describing a folder the reader does not have.
+fn render_drift(machine: &str, items: &[plan::Finding], composed: &[String]) {
     use std::collections::HashMap;
 
     // Group findings by app, preserving first-seen order.
@@ -1379,18 +1384,14 @@ fn render_drift(machine: &str, items: &[plan::Finding]) {
         .collect();
     let cols = ui::Columns::measure(&rows, 6, &[44, 0, 0], 0);
 
-    let mut clean_apps: Vec<&str> = Vec::new();
+    // Which groups earn the "in sync" line is `plan`'s rule, next to
+    // `status_only()` — the sibling classification it depends on.
+    let clean_apps = plan::in_sync_apps(items, composed);
     let mut drifted_groups = 0usize;
     for app in &order {
         let g = &groups[app];
         let drifted: Vec<&&plan::Finding> = g.iter().filter(|f| !f.ok).collect();
         if drifted.is_empty() {
-            // Collapse to the in-sync line only if something was actually
-            // verified — an app that is *entirely* status-only belongs solely
-            // in the status-only line, not counted as "in sync".
-            if g.iter().any(|f| f.ok && !f.status_only()) {
-                clean_apps.push(app);
-            }
             continue;
         }
         drifted_groups += 1;
