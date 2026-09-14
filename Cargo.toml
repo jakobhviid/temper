@@ -3,6 +3,11 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
+# Placeholder, not the released number. CI derives each release's version from
+# the commit history (Conventional Commits) and rewrites this line before it
+# builds, so the released line is the git tags, not this file. Editing it by
+# hand changes nothing and releases nothing — pick the right commit-subject
+# prefix instead. See AGENTS.md, "Releases & versioning".
 version = "1.0.0"
 edition = "2021"
 license = "MIT"
