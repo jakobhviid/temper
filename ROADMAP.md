@@ -106,6 +106,42 @@ through to the action's implicit `auth_admin`, and there is nowhere to answer.
 `prune` should say so up front, naming what needs it, exactly as a run needing
 sudo already does; today it finds out when the removal fails.
 
+**`rpm_repos` writes where zypper never reads, and reports success.** `rpm_repo_caps()`
+(`providers.rs`) gates the category on `have("rpm")`: rpm-ness, not on which package
+manager reads `/etc/yum.repos.d`. openSUSE has `rpm` but resolves through zypper, which reads
+`/etc/zypp/repos.d`. So on Tumbleweed, `install` writes the repo and its GPG key, exits 0,
+and `drift` reports in sync, while `zypper lr` shows no such repo. Nothing fails until a
+package from that repo will not resolve. The fix is a capability question, not a path tweak:
+gate converge on a dnf/yum frontend being present, and report `unavailable` (with the reason)
+on an rpm host that has neither. A real zypper target would be a separate design, because its
+`.repo` keys differ (`type=rpm-md`, `autorefresh`).
+  → Found with the Nyx distro matrix (`jakobhviid/nyx`, `scripts/temper-roundtrip.sh`),
+  2026-10-12: the same fixture is seen by `dnf repolist` on Fedora 44, Alma 9, CentOS Stream 9
+  and Rocky 10, and is invisible to zypper on openSUSE Tumbleweed.
+
+**An unattended run warns "will fail" on a host where `sudo` would succeed.**
+`sudo::cached()` asks whether a credential is held with `sudo -n -v`. Whether `-v` needs a
+password is governed by sudoers' `verifypw`, whose default (`all`) requires **every** entry
+matching the user to be `NOPASSWD`. openSUSE's stock sudoers has `ALL ALL=(ALL) ALL`, which
+matches everyone. So for a user whose own rule is `NOPASSWD: ALL`, `sudo -n -v` fails while
+every real `sudo -n <command>` succeeds. `acquire` then prints "this run needs root and there
+is no terminal to ask on, so it will fail when it gets there", and the run writes the files
+anyway. A false alarm on the warning meant to be trusted in unattended runs. Probe with
+`sudo -n true`, which asks the question that matters: can a child run a command without a
+password. Fedora, EL, Debian, Ubuntu and Arch do not show it, because they ship no catch-all
+password rule.
+  → Same matrix run, openSUSE Tumbleweed only, with a test user holding
+  `tester ALL=(ALL) NOPASSWD: ALL` in `/etc/sudoers.d`.
+
+**The install summary says `0 changed` on a run that wrote two root-owned files.** The line
+built at `main.rs` ("applied {} config step(s), {} changed") counts journaled config steps.
+An `rpm_repos` write (the repo file plus its key) is outside the journal, so a run whose only
+effect was installing a repo prints `0 changed`. The next line then says `temper undo` "cannot
+revert 1 of this run's change(s): rpm-repo", so the same output says both none and one. Count
+non-journaled writes in the summary, or name them separately (`… 0 changed, 1 repo written`),
+so the headline matches what happened to the machine.
+  → Every rpm host in the matrix run above.
+
 ## Scope-model gaps (known, ranked, each one a filled ⚠ or ❌ in the feature matrix)
 
 **The matrix's open cells**, so the summary and the table agree — this file rides
