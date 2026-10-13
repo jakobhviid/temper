@@ -1,6 +1,6 @@
-//! Proves `setup` (rename of `use`): explicit path, the `use` alias, `--json`
-//! candidate listing, the not-a-terminal refusal, and the "several libraries →
-//! refuse" ambiguity guard. Each runs in its own process with a controlled
+//! Proves `setup`: explicit path, the `use` alias, `--json` candidate listing,
+//! pinning a lone match without a terminal, the not-a-terminal refusal to choose
+//! between several, and the "several libraries → refuse" ambiguity guard. Each runs in its own process with a controlled
 //! HOME/XDG so there's no env race.
 
 use std::fs;
@@ -90,13 +90,13 @@ fn setup_with_nothing_to_pick_names_the_verb_that_creates_one() {
         .stderr(predicates::str::contains("temper init"));
 }
 
-/// …and when there IS something to pick, the tty is the real obstacle. This
-/// branch had no test, which is why the two could be conflated.
+/// …and when there IS a choice to make, the tty is the real obstacle.
 #[test]
-fn setup_no_arg_non_terminal_refuses() {
+fn setup_no_arg_non_terminal_refuses_to_choose_between_several() {
     let home = TempDir::new().unwrap();
     let xdg = TempDir::new().unwrap();
-    manifest(&home.path().join("steel")); // discoverable → the picker would open
+    manifest(&home.path().join("steel")); // two discoverable → the picker would open
+    manifest(&home.path().join("Developer").join("Private").join("fleet"));
     // piped stdin (assert_cmd) is not a tty → can't prompt.
     temper()
         .env("XDG_CONFIG_HOME", xdg.path())
@@ -107,6 +107,26 @@ fn setup_no_arg_non_terminal_refuses() {
         .failure()
         .stderr(predicates::str::contains("not a terminal"))
         .stderr(predicates::str::contains("steel"));
+}
+
+/// One match is what every verb would resolve to anyway, so a non-interactive
+/// `setup` pins it — found two levels into a dev folder, under a name nobody listed.
+#[test]
+fn setup_no_arg_non_terminal_pins_a_lone_match() {
+    let home = TempDir::new().unwrap();
+    let xdg = TempDir::new().unwrap();
+    let fleet = home.path().join("Developer").join("Private").join("fleet");
+    manifest(&fleet);
+    temper()
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .env("HOME", home.path())
+        .current_dir(home.path())
+        .arg("setup")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("temper home set to"));
+    let pinned = fs::read_to_string(xdg.path().join("temper").join("home")).unwrap();
+    assert_eq!(Path::new(pinned.trim()), fleet.canonicalize().unwrap());
 }
 
 #[test]

@@ -197,21 +197,25 @@ installed at all. A run needing no root is unaffected and stays silent.
 
 **How temper finds the folder (why you rarely have to tell it).** temper
 resolves its home in this order, first hit wins: `$TEMPER_DIR` → walk up from the
-cwd → a saved pointer (`temper setup <dir>`) → **auto-scan** a folder named
-`steel`/`temper-home`/`.temper` (`steel` is the author's own fleet spec, the
-folder temper was built for — kept as a scanned name; yours can use it, or one of
-the other two, or any name plus `temper setup`) under `~`, a dev parent
-(`~/Developer`, `~/developer`, `~/dev`, `~/src`, `~/code`, `~/projects`, `~/git`,
-`~/repos`, …), or a cloud-sync root — the same set `dotsync` probes: each
+cwd → a saved pointer (`temper setup <dir>`) → **auto-scan** for any folder
+holding a `temper.toml`, whatever its name: directly in `~`, up to three folders
+deep in a dev parent (`~/Developer`, `~/dev`, `~/src`, `~/code`, `~/projects`,
+`~/repos`, … in any case), up to two deep in a cloud-sync root (each
 `~/Library/CloudStorage/*` client, iCloud Drive, `~/Nextcloud`, `~/Dropbox`,
-`~/OneDrive`, `~/ProtonDrive`, `~/Google Drive`, `~/Sync`, plus `/media` and
-`/run/media/$USER`. So on a
-fresh box you have three no-fuss options: clone/sync your folder to one of those
-locations (e.g. `~/Developer/temper-home`) and it's found automatically; or run
-`temper setup` — with no argument it lists the discovered libraries and lets you
-pick one (or paste a path), saving the pointer; `temper setup <dir>` sets one
-directly. Or export `TEMPER_DIR`. If several libraries are found and none is
-pinned, temper refuses to guess and tells you to run `temper setup`. temper only
+`~/OneDrive`, `~/ProtonDrive`, `~/Google Drive`, `~/Sync`), and up to three deep
+in `/media` and `/run/media/$USER`. It skips hidden folders (except `.temper`)
+and does not look inside other git checkouts. So on a fresh box you have three
+no-fuss options: clone/sync your folder somewhere the scan reaches (e.g.
+`~/Developer/Private/my-fleet`) and it's found automatically; or run
+`temper setup` — with no argument it lists what it found and lets you pick one
+(Enter takes the first) or paste a path, saving the pointer; without a terminal
+it pins a lone match and refuses to choose between several. `temper setup <dir>`
+sets one directly. Or export `TEMPER_DIR`. If several folders are found and none
+is pinned, temper refuses to guess and tells you to run `temper setup`. If the
+saved folder has moved, temper says so before anything else: when the scan finds
+exactly one folder it uses it and saves it as the new pointer, and otherwise it
+stops and names the old path, so a lost folder is never mistaken for a fresh
+machine (`init` also names it before offering to create one). temper only
 *locates* the folder — getting it onto the box (git clone, a synced cloud folder,
 a USB copy) is not temper's job.
 

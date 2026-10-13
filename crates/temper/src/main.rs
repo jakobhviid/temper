@@ -245,7 +245,8 @@ enum Cmd {
     /// Provision this machine's temper-home: pick from discovered libraries (or
     /// paste a path) and save it as the default pointer
     /// (`$XDG_CONFIG_HOME/temper/home`), so temper finds it from anywhere. Omit
-    /// the dir to choose interactively.
+    /// the dir to choose interactively; a lone match is taken without asking
+    /// when there is no terminal to ask on.
     #[command(alias = "use")]
     Setup {
         /// The temper-home to use. Omit to auto-discover and pick.
@@ -965,23 +966,45 @@ fn cmd_setup(dir: Option<String>, json: bool) -> Result<()> {
     }
 
     let candidates = discovery::scan_candidates();
+    // A saved folder that is gone is why most people run `setup` a second time,
+    // so every answer below names it.
+    let stale = discovery::stale_pointer();
 
     // Non-interactive (piped/`--json`) can't prompt: report candidates for `--json`,
     // otherwise tell the user to pass a path.
     if json {
         let arr: Vec<_> = candidates.iter().map(|p| p.display().to_string()).collect();
-        println!("{}", serde_json::json!({ "candidates": arr }));
+        let stale = stale.map(|p| p.display().to_string());
+        println!("{}", serde_json::json!({ "candidates": arr, "stale": stale }));
         return Ok(());
     }
     // With nothing discovered, "not a terminal" is the lesser fact: the picker
     // would open on an empty list either way, so leading with the tty makes the
     // reader think a terminal would have helped.
+    if let (true, Some(old)) = (candidates.is_empty(), &stale) {
+        anyhow::bail!(
+            "{} — moved? temper looked for {}, and found nothing.\n\
+             \x20 point it at the new place: `temper setup <dir>`",
+            discovery::moved_note(old),
+            discovery::SCAN_WHERE
+        );
+    }
     if candidates.is_empty() {
         anyhow::bail!(
-            "no temper folder found nearby, so there is nothing to pick.\n\
+            "no temper folder found nearby, so there is nothing to pick (looked for {}).\n\
              \x20 have one? give the path: `temper setup <dir>`\n\
-             \x20 starting out? `temper init` scaffolds one here."
+             \x20 starting out? `temper init` scaffolds one here.",
+            discovery::SCAN_WHERE
         );
+    }
+    // One match and no one to ask: it is the folder every other verb would
+    // resolve to anyway, so pinning it is not a guess — and it lets a bootstrap
+    // script run `temper setup` without knowing where the folder landed.
+    if candidates.len() == 1 && !io::stdin().is_terminal() {
+        return save_and_report(&candidates[0], json);
+    }
+    if let Some(old) = &stale {
+        eprintln!("{} {} — moved?", ui::yellow(ui::g_warn()), discovery::moved_note(old));
     }
     if !io::stdin().is_terminal() {
         let found = candidates
@@ -1002,10 +1025,13 @@ fn cmd_setup(dir: Option<String>, json: bool) -> Result<()> {
     }
     println!("  {}) paste a path", ui::cyan("p"));
     println!("  {}) cancel", ui::cyan("q"));
-    print!("> ");
+    print!("[1]> ");
     let reply = read_reply();
 
-    let chosen = if reply.is_empty() || reply == "q" {
+    // Enter takes the first candidate: the list is in discovery's order, so it
+    // is the one `find_home` would reach first.
+    let reply = if reply.is_empty() { "1".to_string() } else { reply };
+    let chosen = if reply == "q" {
         println!("cancelled — nothing changed.");
         return Ok(());
     } else if reply == "p" {
@@ -1726,6 +1752,14 @@ fn cmd_init(name: Option<String>, role: Option<String>, yes: bool, json: bool) -
                     ui::yellow(ui::g_warn()),
                     ui::dim(&format!("would create {}/temper.toml", cwd.display()))
                 );
+                // A machine that had a folder and lost it wants it back, not a
+                // second, empty one.
+                if let Some(old) = discovery::stale_pointer() {
+                    println!(
+                        "  {} — if it moved, `temper setup <dir>` points temper at it instead",
+                        discovery::moved_note(&old)
+                    );
+                }
                 if !prompt_no("create it here?") {
                     println!("aborted — nothing changed.");
                     return Ok(());

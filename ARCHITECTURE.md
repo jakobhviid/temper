@@ -61,29 +61,32 @@ Folder discovery (built, `discovery.rs`) — first hit wins:
 1. **`$TEMPER_DIR`** — explicit override.
 2. **Walk up from the cwd** — you're inside the folder (or a subdir of it).
 3. **A saved pointer** — `temper setup <dir>` writes `$XDG_CONFIG_HOME/temper/home`.
-4. **Auto-scan** — a directory named `steel`, `temper-home`, or `.temper` under
-   any of: `~`, a dev parent (`~/Developer`, `~/developer`, `~/dev`, `~/src`,
-   `~/code`, `~/projects`, `~/git`, `~/repos`, … — so case/name conventions don't
-   matter), or a cloud-sync root (the same set `dotsync` probes: each
-   `~/Library/CloudStorage/*` client, iCloud Drive, `~/Nextcloud`, `~/Dropbox`,
-   `~/OneDrive`, `~/ProtonDrive`, `~/Google Drive`, `~/Sync`), `/media`,
-   `/run/media/$USER`.
+   A pointer whose folder has moved falls through to the scan, and every
+   answer opens with the old path: a lone match is used and saved as the new
+   pointer; several, or none, stop and name `temper setup`.
+4. **Auto-scan** — any folder holding a `temper.toml`, whatever it is named:
+   directly in `~`; up to three folders deep in a dev parent (a child of `~`
+   named, in any case, `Developer`, `dev`, `src`, `code`, `projects`, `repos`,
+   `git`, `work`, …); up to two deep in a cloud-sync root (the same set
+   `dotsync` probes: each `~/Library/CloudStorage/*` client, iCloud Drive,
+   `~/Nextcloud`, `~/Dropbox`, `~/OneDrive`, `~/ProtonDrive`, `~/Google Drive`,
+   `~/Sync`); and up to three deep in `/media` and `/run/media/$USER`. Hidden
+   folders are skipped except `.temper`, and a git checkout is not descended
+   into — a `temper.toml` inside some other repo's examples is that repo's, not
+   this machine's.
 
-   `steel` is in that list because it is the name of the folder temper was built
-   for — the author's own fleet spec, which is private. Its public sibling is
+   These docs show the folder as `~/Developer/steel`: `steel` is the author's
+   own fleet spec, which is private. Its public sibling is
    [alloy](https://github.com/jakobhviid/alloy), a readable folder for a stock
    Bazzite desktop, for anyone who wants to see a whole one rather than the
-   fragments these docs quote. Nothing about temper depends on either: name yours
-   `temper-home` or `.temper` for the same zero-config discovery, or call it
-   whatever you like and point temper at it with `temper setup` or `$TEMPER_DIR`.
-   Where these docs show a path like `~/Developer/steel`, read it as "wherever
-   your folder lives".
+   fragments these docs quote. Read the path as "wherever your folder lives".
 
-So a folder cloned/synced to e.g. `~/temper-home` or `~/Developer/temper-home` is
-found with **no configuration** — machines just find it. A fresh
-box with none of these errors with a message telling you to `temper setup <dir>`
-or set `$TEMPER_DIR`. (Discovery only *locates* the folder — temper never clones
-or syncs it; that's git/Nextcloud/rsync's job.)
+So a folder cloned or synced to `~/Developer/Private/my-fleet`,
+`~/src/github.com/<you>/<repo>` or `~/Nextcloud/Apps/temper` is found with **no
+configuration**. One match is used; several make temper refuse to guess and ask
+for `temper setup`. A fresh box with none says where it looked and tells you to
+`temper setup <dir>` or set `$TEMPER_DIR`. (Discovery only *locates* the folder —
+temper never clones or syncs it; that's git/Nextcloud/rsync's job.)
 
 ### Humans and LLMs both compose it
 
@@ -780,6 +783,6 @@ The recommended shape (app-first recipes, real files under `assets/`):
 ```
 
 Get the folder onto a box however you like, then let temper find it (§discovery:
-drop it at a scanned location like `~/temper-home` or `~/Developer/temper-home`,
-or run `temper setup <dir>`). See `SPEC.md` for the schema of each file, `WORKFLOWS.md`
+put it anywhere the scan reaches, like `~/Developer/<name>`, or run
+`temper setup <dir>`). See `SPEC.md` for the schema of each file, `WORKFLOWS.md`
 for the day-to-day loops, and `PRINCIPLES.md` for the guardrails.
