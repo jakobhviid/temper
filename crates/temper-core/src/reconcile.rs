@@ -91,6 +91,13 @@ pub struct ReconcilePlan {
     pub rpm_adds: Vec<String>,
     /// Entries in THIS machine's own `rpm_ostree` list that are not layered.
     pub rpm_drops: Vec<String>,
+    /// Packages installed by name through the host package manager since its
+    /// baseline, that no scope declares — absorb into THIS machine's own
+    /// `dnf` / `apt` / `pacman` list.
+    pub system_adds: Vec<(crate::syspkg::SysPm, String)>,
+    /// Entries in THIS machine's own `dnf` / `apt` / `pacman` list that are not
+    /// installed.
+    pub system_drops: Vec<(crate::syspkg::SysPm, String)>,
     /// Extensions in THIS machine's own `extensions` list that aren't installed
     /// — candidates to drop. The other half of `gext_adds`, without which
     /// reconcile could only ever grow the list: absorb an extension, uninstall
@@ -183,6 +190,12 @@ impl ReconcilePlan {
         for r in &self.rpm_drops {
             push("rpm_drops", false, r.clone());
         }
+        for (pm, p) in &self.system_adds {
+            push("system_adds", true, format!("{} {p}", pm.name()));
+        }
+        for (pm, p) in &self.system_drops {
+            push("system_drops", false, format!("{} {p}", pm.name()));
+        }
         for d in &self.dconf {
             for (section, keys) in &d.sections {
                 for k in keys {
@@ -220,6 +233,8 @@ impl ReconcilePlan {
         "remote_drops",
         "rpm_adds",
         "rpm_drops",
+        "system_adds",
+        "system_drops",
     ];
 
     /// The `--json` plan document, derived from `items()`.
@@ -365,6 +380,7 @@ pub fn plan(
     // is skipped rather than fatal: a desktop machine whose packages all come
     // from bundles can still reconcile its dconf snapshots. The CLI says so.
     let brewfile_rel = machine.brewfile.clone();
+    let system = system_candidates(home, machine, ignore)?;
     let Some(brewfile_rel) = brewfile_rel else {
         return Ok(ReconcilePlan {
             brewfile_rel: None,
@@ -386,6 +402,8 @@ pub fn plan(
             remote_drops: machine_remote_drops(machine),
         rpm_adds: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
             rpm_drops: providers::rpm_ostree_machine_absent(&machine.rpm_ostree),
+            system_adds: system.0,
+            system_drops: system.1,
             dconf: dconf_plans(home, machine)?,
         });
     };
@@ -536,10 +554,50 @@ pub fn plan(
         ),
         rpm_adds: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
         rpm_drops: providers::rpm_ostree_machine_absent(&machine.rpm_ostree),
+        system_adds: system.0,
+        system_drops: system.1,
         remote_adds: providers::remotes_extras(&providers::effective_remotes(home, machine)?, ignore),
         remote_drops: machine_remote_drops(machine),
         dconf: dconf_plans(home, machine)?,
     })
+}
+
+/// The host package managers' candidates: `(adds, drops)`.
+///
+/// Only where the manager can converge, which is also where `drift` reports
+/// them — an atomic host's `dnf` list is reported as unavailable there, and a
+/// candidate here would answer a finding drift never made. Both directions are
+/// machine scope: an absorbed package lands in this machine's own list, and only
+/// this machine's own entries are offered for dropping.
+type SystemCandidates = (
+    Vec<(crate::syspkg::SysPm, String)>,
+    Vec<(crate::syspkg::SysPm, String)>,
+);
+
+fn system_candidates(
+    home: &Path,
+    machine: &Machine,
+    ignore: &manifest::Ignore,
+) -> Result<SystemCandidates> {
+    use crate::syspkg;
+    let (mut adds, mut drops) = (Vec::new(), Vec::new());
+    for &pm in syspkg::SysPm::ALL {
+        if !syspkg::caps(pm).converge {
+            continue;
+        }
+        let effective = syspkg::effective(home, machine, pm)?;
+        if let syspkg::Extras::Found(extras) =
+            syspkg::extras(&machine.name, pm, &effective, ignore)
+        {
+            adds.extend(extras.into_iter().map(|p| (pm, p)));
+        }
+        drops.extend(
+            syspkg::machine_absent(pm, pm.machine_list(machine))
+                .into_iter()
+                .map(|p| (pm, p)),
+        );
+    }
+    Ok((adds, drops))
 }
 
 /// Per-snapshot desktop-key candidates. Empty where dconf is absent (a Mac) or
@@ -1054,6 +1112,26 @@ pub fn remove_machine_rpm(temper_toml: &str, machine: &str, pkg: &str) -> Result
     remove_machine_list(temper_toml, machine, "rpm_ostree", pkg)
 }
 
+/// Absorb a package into THIS machine's own list for its package manager.
+pub fn append_machine_system(
+    temper_toml: &str,
+    machine: &str,
+    pm: crate::syspkg::SysPm,
+    pkg: &str,
+) -> Result<String> {
+    append_machine_list(temper_toml, machine, pm.name(), pkg)
+}
+
+/// Drop a package from THIS machine's own list for its package manager.
+pub fn remove_machine_system(
+    temper_toml: &str,
+    machine: &str,
+    pm: crate::syspkg::SysPm,
+    pkg: &str,
+) -> Result<String> {
+    remove_machine_list(temper_toml, machine, pm.name(), pkg)
+}
+
 /// Silence an extra for THIS machine only, under `[machine.ignore].<manager>`.
 ///
 /// Ignoring is a judgement, and it is a per-machine one far more often than a
@@ -1390,6 +1468,8 @@ mod tests {
             remote_drops: vec!["s https://x".into()],
             rpm_adds: vec!["vpn".into()],
             rpm_drops: vec!["old".into()],
+            system_adds: vec![(crate::syspkg::SysPm::Apt, "cowsay".into())],
+            system_drops: vec![(crate::syspkg::SysPm::Dnf, "gone".into())],
             dconf: Vec::new(),
         };
         for i in plan.items() {
@@ -1409,7 +1489,7 @@ mod tests {
                 "`{name}` did not reach the --json document"
             );
         }
-        assert_eq!(doc["total"], 12);
+        assert_eq!(doc["total"], 14);
         assert!(!plan.is_empty());
         assert!(ReconcilePlan {
             brewfile_rel: None,
@@ -1425,6 +1505,8 @@ mod tests {
             remote_drops: vec![],
             rpm_adds: vec![],
             rpm_drops: vec![],
+            system_adds: vec![],
+            system_drops: vec![],
             dconf: vec![],
         }
         .is_empty());

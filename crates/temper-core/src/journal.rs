@@ -161,6 +161,12 @@ fn uninstall_packages(provider: &str, packages: &[String]) -> usize {
     // formula that is now some other package's live dependency made Homebrew
     // refuse the whole invocation and the entire set reported
     // `could not un-install` (Principle #6: contain the damage and name it).
+    // The host package managers check, isolate and read back on their own: the
+    // simulation names what it holds back, so a per-item retry here would only
+    // report it twice, and a package already gone counts as reverted.
+    if let Some(pm) = crate::syspkg::SysPm::from_name(provider) {
+        return crate::syspkg::revert(pm, packages);
+    }
     if run_uninstall(provider, packages) {
         return packages.len();
     }
@@ -508,6 +514,29 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
             // A dry run touches nothing — the guard every other arm has, and the
             // one arm that shells out to a real `uninstall`.
             if dry_run {
+                // The host package managers hold back what would take other
+                // packages with it, so the forecast runs the same check the
+                // revert will — read-only — rather than promising the whole set.
+                if let Some(plan) = crate::syspkg::SysPm::from_name(provider)
+                    .and_then(|pm| crate::syspkg::revert_plan(pm, packages))
+                {
+                    reverted += plan.remove.len() + plan.gone.len();
+                    skipped += plan.held.len();
+                    cl.noted(&format!(
+                        "would un-install {provider}: {} package(s){}",
+                        plan.remove.len(),
+                        if plan.held.is_empty() {
+                            String::new()
+                        } else {
+                            format!(
+                                ", keeping {} that other packages need: {}",
+                                plan.held.len(),
+                                plan.held.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>().join(", ")
+                            )
+                        }
+                    ));
+                    continue;
+                }
                 reverted += packages.len();
                 cl.noted(&format!(
                     "would un-install {provider}: {} package(s)",
@@ -723,9 +752,22 @@ mod tests {
             .iter()
             .filter_map(|m| crate::packages::journal_provider(*m))
             .collect();
-        // The two providers journaled outside the manager loop.
+        // The providers journaled outside the manager loop.
         names.push("gnome-extensions");
         names.push("rpm-ostree");
+
+        // The host package managers are routed before `run_uninstall`, through
+        // `syspkg::revert`, which every name `SysPm` journals under reaches.
+        let route = {
+            let start = src
+                .find("fn uninstall_packages(provider: &str, packages: &[String]) -> usize {")
+                .expect("uninstall_packages");
+            &src[start..][..src[start..].find("\n}").expect("fn end")]
+        };
+        assert!(route.contains("SysPm::from_name(provider)") && route.contains("syspkg::revert"));
+        for pm in crate::syspkg::SysPm::ALL {
+            assert_eq!(crate::syspkg::SysPm::from_name(pm.name()), Some(*pm));
+        }
 
         for n in names {
             assert!(

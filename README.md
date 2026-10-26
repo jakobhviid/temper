@@ -31,10 +31,11 @@ contract, that folder is one application of it.
   `starship.toml`, a real dconf dump, a real Brewfile, tied together by one
   manifest. No new language to learn.
 - **Packages *and* config, one tool.** brew / cask / tap / flatpak / mas /
-  VS Code / GNOME extensions / rpm-ostree — and where they come from, since a
-  flatpak remote and an RPM repo are declared alongside the packages that need
-  them and converged before them. Plus file, key, marker-block, and root-owned
-  `/etc` config primitives.
+  VS Code / GNOME extensions / rpm-ostree, and the distro's own dnf (Fedora,
+  RHEL family), apt (Debian, Ubuntu) and pacman (Arch) — and where they come
+  from, since a flatpak remote and an RPM repo are declared alongside the
+  packages that need them and converged before them. Plus file, key,
+  marker-block, and root-owned `/etc` config primitives.
 - **Drift is first-class.** `temper drift` is read-only and tells you what's out
   of sync **and the exact command to fix it** — in both directions.
 - **Two directions.** Converge the machine toward the spec, *or* absorb the

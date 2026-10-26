@@ -252,6 +252,51 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         revertible: Col::Yes,
         residue: Col::NA(NO_RESIDUE),
     },
+    // The host package managers — one row each, because each answers for its own
+    // kinds, though the three answer alike.
+    ProviderSpec {
+        name: "dnf",
+        kinds: &["dnf", "dnf-extra"],
+        fleet_scope: Col::Yes,
+        machine_scope: Col::Yes,
+        // Only where the manager is this host's. A list for another family is
+        // inert there, not unavailable — one bundle can serve a mixed fleet.
+        observe: Col::Yes,
+        install: Col::Yes,
+        // Extras are counted from the baseline recorded at the first converge,
+        // and a removal that would take a dependant along is held back.
+        prune: Col::Yes,
+        reconcile: Col::Yes,
+        ignore: Col::Yes,
+        revertible: Col::Yes,
+        residue: Col::NA(NO_RESIDUE),
+    },
+    ProviderSpec {
+        name: "apt",
+        kinds: &["apt", "apt-extra"],
+        fleet_scope: Col::Yes,
+        machine_scope: Col::Yes,
+        observe: Col::Yes,
+        install: Col::Yes,
+        prune: Col::Yes,
+        reconcile: Col::Yes,
+        ignore: Col::Yes,
+        revertible: Col::Yes,
+        residue: Col::NA(NO_RESIDUE),
+    },
+    ProviderSpec {
+        name: "pacman",
+        kinds: &["pacman", "pacman-extra"],
+        fleet_scope: Col::Yes,
+        machine_scope: Col::Yes,
+        observe: Col::Yes,
+        install: Col::Yes,
+        prune: Col::Yes,
+        reconcile: Col::Yes,
+        ignore: Col::Yes,
+        revertible: Col::Yes,
+        residue: Col::NA(NO_RESIDUE),
+    },
     ProviderSpec {
         name: "deployed-files",
         kinds: &["deployed-file-extra"],

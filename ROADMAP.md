@@ -178,18 +178,41 @@ so the headline matches what happened to the machine.
     from them, so a flag for splitting the two phases by hand has no caller. Not
     to be confused with `update --config-only` above, which is a different verb
     for a different caller and still open.
-- **`apt` has the same hole, and is not filled.** "Where do this provider's
-  packages come from" is a per-provider prerequisite; `flatpak-remote` and
-  `rpm-repo` are two instances of it and apt would be a third. It is not a cheap
-  third: deb822 `.sources` files, dearmored binary keyrings under
-  `/etc/apt/keyrings` referenced by `Signed-By:`, and a mandatory `apt update`
-  refresh. Forcing it into `rpm_repos` would need either a wrong name or a fake
-  abstraction over one real instance, so it waits for a real apt target. What is
-  already paid for: `rpm_repos` is named for the **format**, not the tool, and its
-  capability gate is a reader of `/etc/yum.repos.d` rather than atomic-ness — so
-  a plain dnf/yum host declares repos identically, and a future `apt_sources` is a schema
-  addition beside it reusing the same file primitive and the same pre-package
-  stage, not a new mechanism.
+- **`apt` packages can only come from sources the machine already has.** "Where
+  do this provider's packages come from" is a per-provider prerequisite;
+  `flatpak-remote` and `rpm-repo` are two instances of it, and a dnf host uses
+  `rpm_repos` as it is. apt has no declaration for it, so a vendor package
+  (Docker, VS Code, 1Password) needs its source set up by a `sysfile` step —
+  which runs after packages, so the first converge cannot resolve it. It is not a
+  cheap third: deb822 `.sources` files, dearmored binary keyrings under
+  `/etc/apt/keyrings` referenced by `Signed-By:`, and an `apt-get update` after
+  writing one. Forcing it into `rpm_repos` would need a wrong name or a fake
+  abstraction, so it is an `apt_sources` beside it, reusing the same file
+  primitive and the same pre-package stage. pacman has the same gap for
+  `pacman.conf` repositories and the AUR, and the AUR is not a repository at all.
+- **A declared package that is already installed as a dependency stays marked as
+  one.** `install` installs what is missing and leaves what is present alone, so a
+  package that arrived as a dependency keeps the manager's "automatic" mark even
+  once the spec declares it. If whatever pulled it in is later removed, the
+  manager's own autoremove (`apt autoremove`, `dnf autoremove`, `pacman -Qdt`)
+  can take it — a declared package, gone, and drift reports it missing. Marking
+  declared packages as explicit (`apt-mark manual`, `dnf mark user`, `pacman -D
+  --asexplicit`) closes it; it is a write `undo` would then need to reverse.
+- **`prune` leaves a removed extra's dependencies behind.** It removes exactly the
+  named packages — dnf's `clean_requirements_on_remove` off, pacman without `-s`,
+  apt-get as it is — so what an extra pulled in stays, orphaned, for the
+  manager's autoremove. Each manager's own clean-up would also take packages that
+  were already unneeded, image ones included, which is more than the preview
+  named. The honest version computes the dependencies only the named packages
+  need, previews them, and removes them as part of the set. (`undo` does not have
+  the gap: it removes what its run added, dependencies included.)
+- **`retire_packages` takes Brewfile-grammar tokens only.** There is no way to say
+  "this dnf, apt or pacman package must not be installed"; such a package can
+  only be an extra, which the baseline hides if it predates temper.
+- **The baseline lives in the invoking user's state directory.** `sudo temper
+  install` records it under root's, and the unprivileged `drift` after it finds
+  none and reports extras as unavailable — the same split `journal::
+  sudo_split_state_root` warns about for runs.
 - **Two declared repos may define the same repo id, and nothing says so.**
   `rpm_repos` deduplicates by destination *filename*, so two bundles shipping
   `brave.repo` and `brave-browser.repo` that both contain `[brave-browser]`
@@ -280,7 +303,10 @@ answers as data and cross-checks them against the finding registry, so a
 claimed capability with nothing behind it fails a test. What remains is
 dispatch: the providers still have bespoke function signatures, so `install`,
 `prune` and the reconcile pair are wired per provider rather than driven from the
-table. Harmonising them is what makes adding `apt` or `npm` routine.
+table. Harmonising them is what makes adding `npm` or `zypper` routine. `dnf`,
+`apt` and `pacman` are the nearest thing to that shape so far: three providers
+behind one set of functions in `syspkg`, dispatched on an enum rather than a
+trait — the evidence a trait would be shaped from.
 
 **Sequencing note.** Build the settings-backend seam only after a *second real
 consumer* exists. Flatpak overrides (`~/.local/share/flatpak/overrides/<app>`) is

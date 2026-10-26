@@ -56,6 +56,12 @@ present. **VS Code is the exception even here** — Settings Sync stays the sole
 registrar of your extensions, and adopting them wholesale is an ownership temper
 does not want.
 
+**The host package manager is the other one.** `init` does not seed what dnf, apt
+or pacman report as installed by name, because on a stock image that is the base
+system (over 200 packages on Ubuntu). It records it as this machine's
+**baseline** instead, and says how many packages that is. From then on, only what
+is installed by name after `init` is an extra — see §9c.
+
 `init` and `setup` are different jobs: **`setup` = which folder do I use**
 (records a pointer), **`init` = put this machine in the folder**.
 
@@ -70,7 +76,7 @@ temper install       # full converge: packages + all config + one-time setup
 temper restore-dconf # Linux desktop only: load the dconf snapshot back
 ```
 
-`install` adds missing packages (brew/flatpak/mas/gext/rpm), applies every
+`install` adds missing packages (brew/flatpak/mas/gext/rpm-ostree/dnf/apt/pacman), applies every
 config step, and runs one-time setup. **One provider failing does not cancel the
 rest.** An unavailable cask, a remote that has gone away, an rpm nothing
 provides — each is reported and the run carries on, so the other managers and
@@ -638,7 +644,7 @@ from, your **user** one, which is the only one temper may touch.
 
 ## 9b. Declare where layered rpms come from
 
-**When:** an `rpm_ostree` package needs a repo the machine does not have.
+**When:** an `rpm_ostree` or `dnf` package needs a repo the machine does not have.
 
 ```toml
 [[machine]]
@@ -669,6 +675,54 @@ layered. A repo temper deployed and the spec no longer declares is residue —
 reported, and removed if you have not edited it. Repos the *image* provides are
 never touched, and never reported, so there is no ignore list to maintain.
 
+## 9c. Install with the distro's own package manager (dnf, apt, pacman)
+
+**When:** a box runs Fedora or an EL rebuild (dnf), Debian or Ubuntu (apt), or
+Arch (pacman), and you want packages from its own repositories.
+
+```toml
+# apps/cli.toml — one bundle, a list per family
+os     = "linux"
+dnf    = ["fd-find", "ripgrep", "tmux"]
+apt    = ["fd-find", "ripgrep", "tmux"]
+pacman = ["fd", "ripgrep", "tmux"]
+```
+
+Names differ between families, so each manager has its own list, and each list
+applies only on a host whose manager it names — a Debian box ignores the `dnf`
+and `pacman` lines entirely. `install` runs one batched call per manager, as root
+(one password for the whole run), after `rpm_repos` so a vendor package resolves
+on the first pass; apt refreshes its package lists first. `undo` removes what the
+run added — the packages and what they pulled in, read back from the machine.
+temper never upgrades through these managers. Declare package names: a group, a
+pattern or a provide (`vim` for `vim-enhanced`) installs nothing of that name, so
+it stays missing and `install` says so.
+
+**Extras start at the baseline.** The first time temper manages a manager on a
+machine — `init`, or the first `install` that declares it — it records what had
+already been installed by name. Only what is installed by name after that is an
+extra: `drift` reports it, `prune` removes it, `reconcile` absorbs it into the
+machine's own list. Dependencies are never extras. Until a baseline exists,
+`drift` reports the extras direction as unavailable rather than listing the
+base system. The baseline lives in temper's state directory
+(`~/.local/state/temper/baseline/<machine>.json`); delete the entry for a
+manager to have the next `install` record a fresh one.
+
+**`prune` removes exactly what it shows.** Each removal is simulated by the
+manager first, and a package another installed package depends on is reported
+as unremovable instead of removed along with its dependant — remove the
+dependant first, or declare the package. The dependencies a removed extra pulled
+in stay installed, because taking them would be more than the preview named;
+`apt autoremove`, `dnf autoremove` or `pacman -Rns $(pacman -Qdtq)` clears them.
+
+Two hosts need a word. On an **image-based** Fedora (Silverblue, Bazzite,
+CoreOS) dnf is present but cannot install, so a bundle's `dnf` list is inert
+there — as another family's is — and a `[[machine]].dnf` list reports unavailable
+and points at `rpm_ostree`. On **Arch**, temper installs against the
+sync database as it stands and never runs `-Sy`, which would be a partial
+upgrade; a package pacman cannot find or download usually means the database is
+stale, and `sudo pacman -Syu` is yours to run.
+
 ## 10. Per-machine versions of the fleet lists
 
 **When:** you want something on one box only.
@@ -686,6 +740,7 @@ the folder rather than adding a token to a list. The matrix in
 [[machine]]
 brew_trust  = ["me/personal-tap"]   # unioned with the fleet [brew].trust
 rpm_ostree  = ["proton-vpn"]        # unioned with its bundles' lists
+apt         = ["htop"]              # likewise, for this box's package manager
 [machine.ignore]
 flatpak = ["org.example.JustHere"]  # unioned with the fleet [ignore]
 ```
@@ -798,6 +853,7 @@ which is why it has verbs of its own.
 | desktop dconf subtrees | `restore-dconf` | `snapshot-dconf`, or `reconcile` per key — a bundle-owned settings file needs `snapshot-dconf --include-shared` |
 | flatpak remotes | `install` (remove: `prune`) | `reconcile` — machine scope |
 | rpm-ostree layered packages | `install` (remove: `prune`, which stages a deployment) | `reconcile` — machine scope |
+| dnf / apt / pacman packages | `install` (remove: `prune`, for what was installed by name since the baseline) | `reconcile` — machine scope |
 | rpm repos (`rpm_repos`) | `install`, before any package (remove: `prune`, after the un-layer) | you author it by hand — absorbing one means copying a file into the folder |
 | brew tap-trust | `install` / `update` (remove: `prune`) | `reconcile` — the fleet list needs `--include-trust` |
 | deployed-file residue | n/a — it is what a *dropped* step left | `prune` removes it if untouched, reports it if you edited it |

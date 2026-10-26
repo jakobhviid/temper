@@ -77,7 +77,7 @@ fn run_lines(cmd: &str, args: &[&str]) -> Result<Vec<String>> {
 ///
 /// Returns the items that actually landed — which is what gets journaled, so a
 /// failed install never leaves an undo entry for something that was never there.
-fn batch_then_isolate<F>(items: &[String], label: &str, verbose: bool, build: F) -> Vec<String>
+pub(crate) fn batch_then_isolate<F>(items: &[String], label: &str, verbose: bool, build: F) -> Vec<String>
 where
     F: Fn(&[String]) -> Command,
 {
@@ -514,7 +514,7 @@ fn run_with_spinner(mut cmd: Command, what: &str, initial: &str) -> Result<(bool
 /// `flatpak update`'s "Nothing to update." (its remotes) reads as a verdict on
 /// the whole converge, and — writing to temper's stdout — corrupts `--json`.
 /// Returns whether the child succeeded.
-fn run_child(mut cmd: Command, verbose: bool, what: &str, initial: &str) -> bool {
+pub(crate) fn run_child(mut cmd: Command, verbose: bool, what: &str, initial: &str) -> bool {
     if verbose {
         // The user asked to see it — stream live. But `--verbose` and `--json`
         // are both global, so under JSON a streamed child would write its output
@@ -1455,6 +1455,7 @@ pub fn declaring_bundle(
         let hit = match kind {
             DeclKind::GnomeExtension => bundle.gnome_extensions.iter().any(|e| e.uuid() == item),
             DeclKind::RpmOstree => bundle.rpm_ostree.iter().any(|r| r == item),
+            DeclKind::System(pm) => pm.bundle_list(&bundle).iter().any(|r| r == item),
             DeclKind::FlatpakRemote => bundle
                 .flatpak_remotes
                 .iter()
@@ -1475,6 +1476,7 @@ pub enum DeclKind {
     GnomeExtension,
     RpmOstree,
     FlatpakRemote,
+    System(crate::syspkg::SysPm),
 }
 
 /// Every snapshot this machine's declared extensions bring with them.
@@ -3072,6 +3074,9 @@ mod gating_tests {
             vars: Default::default(),
             brew_trust: Vec::new(),
             rpm_ostree: Vec::new(),
+            dnf: Vec::new(),
+            apt: Vec::new(),
+            pacman: Vec::new(),
             flatpak_remotes: Vec::new(),
             rpm_repos: Vec::new(),
             retire: Vec::new(),

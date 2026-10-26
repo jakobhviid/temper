@@ -13,7 +13,7 @@ use anyhow::{bail, Result};
 use crate::journal::Journal;
 use crate::manifest::{self, expand_tilde, Assert, Ignore, Machine, Step};
 use crate::primitives::{self, Applied, CopyOpts, ExecOpts, FileState};
-use crate::{drift, packages, probe, providers};
+use crate::{drift, packages, probe, providers, syspkg};
 
 /// Everything a machine composes, OS-gated to this host.
 pub struct Resolved {
@@ -354,6 +354,25 @@ fn root_steps(
     Ok((own, scripts))
 }
 
+/// What the host package managers would install, one entry per manager, for the
+/// up-front root ask: `dnf install: jq, tree`. Keyed on what is missing, like
+/// everything else in the ask — a converged machine is asked nothing.
+fn syspkg_pending(home: &Path, machine: &Machine) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for &pm in syspkg::SysPm::ALL {
+        if !syspkg::caps(pm).converge {
+            continue;
+        }
+        let effective = syspkg::effective(home, machine, pm)?;
+        if let Some(missing) = syspkg::missing(pm, &effective) {
+            if !missing.is_empty() {
+                out.push(format!("{} install: {}", pm.name(), missing.join(", ")));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Ask for root **once**, up front, for everything in this run that needs it — and
 /// say only what this machine can actually deliver.
 ///
@@ -363,8 +382,8 @@ fn root_steps(
 /// it is no longer printed as a guarantee: temper states what it needs the password
 /// for, and if a script won't be able to reuse it, says that plainly with the
 /// remedy. Silent when nothing needs root, which is the common case.
-fn acquire_root_once(casks: &[String], own: &[String], scripts: &[String]) {
-    if casks.is_empty() && own.is_empty() && scripts.is_empty() {
+fn acquire_root_once(casks: &[String], own: &[String], system: &[String], scripts: &[String]) {
+    if casks.is_empty() && own.is_empty() && system.is_empty() && scripts.is_empty() {
         return;
     }
     // Who can actually spend a credential temper acquires? Only temper's own
@@ -376,7 +395,13 @@ fn acquire_root_once(casks: &[String], own: &[String], scripts: &[String]) {
     // If a credential already exists we can learn the scope *before* spending a
     // prompt — and skip asking altogether when the only reason would be work that
     // cannot reuse it anyway.
-    if own.is_empty() && crate::sudo::cached() && !crate::sudo::reusable_by_children() {
+    // A host package manager is run by temper itself (`sudo dnf …`), so it spends
+    // the credential the way a root-owned file write does.
+    if own.is_empty()
+        && system.is_empty()
+        && crate::sudo::cached()
+        && !crate::sudo::reusable_by_children()
+    {
         warn_parent_scoped(&beyond_temper);
         return;
     }
@@ -387,6 +412,9 @@ fn acquire_root_once(casks: &[String], own: &[String], scripts: &[String]) {
     }
     if !own.is_empty() {
         what.push(format!("{} file(s) written as root: {}", own.len(), own.join(", ")));
+    }
+    if !system.is_empty() {
+        what.push(system.join(" · "));
     }
     if !scripts.is_empty() {
         what.push(format!("{} script(s) that escalate: {}", scripts.len(), scripts.join(", ")));
@@ -980,6 +1008,46 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         converge: &[Answer::Verb("temper install --packages-only")],
         absorb: &[Answer::Verb("temper reconcile")],
     },
+    // The host package managers: the rpm-ostree shape without the reboot. A
+    // missing one is installed or dropped from this machine's own list; an
+    // extra is removed or absorbed into it. A bundle-declared missing package
+    // names its bundle in the finding, as rpm-ostree's does.
+    KindSpec {
+        name: "dnf",
+        detects: Detects::Missing,
+        converge: &[Answer::Verb("temper install --packages-only")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "dnf-extra",
+        detects: Detects::Extra,
+        converge: &[Answer::Verb("temper prune")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "apt",
+        detects: Detects::Missing,
+        converge: &[Answer::Verb("temper install --packages-only")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "apt-extra",
+        detects: Detects::Extra,
+        converge: &[Answer::Verb("temper prune")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "pacman",
+        detects: Detects::Missing,
+        converge: &[Answer::Verb("temper install --packages-only")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
+    KindSpec {
+        name: "pacman-extra",
+        detects: Detects::Extra,
+        converge: &[Answer::Verb("temper prune")],
+        absorb: &[Answer::Verb("temper reconcile")],
+    },
     KindSpec {
         name: "brew-trust",
         detects: Detects::Missing,
@@ -1234,6 +1302,9 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
         "flatpak-package-extra",
         "mas-package-extra",
         "vscode-package-extra",
+        "dnf-extra",
+        "apt-extra",
+        "pacman-extra",
     ]);
     let trust_extra = drifted(&["brew-trust-extra"]);
     let dconf_capture = drifted(&["dconf-key", "dconf-extra", "dconf-uncaptured"]);
@@ -1248,6 +1319,12 @@ pub fn remediations(items: &[Finding]) -> Vec<Remediation> {
         "vscode-package-extra",
         "brew-trust",
         "brew-trust-extra",
+        "dnf",
+        "dnf-extra",
+        "apt",
+        "apt-extra",
+        "pacman",
+        "pacman-extra",
     ]);
     // `gnome-extension-enable` belongs here too: reconcile absorbs the enable
     // state into the machine's own list. Left out, the label's kind list came up
@@ -1754,6 +1831,14 @@ pub fn run_drift(
         });
     }
 
+    // The host's own package manager. A list whose manager is not this host's is
+    // inert, as a `packages_mac` line is on Linux: one bundle can carry a dnf,
+    // an apt and a pacman list for a mixed fleet. The machine's OWN list is the
+    // exception — nothing else can be meant by it, so it is said out loud.
+    for &pm in syspkg::SysPm::ALL {
+        findings.extend(syspkg_findings(home, machine, ignore, pm)?);
+    }
+
     // Whole-desktop dconf snapshots (machine scope): the captured file versus a
     // live dump, both filtered through the same `strip`. Grouped per snapshot so
     // a narrow subtree (`…/shell/extensions/`) reads as its own section.
@@ -1808,6 +1893,207 @@ pub fn run_drift(
     }
 
     Ok(findings)
+}
+
+/// Install what one host package manager is missing. Returns whether the
+/// manager reached the declared state — `false` names it in the run's failures.
+///
+/// Repos converge before this (`run_install`), so a package from a declared
+/// `rpm_repos` entry resolves on the first run. The baseline is recorded before
+/// the first install, so nothing temper installs is ever mistaken for what the
+/// machine already had.
+fn syspkg_converge(
+    home: &Path,
+    machine: &Machine,
+    pm: syspkg::SysPm,
+    journal: &mut Journal,
+    verbose: bool,
+) -> Result<bool> {
+    let effective = syspkg::effective(home, machine, pm)?;
+    let caps = syspkg::caps(pm);
+    if effective.is_empty() {
+        return Ok(true);
+    }
+    // Not a manager this host installs with: a bundle's list is inert, as it is
+    // in drift. The machine's own list is a mistake, and said — but it is not a
+    // failed converge, because drift reports it as unavailable, not as drift.
+    if !caps.converge {
+        let own = pm.machine_list(machine);
+        if !own.is_empty() {
+            eprintln!(
+                "{} [[machine]].{} lists {} package(s) this host cannot install: {}",
+                crate::ui::yellow(crate::ui::g_warn()),
+                pm.name(),
+                own.len(),
+                caps.why_not.unwrap_or("it has no such package manager")
+            );
+        }
+        return Ok(true);
+    }
+    let Some(missing) = syspkg::missing(pm, &effective) else {
+        eprintln!(
+            "{} {} could not list what is installed — its {} declared package(s) were not touched",
+            crate::ui::yellow(crate::ui::g_warn()),
+            pm.name(),
+            effective.len()
+        );
+        return Ok(false);
+    };
+    if let Err(e) = syspkg::record_baseline(&machine.name, pm) {
+        // Without one, extras stay unreported, which is the safe direction.
+        eprintln!(
+            "{} could not record the {} baseline: {e:#}",
+            crate::ui::yellow(crate::ui::g_warn()),
+            pm.name()
+        );
+    }
+    let landed = syspkg::install(pm, &missing, verbose);
+    journal.record_packages(pm.name(), &landed.added);
+    let short = landed.requested.len() < missing.len();
+    if short {
+        let absent: Vec<&String> = missing.iter().filter(|p| !landed.requested.contains(p)).collect();
+        eprintln!(
+            "{} {} did not install: {} — a package name is needed, not a group or a provide",
+            crate::ui::yellow(crate::ui::g_warn()),
+            pm.name(),
+            absent.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+        );
+    }
+    if short && pm == syspkg::SysPm::Pacman {
+        eprintln!(
+            "  {} a package pacman cannot find or download usually means a stale sync \
+             database — `sudo pacman -Syu` refreshes it (temper does not upgrade the system)",
+            crate::ui::dim(crate::ui::g_arrow())
+        );
+    }
+    Ok(!short)
+}
+
+/// Drift for one host package manager, both directions.
+///
+/// Three things are status-only rather than drift, each because there is nothing
+/// a verb could do about it here: a manager this host does not have, one it has
+/// but cannot install with (dnf on an atomic host), and an extras direction with
+/// no baseline yet. Each says why, so none reads as "in sync".
+fn syspkg_findings(
+    home: &Path,
+    machine: &Machine,
+    ignore: &Ignore,
+    pm: syspkg::SysPm,
+) -> Result<Vec<Finding>> {
+    let mut out = Vec::new();
+    let caps = syspkg::caps(pm);
+    let effective = syspkg::effective(home, machine, pm)?;
+    // The short reason rides the status, because that is what the drift summary
+    // prints for a status-only line; the long one is the detail.
+    let status_only = |kind: &'static str, target: String, short: String, detail: String| Finding {
+        app: pm.name().into(),
+        kind,
+        target,
+        ok: true,
+        status: format!("unavailable — {short}"),
+        detail: Some(detail),
+    };
+    // Not a manager this host installs with — another family's, or dnf on an
+    // image-based host. A bundle's list is inert here, which is what lets one
+    // bundle serve a mixed fleet; the machine's own list cannot mean anything
+    // else, so it is reported.
+    if !caps.converge {
+        let own = pm.machine_list(machine);
+        if !own.is_empty() {
+            let why = caps
+                .why_not
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("this host has no {}", pm.name()));
+            out.push(status_only(
+                pm.kind(false),
+                format!("[[machine]].{}", pm.name()),
+                why.clone(),
+                format!("the machine declares {}: {why}", own.join(", ")),
+            ));
+        }
+        return Ok(out);
+    }
+    if effective.is_empty() {
+        return Ok(out);
+    }
+    match syspkg::missing(pm, &effective) {
+        None => out.push(status_only(
+            pm.kind(false),
+            pm.name().into(),
+            format!("{} could not list its packages", pm.name()),
+            format!(
+                "`{}` is installed but failed to list what it has — drift and prune \
+                 skip it rather than read the silence as empty",
+                pm.name()
+            ),
+        )),
+        // All present: one in-sync check for the whole list. Without it a box
+        // whose only declarations are its package list produced no finding at
+        // all, and drift called it "nothing to check" on the run that verified
+        // every package.
+        Some(missing) if missing.is_empty() => out.push(Finding {
+            app: pm.name().into(),
+            kind: pm.kind(false),
+            target: format!("{} declared package(s)", effective.len()),
+            ok: true,
+            status: "installed".into(),
+            detail: None,
+        }),
+        Some(missing) => {
+            for pkg in missing {
+                let from = providers::declaring_bundle(
+                    home,
+                    machine,
+                    providers::DeclKind::System(pm),
+                    &pkg,
+                );
+                out.push(Finding {
+                    app: pm.name().into(),
+                    kind: pm.kind(false),
+                    target: pkg,
+                    ok: false,
+                    status: "missing".into(),
+                    detail: from.map(|f| {
+                        format!("declared in {f} — fleet scope, so removing it is a hand edit there")
+                    }),
+                });
+            }
+        }
+    }
+    match syspkg::extras(&machine.name, pm, &effective, ignore) {
+        syspkg::Extras::Found(extras) => {
+            for pkg in extras {
+                out.push(Finding {
+                    app: pm.name().into(),
+                    kind: pm.kind(true),
+                    target: pkg,
+                    ok: false,
+                    status: "extra".into(),
+                    detail: None,
+                });
+            }
+        }
+        syspkg::Extras::NoBaseline => out.push(status_only(
+            pm.kind(true),
+            "packages installed by hand".into(),
+            "no baseline until the first `temper install`".into(),
+            "the first `temper install` records what this machine already has, and \
+             only what is installed after that is reported"
+                .into(),
+        )),
+        syspkg::Extras::Unavailable => out.push(status_only(
+            pm.kind(true),
+            pm.name().into(),
+            format!("{} could not say what was installed by name", pm.name()),
+            format!(
+                "`{}` could not list the packages installed by name, so extras are \
+                 not computed",
+                pm.name()
+            ),
+        )),
+    }
+    Ok(out)
 }
 
 /// Apply a single step. Returns whether it changed anything.
@@ -1992,6 +2278,7 @@ pub fn run_install(
         acquire_root_once(
             &providers::casks_needing_root(&effective),
             &own_root,
+            &syspkg_pending(home, machine)?,
             &script_root,
         );
         Some(crate::sudo::keep_alive())
@@ -2035,7 +2322,15 @@ pub fn run_install(
             .collect()
     };
     let converged = providers::converge(&effective, dry_run, verbose)?;
-    let packages = converged.considered;
+    // The host package managers' lists count too, where they apply: a Debian
+    // box whose packages are all `apt` ones declared zero packages otherwise,
+    // on the same run that installed them.
+    let mut packages = converged.considered;
+    for &pm in syspkg::SysPm::ALL {
+        if syspkg::caps(pm).converge {
+            packages += syspkg::effective(home, machine, pm)?.len();
+        }
+    }
     // Journal per provider, so undo dispatches to the right uninstall. Recorded
     // after the converge and only for managers whose install is not also an
     // upgrade path — see `Entry::PackagesInstalled`.
@@ -2070,13 +2365,21 @@ pub fn run_install(
     journal.record_packages("rpm-ostree", &rpm_installed);
     // Layering stages a deployment, so anything layered means a reboot.
     let reboot = !rpm_installed.is_empty();
+    let mut failed = converged.failed.clone();
+    if !dry_run {
+        for &pm in syspkg::SysPm::ALL {
+            if !syspkg_converge(home, machine, pm, &mut journal, verbose)? {
+                failed.push(pm.name());
+            }
+        }
+    }
 
     // `install-missing`: packages only — skip the config-step phase entirely.
     if packages_only {
         journal.commit()?;
         return Ok(InstallReport {
             packages,
-            failed: converged.failed.clone(),
+            failed,
             upgraded: None, // `install-missing` adds, never upgrades
             steps_changed: 0,
             steps_ran: 0,
@@ -2203,7 +2506,7 @@ pub fn run_install(
     }
     Ok(InstallReport {
         packages,
-        failed: converged.failed,
+        failed,
         upgraded: None, // `install` converges the declared set; `update` upgrades
         steps_changed: changed,
         steps_ran: ran,
@@ -2243,6 +2546,11 @@ pub struct PrunePlan {
     /// `rpm-ostree-extra`. Stages a new deployment, so it sets the reboot signal
     /// exactly as layering does.
     pub rpm_ostree: Vec<String>,
+    /// Host-package-manager packages to remove — the prune counterpart of a
+    /// `dnf-extra` / `apt-extra` / `pacman-extra`. Only the ones the manager's
+    /// own simulation removes without taking a dependant along; the rest are in
+    /// `unremovable`.
+    pub system: Vec<(syspkg::SysPm, String)>,
     /// Package managers that are installed and could not be asked what they
     /// hold. **Never removable**, and deliberately not in `items()`: nothing is
     /// planned for them, which is the point. They are here so an empty plan can
@@ -2253,7 +2561,7 @@ pub struct PrunePlan {
     /// `"extras": []` from a machine whose brew is broken cannot tell it from a
     /// converged one, and "nothing to remove" is the wrong conclusion to draw
     /// from "I could not look".
-    pub unavailable: Vec<packages::Manager>,
+    pub unavailable: Vec<&'static str>,
     /// Extras this machine holds that `prune` **cannot** remove, with the reason.
     /// Reported, never counted, and deliberately not in `items()` — for the same
     /// reason as `unavailable`: nothing is planned for them.
@@ -2266,7 +2574,7 @@ pub struct PrunePlan {
     /// confirm that overstates what a destructive run will do is worse than a
     /// verbose one — it spends the user's trust on the single prompt standing
     /// between them and an irreversible removal.
-    pub unremovable: Vec<(packages::Manager, String, &'static str)>,
+    pub unremovable: Vec<(&'static str, String, &'static str)>,
 }
 
 impl PrunePlan {
@@ -2286,6 +2594,11 @@ impl PrunePlan {
         }
         for r in &self.rpm_ostree {
             out.push(("rpm_ostree", r.clone()));
+        }
+        // Labelled by manager, so the preview and `--json` say which one. The
+        // labels are `SysPm::name`, and a test holds them to `LISTS`.
+        for (pm, n) in &self.system {
+            out.push((pm.name(), n.clone()));
         }
         for r in &self.flatpak_remotes {
             out.push(("flatpak_remotes", r.clone()));
@@ -2354,6 +2667,12 @@ impl PrunePlan {
                 n(&self.rpm_ostree)
             ));
         }
+        for &pm in syspkg::SysPm::ALL {
+            let count = self.system.iter().filter(|(p, _)| *p == pm).count();
+            if count > 0 {
+                out.push(format!("removes {count} {} package(s)", pm.name()));
+            }
+        }
         out
     }
 
@@ -2364,6 +2683,9 @@ impl PrunePlan {
         "untrust",
         "extensions",
         "rpm_ostree",
+        "dnf",
+        "apt",
+        "pacman",
         "flatpak_remotes",
         "residue",
         "retired",
@@ -2378,6 +2700,7 @@ impl PrunePlan {
             "untrust" => format!("untrust {item}"),
             "extensions" => format!("uninstall extension {item}"),
             "rpm_ostree" => format!("un-layer rpm {item}"),
+            "dnf" | "apt" | "pacman" => format!("remove {list} package {item}"),
             "flatpak_remotes" => format!("remove flatpak remote {item}"),
             "residue" => format!("remove {item} (deployed by a step the spec dropped)"),
             "retired" => format!("remove {item} (the spec retires this path)"),
@@ -2421,11 +2744,7 @@ impl PrunePlan {
         // tell an empty plan from an unaskable machine.
         doc.insert(
             "unavailable".into(),
-            serde_json::json!(self
-                .unavailable
-                .iter()
-                .map(|m| m.as_str())
-                .collect::<Vec<_>>()),
+            serde_json::json!(self.unavailable),
         );
         doc.insert(
             "unremovable".into(),
@@ -2433,7 +2752,7 @@ impl PrunePlan {
                 .unremovable
                 .iter()
                 .map(|(m, n, why)| serde_json::json!({
-                    "manager": m.as_str(),
+                    "manager": m,
                     "name": n,
                     "why": why,
                 }))
@@ -2596,6 +2915,25 @@ marker = "temper""#,
 mod prune_plan_tests {
     use super::*;
 
+    /// The host package managers label their prune items by name, which the
+    /// source scrape cannot read as a literal — so this holds each label to
+    /// `LISTS` (what the preview and `--json` iterate) and to `describe`.
+    #[test]
+    fn every_host_package_manager_is_a_prune_list() {
+        for &pm in syspkg::SysPm::ALL {
+            assert!(
+                PrunePlan::LISTS.contains(&pm.name()),
+                "`{}` is pushed by items() but LISTS does not name it — it would be \
+                 removed without appearing in the preview or --json",
+                pm.name()
+            );
+            assert_eq!(
+                PrunePlan::describe(pm.name(), "jq"),
+                format!("remove {} package jq", pm.name())
+            );
+        }
+    }
+
     /// Every list a prune can act on is counted.
     ///
     /// A count is output, so a count that omits a variant reports work it did as
@@ -2610,6 +2948,10 @@ mod prune_plan_tests {
             untrust: vec!["user/tap".into()],
             extensions: vec!["a@x".into()],
             rpm_ostree: vec!["vpn".into()],
+            system: vec![
+                (syspkg::SysPm::Dnf, "cowsay".into()),
+                (syspkg::SysPm::Apt, "cowsay".into()),
+            ],
             flatpak_remotes: vec!["vendor".into()],
             residue: vec!["~/.config/gone".into()],
             retired: vec!["~/.config/retired".into()],
@@ -2621,13 +2963,13 @@ mod prune_plan_tests {
             // remove a system-scope flatpak, so counting it would make the
             // confirm promise work the executor declines.
             unremovable: vec![(
-                packages::Manager::Flatpak,
+                "flatpak",
                 "org.image.Baked".into(),
                 "installed system-wide, not by you",
             )],
         };
         assert!(!p.is_empty());
-        assert_eq!(p.len(), 7, "a list prune acts on is not being counted");
+        assert_eq!(p.len(), 9, "a list prune acts on is not being counted");
 
         // …and each list alone is both non-empty and counted, so no single
         // variant can be the one that is silently dropped.
@@ -2636,6 +2978,7 @@ mod prune_plan_tests {
             PrunePlan { untrust: p.untrust.clone(), ..Default::default() },
             PrunePlan { extensions: p.extensions.clone(), ..Default::default() },
             PrunePlan { rpm_ostree: p.rpm_ostree.clone(), ..Default::default() },
+            PrunePlan { system: vec![p.system[0].clone()], ..Default::default() },
             PrunePlan { flatpak_remotes: p.flatpak_remotes.clone(), ..Default::default() },
             PrunePlan { residue: p.residue.clone(), ..Default::default() },
         ] {
@@ -2694,6 +3037,7 @@ pub fn run_prune(
     brew_trust: &[String],
 ) -> Result<PrunePlan> {
     let (mut packages, unavailable) = package_extras_observed(home, machine, ignore)?;
+    let mut unavailable: Vec<&'static str> = unavailable.iter().map(|m| m.as_str()).collect();
     // A flatpak extra is removable from either installation temper can name —
     // `prune` issues one batched call per scope. What it cannot name is a custom
     // installation (`--installation=NAME`), so those are reported instead. Split
@@ -2704,7 +3048,7 @@ pub fn run_prune(
     //
     // `None` means the installations could not be read, and the executor removes
     // nothing in that case; the plan has to agree, or it over-promises.
-    let mut unremovable: Vec<(packages::Manager, String, &'static str)> = Vec::new();
+    let mut unremovable: Vec<(&'static str, String, &'static str)> = Vec::new();
     if packages.iter().any(|(m, _)| *m == packages::Manager::Flatpak) {
         let live = providers::flatpak_app_scopes();
         packages.retain(|(m, n)| {
@@ -2713,7 +3057,7 @@ pub fn run_prune(
             }
             let Some(live) = &live else {
                 unremovable.push((
-                    *m,
+                    m.as_str(),
                     n.clone(),
                     "could not read which installation holds it",
                 ));
@@ -2726,7 +3070,7 @@ pub fn run_prune(
                 // discarding an extra we cannot place is the same silent skip as
                 // reading "could not ask" as "nothing there" (Principles #6, #12).
                 unremovable.push((
-                    *m,
+                    m.as_str(),
                     n.clone(),
                     "installed, but no installation reports holding it",
                 ));
@@ -2736,7 +3080,7 @@ pub fn run_prune(
                 true
             } else {
                 unremovable.push((
-                    *m,
+                    m.as_str(),
                     n.clone(),
                     "in an installation temper does not manage",
                 ));
@@ -2786,11 +3130,33 @@ pub fn run_prune(
     // User-scope extensions no bundle declares — the same set drift reports as
     // `extension-extra`, so what drift names is exactly what prune offers.
     let extensions = providers::gext_extras(&providers::effective_extensions(home, machine)?, ignore);
+    // The host package managers: what drift reports as extras, less what the
+    // manager's own simulation says would take a dependant along. Decided here,
+    // at plan time, so the preview and the confirm describe the run that will
+    // happen rather than one the executor then declines.
+    let mut system = Vec::new();
+    for &pm in syspkg::SysPm::ALL {
+        if !syspkg::caps(pm).converge {
+            continue;
+        }
+        let effective = syspkg::effective(home, machine, pm)?;
+        match syspkg::extras(&machine.name, pm, &effective, ignore) {
+            syspkg::Extras::Found(extras) => {
+                let (ok, held) = syspkg::removable(pm, &extras);
+                system.extend(ok.into_iter().map(|p| (pm, p)));
+                unremovable.extend(held.into_iter().map(|(p, why)| (pm.name(), p, why)));
+            }
+            syspkg::Extras::Unavailable => unavailable.push(pm.name()),
+            // Nothing to tell apart from the image yet; drift says so.
+            syspkg::Extras::NoBaseline => {}
+        }
+    }
     Ok(PrunePlan {
         packages,
         untrust,
         extensions,
         rpm_ostree: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
+        system,
         flatpak_remotes: providers::remotes_extras(
             &providers::effective_remotes(home, machine)?,
             ignore,
@@ -2853,10 +3219,30 @@ pub fn commit_prune(
     let unlayered = providers::rpm_ostree_uninstall(&plan.rpm_ostree, false)?;
     let unlayer_failed = !plan.rpm_ostree.is_empty() && !unlayered;
     let reboot = unlayered;
+    let mut failed: Vec<String> = Vec::new();
+    // Host packages before any file, too: a repo is one of those files, and
+    // packages go before repos on the way out as they come after them on the way
+    // in. What did not go is read back and named, not assumed.
+    for &pm in syspkg::SysPm::ALL {
+        let pkgs: Vec<String> = plan
+            .system
+            .iter()
+            .filter(|(p, _)| *p == pm)
+            .map(|(_, n)| n.clone())
+            .collect();
+        if pkgs.is_empty() {
+            continue;
+        }
+        let gone = syspkg::remove(pm, &pkgs, false);
+        failed.extend(
+            pkgs.iter()
+                .filter(|p| !gone.contains(p))
+                .map(|p| format!("{} {p}", pm.name())),
+        );
+    }
     // A retired target is as often a directory (`~/.config/old-app`) as a file,
     // and `sysfile` retires root-owned ones — `remove_file` alone failed both,
     // warned, and let the run report them removed.
-    let mut failed: Vec<String> = Vec::new();
     for path in &plan.retired {
         let p = crate::manifest::expand_tilde(path);
         if let Err(e) = crate::ledger::remove_path(&p) {
@@ -3017,9 +3403,12 @@ pub fn run_update(
     // `sudo install`. Ask once, up front, only if something actually needs it.
     let resolved = resolve(home, machine)?;
     let (own_root, script_root) = root_steps(home, machine, vars, &resolved, true)?;
+    // `update` installs nothing through the host package manager, so it asks
+    // nothing for one.
     acquire_root_once(
         &providers::casks_needing_root(&effective),
         &own_root,
+        &[],
         &script_root,
     );
     let _sudo = crate::sudo::keep_alive();
@@ -3220,6 +3609,13 @@ mod remediation_tests {
             "dconf-unavailable",
         ] {
             emitted.push(k.to_string());
+        }
+        // The host package managers' kinds come from `SysPm::kind`, a match on
+        // the manager — read through it rather than copied, for the reason the
+        // assertion kinds below are.
+        for &pm in crate::syspkg::SysPm::ALL {
+            emitted.push(pm.kind(false).to_string());
+            emitted.push(pm.kind(true).to_string());
         }
         // The assertion kinds come from `drift::kind`, which returns them rather
         // than writing them beside a `kind:` — so they are taken from the one

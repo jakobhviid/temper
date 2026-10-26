@@ -168,8 +168,8 @@ finished.
 
 A *feature* is a kind of state temper manages — `brew`, `cask`, `brew-tap`,
 `brew-trust`, `flatpak`, `mas`, `vscode`, `gnome-extensions`, `rpm-ostree`,
-`dconf`, and the file primitives. A new one (`apt`, `dnf`, `npm`, `cargo`)
-becomes possible by answering the same eleven questions, so the building blocks
+`dnf`, `apt`, `pacman`, `dconf`, and the file primitives. A new one (`zypper`,
+`npm`, `cargo`) becomes possible by answering the same eleven questions, so the building blocks
 are identical for everyone and "did we finish it?" stops being a matter of
 opinion.
 
@@ -229,6 +229,7 @@ above.
 | `mas` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `gnome-extensions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `rpm-ostree` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
+| `dnf` / `apt` / `pacman` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `rpm-repo` | n/a | ✅ | ✅ | ✅ | n/a | n/a | n/a | n/a | ✅ | ❌ | ✅ |
 | `dconf` | ✅ | ✅ | ✅ | ⚠ | ❌ | ✅ | ✅ | ⚠ | ✅ | ✅ | ❌ |
 | `deployed-files` (`copy` / `sysfile` / `block`) | ✅ | n/a | ✅ | ✅ | ✅ | n/a | n/a | ❌ | ✅ | ⚠ | ✅ |
@@ -253,9 +254,39 @@ together, and it is why there is no `[ignore]` list for repos to need. Column 6
 is authoring: absorbing a repo means copying a file *into* the folder, which no
 `reconcile` does.
 
+`dnf`, `apt` and `pacman` fill every column, and two of them only because of a
+rule the others do not need. **Extras (5, 6) are counted from a baseline.** Each
+manager records which packages were asked for by name, apart from what they
+pulled in, which is exactly the extras direction — except that a stock image
+counts its own base system as asked-for: 106–123 packages on Debian, 211–225 on
+Ubuntu, 39 on Fedora, about 20 on EL and 17 on Arch, measured on clean images.
+Diffing that against a spec would offer `prune` the base system. So the first
+time temper manages one of them on a machine (`init`, or the first `install`
+declaring it), it records what was already asked for, and only what is asked for
+after that is an extra. It is the line the ledger draws for files — temper-era or
+not — one step wider: it also catches what a person installed by hand since.
+
+**Removal (5, and `undo`) is exactly what the preview names.** All three remove
+what depends on the package they are told to remove, so a removal is first
+simulated by the manager itself (`rpm -e --test`, `apt-get -s remove`,
+`pacman -Rp`) and one that would take anything else along is held back and
+reported. Each manager's own dependency clean-up is off for the same reason, so
+what an extra pulled in stays behind. Decided at plan time, so the preview is the
+effect. `install` reads back what it added, deps included, and journals that, so
+`undo` removes what the run added and a name that installed nothing of its own —
+a group, a provide — is journaled as nothing.
+
+A list for a manager the host cannot install with is **inert**, not
+unavailable — one bundle carries a `dnf`, an `apt` and a `pacman` list for a
+mixed fleet, as one carries `packages_mac` and `packages_linux`. Observing and
+converging are separate facts (question 2b): an atomic Fedora reads its rpm
+database through dnf and cannot install with it, so a bundle's `dnf` list is inert
+there too. A machine's *own* list for such a manager cannot mean anything else, so
+it is reported `unavailable`, naming `rpm_ostree` where that applies.
+
 The ordering is the feature, in both directions. Repos converge **before** any
-package, because `rpm-ostree install` resolves against `/etc/yum.repos.d` as it
-stands when the call is made. `prune` takes them **after** the un-layer, because
+package, because `rpm-ostree install` and `dnf install` resolve against
+`/etc/yum.repos.d` as it stands when the call is made. `prune` takes them **after** the un-layer, because
 un-layering recomposes a deployment and re-resolves everything still layered —
 so removing a repo first can strand a package nobody asked to remove. One
 invariant, stated once: repos go first on the way in and last on the way out.
@@ -308,16 +339,18 @@ pattern.
 **Column 10 was never a real constraint, and saying so cost a release.** "Packages
 cannot be journaled" was repeated until someone asked why: the set temper installs
 is known *before* the converge — temper computes what is missing in order to
-install it — and every provider's uninstall is its own install backwards. `gext`
-and `rpm-ostree` journal what they installed, and `undo` removes exactly that.
+install it — and every provider's uninstall is its own install backwards. `gext`,
+`rpm-ostree`, `dnf`, `apt` and `pacman` journal what they installed, and `undo`
+removes exactly that.
 
 The one genuinely unrevertible operation is an **upgrade** — reverting one means
 pinning a prior version whose bottle or commit may be gone — and that belongs to
 exactly two providers, because `update` only ever upgrades **brew** and
 **flatpak**. temper never runs `rpm-ostree upgrade`: on an atomic host the OS
 owns that, layered packages come along with the deployment, and temper only ever
-layers or un-layers. `gext` likewise only installs. So for those two the revert
-story is unconditional.
+layers or un-layers. Nor does it upgrade through `dnf`, `apt` or `pacman` — on a
+mutable distro the OS owns versions just the same. `gext` likewise only installs.
+So for all of those the revert story is unconditional.
 
 **VS Code extensions are deliberately outside this table.** temper converges a
 `vscode "…"` token if you declare one, but the probe invariant means a spec that
@@ -361,7 +394,8 @@ nothing and is not a limit anyone has to weigh.
 
 A feature is named for the **mechanism**, not the family or the desktop, because
 the family will get a second member and the desktop will get a second store.
-`rpm-ostree`, not `rpm` — a future `apt` is a different feature, not a variant.
+`rpm-ostree`, not `rpm` — `dnf` installs rpms too, and is a different feature
+rather than a variant.
 `brew-trust`, not `trust` — flatpak remotes and apt keys are also trust.
 `gnome-extensions`, not `extensions` — VS Code extensions are managed here too,
 and that collision is already live. `snapshot-dconf`, not `snapshot-gnome` —
@@ -555,10 +589,10 @@ app-bundles it wants. Drift at app scope is per-file / per-key / per-assertion.
 ### The primitives (closed set) and the providers (open, behind the interface)
 
 Both are listed together below because they are both tool code. The rows for
-`brew`, `flatpak`, `mas`, `gnome-extensions` and `rpm-ostree`
-are **tier 2 — providers**, not primitives: they are the implementations the
-eleven-column interface exists to standardise, and a future `apt` or `npm` joins
-that list without touching tier 1.
+`brew`, `flatpak`, `mas`, `gnome-extensions`, `rpm-ostree` and `dnf` / `apt` /
+`pacman` are **tier 2 — providers**, not primitives: they are the implementations
+the eleven-column interface exists to standardise, and a future `npm` joins that
+list without touching tier 1.
 
 | Primitive | Scope | What it does |
 |---|---|---|
@@ -570,6 +604,7 @@ that list without touching tier 1.
 | `mas` | machine | converge Mac App Store apps in a separate, **forgiving** `mas install` loop — skips apps already installed (per `mas list`), mutes Spotlight-reindex noise (`MAS_NO_AUTO_INDEX`), and a MAS failure is warned + skipped, never fatal (see below) |
 | `gext` | machine | converge GNOME extensions (install from EGO + `gext update`); distinct from *enabling* them (a dconf key) |
 | `rpm-ostree` | machine | layer an rpm that can't be image-baked (proton-vpn); emits a **reboot-required** signal temper reports but never automates |
+| `dnf` / `apt` / `pacman` | machine | install packages with the host's own manager, one batched call each; extras counted from a per-machine baseline; removal held back where it would take a dependant along |
 | `profile` | app/machine | install a macOS `.mobileconfig` — **weaker contract** on the *apply* side only (a GUI `open` the user approves; not undoable). Drift is real: the file's `PayloadIdentifier` is matched against `system_profiler`'s installed profiles (user **and** device scope, no root, no MDM), giving `missing` / `drifted` (installed but the source moved, per a content stamp) / `in sync`. A **signed** profile is CMS-wrapped, so its identifier can't be read → `unavailable` |
 | `sysfile` | app | write one **root-owned** system file (`/etc/…`) with mode/owner/group, escalating internally (`sudo install`) for just that write. Drift compares content + mode + owner; not journaled (system-side) |
 | `exec` | app | run a user-supplied script — the escape hatch (see "exec's contract") |

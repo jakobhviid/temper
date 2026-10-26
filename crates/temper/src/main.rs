@@ -22,7 +22,7 @@ use clap_complete::Shell;
 
 use temper_core::{
     dconf, discovery, git, journal, machine, manifest, packages, plan, providers, reconcile,
-    settings, ui,
+    settings, syspkg, ui,
 };
 
 const REPO_URL: &str = "https://github.com/jakobhviid/temper";
@@ -43,7 +43,7 @@ struct Cli {
     #[arg(long, global = true)]
     llm: bool,
 
-    /// Show the underlying tools' full output (brew/flatpak/mas/gext/rpm-ostree)
+    /// Show the underlying tools' full output (brew/flatpak/mas/gext/rpm-ostree/dnf/apt/pacman)
     /// and stream `exec` scripts live. Runs are quiet by default — only real
     /// installs, changes, warnings, and errors are shown; an idempotent `exec`'s
     /// chatter is captured and surfaced only if the script fails, and every
@@ -1645,9 +1645,8 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
                 println!(
                     "{}",
                     ui::yellow(&format!(
-                        "  {} {} {name} — {why}; prune cannot remove it",
+                        "  {} {mgr} {name} — {why}; prune cannot remove it",
                         ui::g_warn(),
-                        mgr.as_str()
                     ))
                 );
             }
@@ -1663,12 +1662,7 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
                     ui::yellow(&format!(
                         "  could not ask {} what is installed — whatever it holds \
                          is unexamined, not absent.",
-                        prune_plan
-                            .unavailable
-                            .iter()
-                            .map(|m| m.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        prune_plan.unavailable.join(", ")
                     ))
                 );
             }
@@ -1871,6 +1865,27 @@ fn cmd_init(name: Option<String>, role: Option<String>, yes: bool, json: bool) -
             "role": role, "brewfile": brewfile_rel, "created_manifest": fresh
         })),
     );
+
+    // The host package managers are adopted here too. What this machine already
+    // asked its package manager for becomes the baseline, so only what is
+    // installed after `init` is ever reported as an extra — seeding all of it
+    // into the spec instead would put the base system on `prune`'s path.
+    for &pm in syspkg::SysPm::ALL {
+        if !syspkg::caps(pm).converge {
+            continue;
+        }
+        if let Ok(true) = syspkg::record_baseline(&name, pm) {
+            if !json {
+                let n = syspkg::baseline(&name, pm).map_or(0, |b| b.len());
+                println!(
+                    "  {} recorded the {} baseline: {n} package(s) already installed by name \
+                     are treated as the system's own",
+                    ui::dim(ui::g_arrow()),
+                    pm.name()
+                );
+            }
+        }
+    }
 
     // The scaffold is a folder write in its own right, and `reconcile` returns
     // early when there is nothing to absorb — so without this, `init` on an
@@ -2184,6 +2199,8 @@ fn cmd_reconcile(
     let mut chosen_remote_drops: Vec<String> = Vec::new();
     let mut chosen_rpm_adds: Vec<String> = Vec::new();
     let mut chosen_rpm_drops: Vec<String> = Vec::new();
+    let mut chosen_system_adds: Vec<(syspkg::SysPm, String)> = Vec::new();
+    let mut chosen_system_drops: Vec<(syspkg::SysPm, String)> = Vec::new();
 
     if csw {
         // Machine-scope only. `[ignore]` routing is a judgement, not a state, so
@@ -2203,6 +2220,8 @@ fn cmd_reconcile(
         chosen_remote_drops = plan.remote_drops.clone();
         chosen_rpm_adds = plan.rpm_adds.clone();
         chosen_rpm_drops = plan.rpm_drops.clone();
+        chosen_system_adds = plan.system_adds.clone();
+        chosen_system_drops = plan.system_drops.clone();
         chosen_trust_adds = plan.trust_adds.clone();
         chosen_trust_drops = plan.trust_drops.clone();
         for (i, dp) in plan.dconf.iter().enumerate() {
@@ -2333,6 +2352,32 @@ fn cmd_reconcile(
                     AddChoice::Add => chosen_rpm_adds.push(pkg.clone()),
                     AddChoice::Ignore => {
                         chosen_ignores.push(("rpm_ostree".to_string(), pkg.clone()))
+                    }
+                    AddChoice::Skip => {}
+                }
+            }
+        }
+        if !plan.system_drops.is_empty() {
+            println!(
+                "\n{}",
+                ui::bold("Declared in this machine's own package lists but not installed:")
+            );
+            for (pm, pkg) in &plan.system_drops {
+                if !prompt_yes(&format!("  keep `{pkg}` in [[machine]].{}?", pm.name())) {
+                    chosen_system_drops.push((*pm, pkg.clone()));
+                }
+            }
+        }
+        if !plan.system_adds.is_empty() {
+            println!(
+                "\n{}",
+                ui::bold("Installed by name since temper's baseline, and not in the spec:")
+            );
+            for (pm, pkg) in &plan.system_adds {
+                match prompt_add(&format!("{} {pkg}", pm.name()), true) {
+                    AddChoice::Add => chosen_system_adds.push((*pm, pkg.clone())),
+                    AddChoice::Ignore => {
+                        chosen_ignores.push((pm.name().to_string(), pkg.clone()))
                     }
                     AddChoice::Skip => {}
                 }
@@ -2502,6 +2547,8 @@ fn cmd_reconcile(
         && chosen_package_drops.is_empty()
         && chosen_rpm_adds.is_empty()
         && chosen_rpm_drops.is_empty()
+        && chosen_system_adds.is_empty()
+        && chosen_system_drops.is_empty()
         && chosen_remote_adds.is_empty()
         && chosen_remote_drops.is_empty()
     {
@@ -2613,6 +2660,24 @@ fn cmd_reconcile(
                 ui::red("-"),
                 pkg,
                 ui::dim(&format!("{} [[machine]].rpm_ostree in temper.toml", ui::g_arrow()))
+            );
+        }
+        for (pm, pkg) in &chosen_system_adds {
+            println!(
+                "  {} {} {}  {}",
+                ui::green("+"),
+                pm.name(),
+                pkg,
+                ui::dim(&format!("{} [[machine]].{} in temper.toml", ui::g_arrow(), pm.name()))
+            );
+        }
+        for (pm, pkg) in &chosen_system_drops {
+            println!(
+                "  {} {} {}  {}",
+                ui::red("-"),
+                pm.name(),
+                pkg,
+                ui::dim(&format!("{} [[machine]].{} in temper.toml", ui::g_arrow(), pm.name()))
             );
         }
         for token in &chosen_package_drops {
@@ -2737,6 +2802,8 @@ fn cmd_reconcile(
         || !chosen_package_drops.is_empty()
         || !chosen_rpm_adds.is_empty()
         || !chosen_rpm_drops.is_empty()
+        || !chosen_system_adds.is_empty()
+        || !chosen_system_drops.is_empty()
         || !chosen_remote_adds.is_empty()
         || !chosen_remote_drops.is_empty();
     if tt_edits {
@@ -2784,6 +2851,12 @@ fn cmd_reconcile(
         for pkg in &chosen_rpm_drops {
             tt = reconcile::remove_machine_rpm(&tt, &m.name, pkg)?;
         }
+        for (pm, pkg) in &chosen_system_adds {
+            tt = reconcile::append_machine_system(&tt, &m.name, *pm, pkg)?;
+        }
+        for (pm, pkg) in &chosen_system_drops {
+            tt = reconcile::remove_machine_system(&tt, &m.name, *pm, pkg)?;
+        }
         // Stamp the temper that wrote this file, so a skew is later distinguishable
         // from a genuine parse error (monotonic — never lowers a newer stamp).
         tt = manifest::stamp_version(&tt)?;
@@ -2798,12 +2871,14 @@ fn cmd_reconcile(
         + chosen_trust_adds.len()
         + chosen_gext.len()
         + chosen_rpm_adds.len()
+        + chosen_system_adds.len()
         + chosen_gext_flips.len();
     let dropped = chosen_drops.len()
         + chosen_trust_drops.len()
         + chosen_gext_drops.len()
         + chosen_package_drops.len()
         + chosen_rpm_drops.len()
+        + chosen_system_drops.len()
         + chosen_remote_drops.len();
     let ignored = chosen_ignores.len() + chosen_tap_ignores.len();
     if json {

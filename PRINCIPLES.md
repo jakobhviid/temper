@@ -16,9 +16,10 @@
   file you write, never a tool release.
 - **Providers — open, behind an interface.** `brew`, `cask`, `brew-tap`,
   `brew-trust`, `flatpak`, `mas`, `vscode`, `gnome-extensions`, `rpm-ostree`,
-  `dconf`. Adding one is neither a big deal nor free: it is **routine**, because
-  it implements the eleven-column interface (#13) rather than inventing its own
-  verb set. `apt`, `dnf`, `npm`, `cargo` should each be a normal piece of work.
+  `dnf`, `apt`, `pacman`, `dconf`. Adding one is neither a big deal nor free: it
+  is **routine**, because it implements the eleven-column interface (#13) rather
+  than inventing its own verb set. `zypper`, `npm`, `cargo` should each be a
+  normal piece of work.
 
 The middle tier is what keeps a provider from being a bespoke decision. Listed
 among the primitives, each one feels like a release-sized judgement call, and a
@@ -242,8 +243,8 @@ is the enforcement mechanism for #11 and #12 rather than a separate idea.
 
 Name a feature for **what it actually is**, at the narrowest honest level, because
 the family always gets a second member and the desktop always gets a second store.
-`rpm-ostree`, not `rpm` — a future `apt` is a different provider, not a variant,
-and the generic name pre-empts a slot it does not deserve. `brew-trust`, not
+`rpm-ostree`, not `rpm` — `dnf` installs rpms too and is a different provider,
+not a variant, and the generic name would have pre-empted its slot. `brew-trust`, not
 `trust`. `gnome-extensions`, not `extensions` — VS Code extensions are managed
 here too, so that collision is already live. `snapshot-dconf`, not
 `snapshot-gnome` — the mechanism is the store, and dconf runs under KDE as well.

@@ -39,4 +39,5 @@ pub mod providers; // brew / flatpak / mas / gext / rpm-ostree: converge + probe
 pub mod reconcile; // interactive spec←machine capture (adds/drops to the Brewfile)
 pub mod settings; // `temper configure`: validated scalar settings in temper.toml
 pub mod sudo; // hold a granted sudo timestamp open so a long run prompts once
+pub mod syspkg; // dnf / apt / pacman: the host's own package manager
 pub mod ui; // stdout/stderr discipline + progress bars

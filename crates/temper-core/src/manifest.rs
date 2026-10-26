@@ -374,6 +374,15 @@ pub struct Ignore {
     /// Flatpak remote NAMES not to report as extras — the image's own remotes.
     #[serde(default)]
     pub flatpak_remote: Vec<String>,
+    /// dnf packages not to report as extras.
+    #[serde(default)]
+    pub dnf: Vec<String>,
+    /// apt packages not to report as extras.
+    #[serde(default)]
+    pub apt: Vec<String>,
+    /// pacman packages not to report as extras.
+    #[serde(default)]
+    pub pacman: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -423,6 +432,15 @@ pub struct Machine {
     /// rpm-ostree packages THIS machine layers, on top of its bundles'.
     #[serde(default)]
     pub rpm_ostree: Vec<String>,
+    /// dnf packages THIS machine installs, on top of its bundles'.
+    #[serde(default)]
+    pub dnf: Vec<String>,
+    /// apt packages THIS machine installs, on top of its bundles'.
+    #[serde(default)]
+    pub apt: Vec<String>,
+    /// pacman packages THIS machine installs, on top of its bundles'.
+    #[serde(default)]
+    pub pacman: Vec<String>,
     /// Paths that must **not** exist — state this spec has retired.
     ///
     /// The ledger answers "temper deployed this and the spec no longer declares
@@ -535,6 +553,17 @@ pub struct Bundle {
     #[serde(default)]
     #[serde(alias = "rpm")]
     pub rpm_ostree: Vec<String>,
+    /// Packages installed with the host's own package manager — dnf (Fedora,
+    /// RHEL and its rebuilds), apt (Debian, Ubuntu) or pacman (Arch). One list
+    /// per manager, because package names are not portable between families;
+    /// each list applies only on a host whose manager it names, so one bundle
+    /// can carry all three.
+    #[serde(default)]
+    pub dnf: Vec<String>,
+    #[serde(default)]
+    pub apt: Vec<String>,
+    #[serde(default)]
+    pub pacman: Vec<String>,
     /// Taps this bundle needs trusted. **Group scope**: a bundle is the group
     /// construct, and it is already `os`/`role`-gated — which is exactly what
     /// the fleet `[brew].trust` cannot do. A cask tap that only means something
@@ -1540,6 +1569,9 @@ fn merge_ignore(fleet: &Ignore, m: &Ignore) -> Ignore {
         gnome_extensions: join(&fleet.gnome_extensions, &m.gnome_extensions),
         rpm_ostree: join(&fleet.rpm_ostree, &m.rpm_ostree),
         flatpak_remote: join(&fleet.flatpak_remote, &m.flatpak_remote),
+        dnf: join(&fleet.dnf, &m.dnf),
+        apt: join(&fleet.apt, &m.apt),
+        pacman: join(&fleet.pacman, &m.pacman),
     }
 }
 
@@ -1682,6 +1714,9 @@ mod tests {
                 .collect(),
             brew_trust: Vec::new(),
             rpm_ostree: Vec::new(),
+            dnf: Vec::new(),
+            apt: Vec::new(),
+            pacman: Vec::new(),
             flatpak_remotes: Vec::new(),
             rpm_repos: Vec::new(),
             retire: Vec::new(),
@@ -1911,6 +1946,9 @@ gnome_extensions = [
             vars: Default::default(),
             brew_trust: Vec::new(),
             rpm_ostree: Vec::new(),
+            dnf: Vec::new(),
+            apt: Vec::new(),
+            pacman: Vec::new(),
             flatpak_remotes: Vec::new(),
             rpm_repos: Vec::new(),
             retire: Vec::new(),

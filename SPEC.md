@@ -61,6 +61,9 @@ gnome_extensions = []       # user-installed GNOME extension UUIDs not to flag
                             #   (old name `gext` still parses)
 rpm_ostree = []             # layered rpms not to flag as extras
 flatpak_remote = []         # flatpak remote NAMES not to flag as extras
+dnf     = []                # host-package-manager packages not to flag as
+apt     = []                #   extras, one list per manager (see `dnf` / `apt`
+pacman  = []                #   / `pacman` under the bundle below)
 
 [ui]                        # optional; how temper draws its status markers
 icons = "unicode"           # "unicode" (default) | "nerd"
@@ -219,6 +222,15 @@ flatpak_remotes = ["vendor https://example.com/vendor.flatpakrepo"]
 rpm_ostree = ["proton-vpn"] # optional; rpms THIS machine layers, unioned with its
                             #   bundles' lists. Machine scope, so reconcile absorbs
                             #   and drops here.
+dnf    = ["htop"]           # optional; packages THIS machine installs with the
+apt    = []                 #   host's own package manager, unioned with its
+pacman = []                 #   bundles' lists. Machine scope, so `reconcile`
+                            #   absorbs a hand install here and drops an entry
+                            #   that is not installed. A machine list for a
+                            #   manager this host does not have is reported as
+                            #   unavailable: unlike a bundle's, nothing else can
+                            #   be meant by it. Install, extras and prune are
+                            #   described under the bundle below.
 rpm_repos = [{ repo = "assets/rpm-repos/terra.repo" }]
                             # optional; RPM repos THIS machine supplies, unioned
                             #   with its bundles'. Installed BEFORE any package
@@ -352,6 +364,12 @@ it as `[brew].trust` (see `[brew].trust` above).
 > doesn't list seventeen you never chose. Silence one with
 > `[ignore].gnome_extensions`.
 >
+> **`dnf`, `apt` and `pacman` follow it too**, with one more gate: their extras
+> are counted from the machine's baseline, so a declared list reports what was
+> installed by name after temper first managed that manager here — never the
+> image. A failing manager reports its own kind (`dnf`, `apt`, `pacman`) as
+> `unavailable`, with the same consequence: nothing is computed from it.
+>
 > `reconcile` handles **both** directions against the machine's own
 > `[[machine]].gnome_extensions` list: it offers to declare an installed extension
 > no bundle claims, and to drop one this machine declares but no longer has. A
@@ -374,8 +392,10 @@ it as `[brew].trust` (see `[brew].trust` above).
 
 ```toml
 os             = "linux"             # optional bundle-level gate: skip this bundle's
-role           = "desktop"           #   `packages`, `gnome_extensions` and `rpm_ostree`
-                                     #   unless the machine's os/role match. A machine
+role           = "desktop"           #   `packages`, `gnome_extensions`, `rpm_ostree`
+                                     #   and `dnf` / `apt` / `pacman` lists, its repos,
+                                     #   remotes and ignores, unless the machine's
+                                     #   os/role match. A machine
                                      #   that declares NO role fails a role gate closed:
                                      #   a bundle naming a role describes a group, and a
                                      #   machine naming none is not in it.
@@ -397,6 +417,48 @@ packages_linux = []                  # linux-only
 gnome_extensions = ["ext@uuid"]      # GNOME extensions (Linux) — os/role-gated
 rpm_ostree     = ["proton-vpn-gnome-desktop"]  # rpm-ostree layered (Linux) — os/role-gated
                                      #   (old name `rpm` still parses)
+# The host's own package manager — one list per manager, os/role-gated like the
+# rest. Names are not portable between families (`fd-find` on Fedora and Debian,
+# `fd` on Arch), so there is no shared list: a bundle serving a mixed fleet
+# carries one per family, and each applies only on a host whose manager it names.
+# On any other host the list is inert — not missing, not unavailable.
+dnf    = ["fd-find", "tmux"]         # Fedora, RHEL, Alma, Rocky, CentOS Stream
+                                     #   (`yum` on EL8 and later is dnf)
+apt    = ["fd-find", "tmux"]         # Debian, Ubuntu — driven through apt-get
+pacman = ["fd", "tmux"]              # Arch
+#   Each entry is a PACKAGE NAME — not a group, a pattern or a provide (`vim`
+#     where the package is `vim-enhanced`). The manager may accept one and
+#     install something, but nothing of that name is installed, so it stays
+#     `missing` and `install` says so.
+#   install: one batched call per manager, as root (through sudo, unless temper
+#     already runs as root), AFTER `rpm_repos`, so a package from a declared repo
+#     resolves in the same run. apt refreshes its package lists first. What the
+#     run added is read back and journaled — the packages and what they pulled
+#     in — so `undo` removes exactly that, through the guard below.
+#   extras: packages installed BY NAME since the machine's baseline that no scope
+#     declares. Dependencies are never extras. The baseline is what the manager
+#     had already been asked for when temper first managed it here — recorded by
+#     `init`, or by the first `install` that declares the manager — because every
+#     one of these managers counts a stock image's base system as asked-for (over
+#     200 packages on Ubuntu, `apt` and `bash` among them). So the image's own
+#     packages are never extras and never reach `prune`. Until a baseline exists,
+#     drift reports the extras direction as unavailable rather than guessing.
+#   prune: removes exactly the named extras, and only if the manager's own
+#     simulation removes nothing else with them. A package another installed
+#     package depends on is reported as unremovable, never taken down with its
+#     dependant. The dependencies an extra pulled in stay behind (dnf's
+#     clean_requirements_on_remove is off and pacman runs without `-s`, as
+#     apt-get does by default), because removing them would be more than the
+#     preview named; the manager's own autoremove clears them. `undo` removes
+#     through the same guard.
+#   temper never upgrades through these managers: the OS owns versions.
+#   dnf on an image-based host (Silverblue, Bazzite, CoreOS) cannot install, so
+#     there a bundle's `dnf` list is inert, like another family's; the machine's
+#     own `dnf` list reports unavailable and names `rpm_ostree`, which can.
+#   pacman installs against the sync database as it stands (`-S --needed`, never
+#     `-Sy`, which is a partial upgrade Arch does not support). A package it
+#     cannot find or fetch usually means a stale database; `pacman -Syu` is yours
+#     to run.
 # RPM repos this bundle's packages come from — GROUP scope, gated with the bundle.
 rpm_repos = [
     { repo = "assets/rpm-repos/brave-browser.repo", key = "assets/rpm-repos/RPM-GPG-KEY-brave" },
@@ -728,6 +790,11 @@ Unknown fields are a parse error. `when` / `needs` (step presence-gating) and
 A few names from older design notes are **not** fields and will error: `dict_add`
 / `domain` on `setkey`, `mode_lifecycle`, and `owner` as an *assert* check (owner
 is a `sysfile` field, not an assertion).
+
+There is no `yum` field: on EL8 and later `yum` is dnf, and a `dnf` list covers
+it. Nor a `zypper`, `apk` or `nix` one — those hosts have no package list in the
+schema. A list for the host package managers is a list of names: no versions
+(temper never pins or upgrades), no groups or patterns, no per-package repo.
 
 An `rpm_repos` entry takes `repo` and `key` and nothing else. The plausible
 guesses are all errors, each for a reason: no `to` (both destinations are fixed —
