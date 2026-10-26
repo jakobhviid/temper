@@ -210,9 +210,9 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         ),
         machine_scope: Col::Yes,
         // Gated on rpm plus a reader of the directory — dnf or rpm-ostree — not
-        // on atomic-ness: a plain dnf host has repos and no layering. Where the
-        // directory cannot be read, or nothing would read it, the state is
-        // `unavailable`, never absent.
+        // on atomic-ness: a plain dnf host has repos and no layering. Where
+        // nothing would read it, a bundle's repo is inert and the machine's own
+        // is `unavailable`, never absent.
         observe: Col::Yes,
         install: Col::Yes,
         // Not this provider's verb, and deliberately so. An undeclared file in

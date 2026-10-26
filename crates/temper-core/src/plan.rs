@@ -1808,15 +1808,18 @@ pub fn run_drift(
         // leaving a name that matches no file in the folder.
         let caps = providers::rpm_repo_caps();
         for r in providers::repo_files_state(home, &effective_repos)? {
+            // A bundle's repo on a host nothing here would read it on is inert,
+            // as that bundle's `dnf` list is: one bundle serves a mixed fleet.
+            if !caps.converge && r.from.is_some() {
+                continue;
+            }
             // A repo the machine declares itself has no bundle, and the machine
             // is not an app: the provider name labels the group, and the in-sync
             // list — which counts apps — leaves it out.
             let app = r.from.as_deref().unwrap_or("rpm-repo");
-            // Where the directory cannot be read the state is `unavailable` and
-            // never absent — Principle #12. A macOS host declaring no repos
-            // never reaches this. Nor is a repo nothing would read: on an rpm
-            // host without dnf or rpm-ostree, "missing" would name an `install`
-            // that cannot help, and "in sync" a file no resolver consults.
+            // The machine's own repo there is `unavailable`, never absent —
+            // Principle #12: "missing" would name an `install` that cannot help,
+            // and "in sync" a file no resolver consults.
             let state = if caps.observe && caps.converge {
                 r.state
             } else {
@@ -1833,12 +1836,16 @@ pub fn run_drift(
             findings.push(f);
         }
     }
-    // apt sources, the same way: grouped under the declaring bundle, and
-    // `unavailable` — never missing — on a host without apt.
+    // apt sources, the same way: grouped under the declaring bundle, inert in a
+    // bundle on a host without apt, and `unavailable` — never missing — when the
+    // machine declares one itself.
     let effective_sources = providers::effective_apt_sources(home, machine)?;
     if !effective_sources.is_empty() {
         let caps = providers::apt_source_caps();
         for r in providers::repo_files_state(home, &effective_sources)? {
+            if !caps.converge && r.from.is_some() {
+                continue;
+            }
             let app = r.from.as_deref().unwrap_or("apt-source");
             let state = if caps.converge {
                 r.state

@@ -285,7 +285,10 @@ mixed fleet, as one carries `packages_mac` and `packages_linux`. Observing and
 converging are separate facts (question 2b): an atomic Fedora reads its rpm
 database through dnf and cannot install with it, so a bundle's `dnf` list is inert
 there too. A machine's *own* list for such a manager cannot mean anything else, so
-it is reported `unavailable`, naming `rpm_ostree` where that applies.
+it is reported `unavailable`, naming `rpm_ostree` where that applies. Repos and
+sources follow the same rule: a bundle's `rpm_repos` on a host nothing would read
+them on, or its `apt_sources` on a host without apt, are inert; the machine's own
+are `unavailable`.
 
 The ordering is the feature, in both directions. Repos converge **before** any
 package, because `rpm-ostree install` and `dnf install` resolve against

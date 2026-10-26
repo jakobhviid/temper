@@ -408,9 +408,13 @@ fn a_list_for_another_family_is_inert_unless_the_machine_declares_it() {
     let e = Env::new();
     e.pacman();
     e.machine(&["base"], &["base"], &[]);
+    e.asset("assets/vendor.repo", "[vendor]\n");
+    e.asset("assets/vendor.sources", "Types: deb\n");
     e.bundle(
         "cli",
-        "os = \"linux\"\ndnf = [\"fd-find\"]\napt = [\"fd-find\"]\npacman = [\"fd\"]\n",
+        "os = \"linux\"\ndnf = [\"fd-find\"]\napt = [\"fd-find\"]\npacman = [\"fd\"]\n\
+         rpm_repos = [{ repo = \"assets/vendor.repo\" }]\n\
+         apt_sources = [{ source = \"assets/vendor.sources\" }]\n",
     );
     e.spec(&format!("{MACHINE}apps = [\"cli\"]\n"));
     // The suite's PATH reaches the real /usr/bin, where a dnf or apt host has
@@ -424,7 +428,10 @@ fn a_list_for_another_family_is_inert_unless_the_machine_declares_it() {
         .output()
         .unwrap();
     let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(findings(&doc, &["dnf", "dnf-extra", "apt", "apt-extra"]).is_empty(), "{doc}");
+    assert!(
+        findings(&doc, &["dnf", "dnf-extra", "apt", "apt-extra", "rpm-repo", "apt-source"]).is_empty(),
+        "another family's lists, repos and sources are inert here: {doc}"
+    );
     assert_eq!(findings(&doc, &["pacman"]).len(), 1, "fd is missing here: {doc}");
 
     e.spec(&format!("{MACHINE}apps = [\"cli\"]\napt = [\"htop\"]\n"));

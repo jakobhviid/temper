@@ -2179,11 +2179,16 @@ fn repo_files_converge<R: RepoFile>(
         return Ok(Vec::new());
     }
     if !caps.converge {
-        eprintln!(
-            "{} {} declared {noun}(s) not installed: {why_not}",
-            crate::ui::yellow(crate::ui::g_warn()),
-            effective.len(),
-        );
+        // Only the machine's own: a bundle's are inert on a host that cannot
+        // read them, as its package lists are, so a mixed fleet's bundle does
+        // not warn on every run of every other family's machines.
+        let own = effective.iter().filter(|o| o.from.is_none()).count();
+        if own > 0 {
+            eprintln!(
+                "{} {own} declared {noun}(s) not installed: {why_not}",
+                crate::ui::yellow(crate::ui::g_warn()),
+            );
+        }
         return Ok(Vec::new());
     }
     let mut written = Vec::new();

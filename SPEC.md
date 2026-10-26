@@ -243,18 +243,21 @@ rpm_repos = [{ repo = "assets/rpm-repos/terra.repo" }]
                             #   not: a Bazzite or CoreOS box manages repos the same
                             #   way a plain Fedora or EL box does, though it
                             #   layers with rpm-ostree rather than installing with
-                            #   dnf. Elsewhere declared repos report `unavailable`
-                            #   — never "absent", which would invite a converge to
-                            #   write them — and a converge says so and installs
-                            #   none. That includes openSUSE, which has rpm but
-                            #   resolves through zypper and /etc/zypp/repos.d, so a
-                            #   file here would be read by nothing.
+                            #   dnf. Elsewhere a bundle's repos are inert, as its
+                            #   `dnf` list is, and the machine's own report
+                            #   `unavailable` — never "absent", which would invite
+                            #   a converge to write them — and a converge says so
+                            #   and installs none. That includes openSUSE, which
+                            #   has rpm but resolves through zypper and
+                            #   /etc/zypp/repos.d, so a file here would be read by
+                            #   nothing.
 apt_sources = [{ source = "assets/apt/vendor.sources", key = "assets/apt/vendor.asc" }]
                             # optional; apt sources THIS machine supplies, unioned
                             #   with its bundles'. The apt sibling of `rpm_repos`,
                             #   installed at the same point for the same reason;
                             #   see `apt_sources` under the bundle below. On a host
-                            #   without apt they report `unavailable`.
+                            #   without apt they report `unavailable`; a bundle's
+                            #   are inert there, as its `apt` list is.
 brew_trust = ["me/tap"]     # optional; taps THIS machine trusts, unioned with
                             #   [brew].trust. Machine scope, so `reconcile` both
                             #   absorbs into and drops from it — the fleet list
