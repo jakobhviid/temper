@@ -539,7 +539,12 @@ apt_sources = [
 #   release codename is per-release, so a mixed Debian/Ubuntu fleet ships one
 #   per release in os/role-gated bundles or on the machine.
 #   `install` refreshes apt's lists before installing anything, so a package
-#   from a source written in the same run resolves on that run. Removal follows
+#   from a source written in the same run resolves on that run.
+#   DO NOT name a source (or a repo) after one the image ships — debian.sources,
+#   ubuntu.sources, fedora.repo. temper writes over it with no backup, and if
+#   the declaration is ever dropped, the file is residue that `prune` deletes,
+#   taking the base archive with it. To add a component or a mirror, ship a file
+#   of your own name (`contrib.sources`). Removal follows
 #   `rpm_repos`: a source temper wrote and the spec no longer declares is residue,
 #   removed by `prune` after the packages; the image's own sources
 #   (debian.sources, ubuntu.sources) are never reported.

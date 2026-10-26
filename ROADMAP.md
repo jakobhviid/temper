@@ -203,6 +203,13 @@ so the headline matches what happened to the machine.
   named. The honest version computes the dependencies only the named packages
   need, previews them, and removes them as part of the set. (`undo` does not have
   the gap: it removes what its run added, dependencies included.)
+- **A repo or source written over one the image ships has no way back.** A
+  declared `debian.sources` or `fedora.repo` replaces the image's file with no
+  backup, and dropping the declaration makes it residue that `prune` deletes —
+  the base archive with it — which `undo` cannot restore either. SPEC warns the
+  author off. The structural answer is the ledger recording that a destination
+  existed before temper's first write there, with `prune` restoring (or
+  reporting) such a file instead of deleting it. That applies to `sysfile` too.
 - **`retire_packages` takes Brewfile-grammar tokens only.** There is no way to say
   "this dnf, apt or pacman package must not be installed"; such a package can
   only be an extra, which the baseline hides if it predates temper.
