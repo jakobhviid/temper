@@ -430,6 +430,11 @@ So retirement is two mechanisms, not one:
   never removable, because an unknown hash must not read as a matching one. And
   what is removed stops being recorded, so a path prune deleted does not come
   back as drift.
+
+  Until then it stays recorded. A converge records what the spec deploys and
+  keeps every entry for something still on disk that the spec no longer
+  declares, so a machine that pulls a dropped step and runs `install` before it
+  ever runs `prune` still sees the file as residue.
 - **An explicit tombstone** — a `retire` list, at bundle or machine scope —
   covers what a ledger structurally cannot: files deployed before the ledger
   existed, and things temper never deployed but that must be gone. It is

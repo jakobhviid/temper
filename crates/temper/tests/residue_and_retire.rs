@@ -459,3 +459,47 @@ fn a_block_with_a_leading_blank_line_is_still_removable() {
     assert!(!rc.contains("source ~/.image"), "the region should be gone:\n{rc}");
     assert!(rc.contains("# the user's own"), "the user's file stays:\n{rc}");
 }
+
+/// Residue outlives the next converge.
+///
+/// A fleet machine pulls a spec that drops a step and runs `install` — not
+/// `prune` — first. That converge records what the spec deploys now, and it
+/// must not forget what the spec used to deploy, or the file is never reported
+/// again and stays on the machine for good.
+#[test]
+fn residue_survives_an_install_between_the_drop_and_the_prune() {
+    let e = Env::new();
+    fs::create_dir_all(e.h().join("assets")).unwrap();
+    fs::write(e.h().join("assets/x.conf"), "deployed by temper\n").unwrap();
+    fs::write(e.h().join("assets/y.conf"), "still declared\n").unwrap();
+    e.spec(
+        "[[step]]\ncopy = \"assets/x.conf\"\nto = \"~/x.conf\"\n\
+         [[step]]\ncopy = \"assets/y.conf\"\nto = \"~/y.conf\"\n",
+    );
+    e.temper().arg("install").assert().success();
+
+    // Drop x, then converge before pruning — the order a fleet machine sees.
+    e.spec("[[step]]\ncopy = \"assets/y.conf\"\nto = \"~/y.conf\"\n");
+    e.temper().arg("install").assert().success();
+
+    let out = e.temper().args(["--json", "drift"]).output().unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        doc["items"].as_array().unwrap().iter().any(|f| f["kind"] == "deployed-file-extra"
+            && f["target"].as_str().unwrap_or_default().ends_with("x.conf")),
+        "the dropped file must still be reported after an install: {doc}"
+    );
+    e.temper().args(["prune", "--yes"]).assert().success();
+    assert!(!e.target("x.conf").exists(), "prune must still remove it");
+    assert!(e.target("y.conf").is_file(), "the declared file stays");
+
+    // …and once removed it is no longer recorded, so a further install does
+    // not resurrect it as drift.
+    e.temper().arg("install").assert().success();
+    let out = e.temper().args(["--json", "drift"]).output().unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        !doc["items"].as_array().unwrap().iter().any(|f| f["kind"] == "deployed-file-extra"),
+        "removed residue must not come back: {doc}"
+    );
+}

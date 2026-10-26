@@ -2432,6 +2432,18 @@ pub fn run_install(
     // `install-missing`: packages only — skip the config-step phase entirely.
     if packages_only {
         journal.commit()?;
+        // Repos and sources were written above, and a dropped one is residue
+        // only if the ledger knows temper wrote it. Steps did not run, so only
+        // these are recorded.
+        if !dry_run {
+            if let Ok(l) = deployed_paths(home, machine) {
+                let written: crate::ledger::Ledger = l
+                    .into_iter()
+                    .filter(|(_, r)| matches!(r.kind.as_str(), "rpm-repo" | "apt-source"))
+                    .collect();
+                let _ = crate::ledger::record_some(&machine.name, &written);
+            }
+        }
         return Ok(InstallReport {
             packages,
             failed,
@@ -2556,7 +2568,7 @@ pub fn run_install(
         // that `drift` can see. Best-effort: a ledger that cannot be written
         // must not fail a converge that already succeeded.
         if let Ok(l) = deployed_paths(home, machine) {
-            let _ = crate::ledger::save(&machine.name, &l);
+            let _ = crate::ledger::record(&machine.name, &l);
         }
     }
     Ok(InstallReport {
@@ -3562,7 +3574,7 @@ pub fn run_update(
     cl.finish();
     journal.commit()?;
     if let Ok(l) = deployed_paths(home, machine) {
-        let _ = crate::ledger::save(&machine.name, &l);
+        let _ = crate::ledger::record(&machine.name, &l);
     }
     Ok(InstallReport {
         packages: effective.len(),

@@ -82,10 +82,41 @@ pub fn load(machine: &str) -> Ledger {
     l
 }
 
-/// Replace the ledger for a machine. Written whole rather than appended: the
-/// spec's current set of deployed paths IS the ledger, so a converge that stops
-/// declaring something must stop recording it, or the residue would be reported
-/// forever.
+/// Record what a converge deploys, keeping the residue.
+///
+/// The declared set replaces the declared entries; an entry the spec no longer
+/// declares is **kept** while what it describes is still on disk, because it is
+/// residue and the ledger is the only thing that can enumerate it. It stops
+/// being recorded when `prune` removes it, or once it is gone.
+///
+/// Replacing the ledger wholesale forgot residue on the very next converge. A
+/// fleet machine pulls a spec that drops a step and runs `install` — the order
+/// `refresh` leads to — so the dropped step's file was never reported to it and
+/// `prune` left it in place for good.
+pub fn record(machine: &str, declared: &Ledger) -> Result<()> {
+    let mut out = declared.clone();
+    for (key, rec) in residue(machine, declared) {
+        if still_present(&rec) {
+            out.entry(key).or_insert(rec);
+        }
+    }
+    save(machine, &out)
+}
+
+/// Record entries for what a partial converge deployed — `install
+/// --packages-only` writes repos and sources and no step — leaving every other
+/// entry as it was. An entry for the same thing under another spelling of its
+/// path is replaced, not doubled.
+pub fn record_some(machine: &str, deployed: &Ledger) -> Result<()> {
+    let ids: Vec<(PathBuf, Option<String>)> = deployed.values().map(identity).collect();
+    let mut out = load(machine);
+    out.retain(|_, rec| !ids.contains(&identity(rec)));
+    out.extend(deployed.clone());
+    save(machine, &out)
+}
+
+/// Write the ledger as given. `record` is what a converge calls; this is for a
+/// caller that has already decided every entry, as `prune` has.
 pub fn save(machine: &str, ledger: &Ledger) -> Result<()> {
     let p = path_for(machine);
     if let Some(d) = p.parent() {
