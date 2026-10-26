@@ -1923,19 +1923,30 @@ fn rpm_repo_opts() -> crate::primitives::SysfileOpts<'static> {
 
 /// What this host can do about RPM repositories, answered once.
 ///
-/// Gated on **rpm-ness, not atomic-ness**. `/etc/yum.repos.d` is dnf's
-/// directory and means the same thing on Bazzite, on CoreOS and on a plain
-/// Fedora box; only the consumer of what it declares differs. Gating this on
-/// `have("rpm-ostree")` would make the whole category *vanish* on a host that
-/// can hold repos perfectly well — the mistake `rpm_ostree_caps` documents one
-/// section down, one kind of state earlier.
+/// Gated on **a consumer of `/etc/yum.repos.d`, not on atomic-ness**. The
+/// directory is dnf's, and means the same thing on Bazzite, on CoreOS and on a
+/// plain Fedora or EL box; only which tool resolves from it differs — dnf, or
+/// rpm-ostree, which reads it per transaction. Gating on `have("rpm-ostree")`
+/// alone would make the category vanish on a dnf host that holds repos
+/// perfectly well.
+///
+/// And not on `rpm` alone either: openSUSE has rpm and resolves through zypper,
+/// which reads `/etc/zypp/repos.d`. A repo written there is read by nothing, so
+/// on such a host the category is `unavailable` with that reason, rather than a
+/// file temper writes, reports in sync, and nothing ever consults.
 pub fn rpm_repo_caps() -> RpmRepoCaps {
     let rpm = have("rpm");
     RpmRepoCaps {
         observe: rpm,
-        converge: rpm,
+        converge: rpm && (have("dnf") || have("yum") || have("rpm-ostree")),
     }
 }
+
+/// Why a host with rpm cannot take a repo — said wherever the category is
+/// reported unavailable, so the reader is not left to guess.
+pub const RPM_REPO_NO_CONSUMER: &str =
+    "this host has rpm but neither dnf nor rpm-ostree, so nothing reads /etc/yum.repos.d \
+     (openSUSE resolves through zypper and /etc/zypp/repos.d)";
 
 /// Its own type, not `RpmOstreeCaps`, for the reason the category exists: a
 /// repo's capabilities are not the layering tool's. Sharing the struct would
@@ -1945,7 +1956,7 @@ pub fn rpm_repo_caps() -> RpmRepoCaps {
 pub struct RpmRepoCaps {
     /// Can read `/etc/yum.repos.d`.
     pub observe: bool,
-    /// Can write it.
+    /// Can write it, and something on this host will read what is written.
     pub converge: bool,
 }
 
@@ -2064,11 +2075,17 @@ pub fn rpm_repos_converge(
     if dry_run || effective.is_empty() {
         return Ok(Vec::new());
     }
-    if !rpm_repo_caps().converge {
+    let caps = rpm_repo_caps();
+    if !caps.converge {
         eprintln!(
-            "{} no rpm on this host — {} declared repo(s) cannot be installed",
+            "{} {} declared repo(s) not installed: {}",
             crate::ui::yellow(crate::ui::g_warn()),
-            effective.len()
+            effective.len(),
+            if caps.observe {
+                RPM_REPO_NO_CONSUMER
+            } else {
+                "this host has no rpm"
+            }
         );
         return Ok(Vec::new());
     }

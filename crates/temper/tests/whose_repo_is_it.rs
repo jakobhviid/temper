@@ -40,9 +40,11 @@ impl Env {
             state: TempDir::new().unwrap(),
             bin: TempDir::new().unwrap(),
         };
-        // The repo provider gates on rpm-ness, not atomic-ness — without this
-        // the state is `unavailable` and the attribution is never exercised.
+        // The repo provider gates on rpm plus something that reads the repo
+        // directory — dnf here, as on a plain Fedora box. Without them the state
+        // is `unavailable` and the attribution is never exercised.
         e.stub("rpm");
+        e.stub("dnf");
         e
     }
 

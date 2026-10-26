@@ -44,8 +44,9 @@ impl Env {
             state: TempDir::new().unwrap(),
             bin: TempDir::new().unwrap(),
         };
-        // `rpm` is what the repo provider gates on — rpm-ness, not atomic-ness,
-        // so a plain dnf host would answer here too.
+        // `rpm` is half of what the repo provider gates on; the other half is a
+        // reader of the directory, which each test supplies as `rpm-ostree`
+        // (or deliberately withholds).
         e.stub("rpm", "");
         // A `sudo install …` of a repo file. Recorded, never executed: the
         // assertion is on the argv, and a test must not write to /etc.
@@ -411,4 +412,55 @@ fn declaring_no_repos_touches_nothing() {
         "an empty `rpm_repos` must not escalate: {}",
         e.order()
     );
+}
+
+/// A host with rpm and nothing that reads `/etc/yum.repos.d` gets no repo.
+///
+/// openSUSE is the case: rpm is installed, and zypper resolves from
+/// `/etc/zypp/repos.d`. A repo written to dnf's directory there is read by
+/// nothing, so writing it and reporting it in sync would be a success the
+/// machine never sees — found by running the binary on a real Tumbleweed. The
+/// category is `unavailable` there, and the run says why.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_host_with_rpm_and_no_dnf_neither_writes_nor_claims_a_repo() {
+    let e = Env::new(); // `rpm` and `sudo`, and nothing else
+    spec_with_repo(&e);
+    // Only the stubs: the host running the suite may well have dnf or
+    // rpm-ostree in /usr/bin, and this test is about a host that has neither.
+    let only_stubs = e.bin.path().display().to_string();
+
+    let out = e
+        .temper()
+        .env("PATH", &only_stubs)
+        .args(["drift", "--json"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let repos: Vec<_> = v["items"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|f| f["kind"] == "rpm-repo")
+        .collect();
+    assert!(!repos.is_empty(), "the declared repo must still be reported: {v}");
+    for f in &repos {
+        assert_eq!(f["status"], "unavailable", "{f}");
+        assert!(f["detail"].as_str().unwrap_or_default().contains("zypper"), "{f}");
+    }
+
+    let out = e
+        .temper()
+        .env("PATH", &only_stubs)
+        .args(["install", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        !e.order().contains("yum.repos.d"),
+        "nothing may be written where nothing reads it:\n{}",
+        e.order()
+    );
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("zypper"), "the run must say why it wrote nothing:\n{said}");
 }

@@ -1701,7 +1701,7 @@ pub fn run_drift(
         // file a reader edits. Grouping by the kind would merge two bundles'
         // repos under one label and drop a repo-only bundle out of the report,
         // leaving a name that matches no file in the folder.
-        let observe = providers::rpm_repo_caps().observe;
+        let caps = providers::rpm_repo_caps();
         for r in providers::rpm_repos_state(home, &effective_repos)? {
             // A repo the machine declares itself has no bundle, and the machine
             // is not an app: the provider name labels the group, and the in-sync
@@ -1709,8 +1709,10 @@ pub fn run_drift(
             let app = r.from.as_deref().unwrap_or("rpm-repo");
             // Where the directory cannot be read the state is `unavailable` and
             // never absent — Principle #12. A macOS host declaring no repos
-            // never reaches this.
-            let state = if observe {
+            // never reaches this. Nor is a repo nothing would read: on an rpm
+            // host without dnf or rpm-ostree, "missing" would name an `install`
+            // that cannot help, and "in sync" a file no resolver consults.
+            let state = if caps.observe && caps.converge {
                 r.state
             } else {
                 crate::primitives::FileState::Unavailable
@@ -1719,7 +1721,11 @@ pub fn run_drift(
             // One line, because the kind-coverage scrape reads
             // `Finding::state(app, "…")` as a literal — split it and `rpm-repo`
             // stops being a kind anything checks.
-            findings.push(Finding::state(app, "rpm-repo", target, state));
+            let mut f = Finding::state(app, "rpm-repo", target, state);
+            if caps.observe && !caps.converge {
+                f.detail = Some(providers::RPM_REPO_NO_CONSUMER.to_string());
+            }
+            findings.push(f);
         }
     }
     let effective_rpm = providers::effective_rpm(home, machine)?;

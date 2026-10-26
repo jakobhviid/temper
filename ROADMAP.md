@@ -106,19 +106,6 @@ through to the action's implicit `auth_admin`, and there is nowhere to answer.
 `prune` should say so up front, naming what needs it, exactly as a run needing
 sudo already does; today it finds out when the removal fails.
 
-**`rpm_repos` writes where zypper never reads, and reports success.** `rpm_repo_caps()`
-(`providers.rs`) gates the category on `have("rpm")`: rpm-ness, not on which package
-manager reads `/etc/yum.repos.d`. openSUSE has `rpm` but resolves through zypper, which reads
-`/etc/zypp/repos.d`. So on Tumbleweed, `install` writes the repo and its GPG key, exits 0,
-and `drift` reports in sync, while `zypper lr` shows no such repo. Nothing fails until a
-package from that repo will not resolve. The fix is a capability question, not a path tweak:
-gate converge on a dnf/yum frontend being present, and report `unavailable` (with the reason)
-on an rpm host that has neither. A real zypper target would be a separate design, because its
-`.repo` keys differ (`type=rpm-md`, `autorefresh`).
-  → Found with the Nyx distro matrix (`jakobhviid/nyx`, `scripts/temper-roundtrip.sh`),
-  2026-10-12: the same fixture is seen by `dnf repolist` on Fedora 44, Alma 9, CentOS Stream 9
-  and Rocky 10, and is invisible to zypper on openSUSE Tumbleweed.
-
 **An unattended run warns "will fail" on a host where `sudo` would succeed.**
 `sudo::cached()` asks whether a credential is held with `sudo -n -v`. Whether `-v` needs a
 password is governed by sudoers' `verifypw`, whose default (`all`) requires **every** entry
@@ -130,7 +117,8 @@ anyway. A false alarm on the warning meant to be trusted in unattended runs. Pro
 `sudo -n true`, which asks the question that matters: can a child run a command without a
 password. Fedora, EL, Debian, Ubuntu and Arch do not show it, because they ship no catch-all
 password rule.
-  → Same matrix run, openSUSE Tumbleweed only, with a test user holding
+  → Found with the Erebus distro matrix (`jakobhviid/erebus`, `examples/temper/`),
+  2026-10-12, openSUSE Tumbleweed only, with a test user holding
   `tester ALL=(ALL) NOPASSWD: ALL` in `/etc/sudoers.d`.
 
 **The install summary says `0 changed` on a run that wrote two root-owned files.** The line
@@ -140,7 +128,7 @@ effect was installing a repo prints `0 changed`. The next line then says `temper
 revert 1 of this run's change(s): rpm-repo", so the same output says both none and one. Count
 non-journaled writes in the summary, or name them separately (`… 0 changed, 1 repo written`),
 so the headline matches what happened to the machine.
-  → Every rpm host in the matrix run above.
+  → Every rpm host in the same matrix run.
 
 ## Scope-model gaps (known, ranked, each one a filled ⚠ or ❌ in the feature matrix)
 
@@ -198,8 +186,8 @@ so the headline matches what happened to the machine.
   refresh. Forcing it into `rpm_repos` would need either a wrong name or a fake
   abstraction over one real instance, so it waits for a real apt target. What is
   already paid for: `rpm_repos` is named for the **format**, not the tool, and its
-  capability gate is rpm-ness rather than atomic-ness — so a plain dnf/yum host
-  declares repos identically today, and a future `apt_sources` is a schema
+  capability gate is a reader of `/etc/yum.repos.d` rather than atomic-ness — so
+  a plain dnf/yum host declares repos identically, and a future `apt_sources` is a schema
   addition beside it reusing the same file primitive and the same pre-package
   stage, not a new mechanism.
 - **Two declared repos may define the same repo id, and nothing says so.**

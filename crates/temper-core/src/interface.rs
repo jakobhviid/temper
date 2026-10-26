@@ -209,8 +209,9 @@ pub const PROVIDERS: &[ProviderSpec] = &[
             "a repo belongs to the bundle whose packages need it — group scope, gated",
         ),
         machine_scope: Col::Yes,
-        // Gated on rpm-ness, not atomic-ness: a plain dnf host has repos and no
-        // layering. Where the directory cannot be read the state is
+        // Gated on rpm plus a reader of the directory — dnf or rpm-ostree — not
+        // on atomic-ness: a plain dnf host has repos and no layering. Where the
+        // directory cannot be read, or nothing would read it, the state is
         // `unavailable`, never absent.
         observe: Col::Yes,
         install: Col::Yes,
