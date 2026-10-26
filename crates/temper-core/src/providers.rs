@@ -2153,7 +2153,7 @@ pub fn rpm_repos_converge(
     } else {
         "this host has no rpm"
     };
-    repo_files_converge(home, effective, caps, why_not, dry_run)
+    repo_files_converge(home, effective, caps, "repo", why_not, dry_run)
 }
 
 /// Install every declared apt source, key first, before any apt install — the
@@ -2164,13 +2164,14 @@ pub fn apt_sources_converge(
     effective: &[OwnedRepo<manifest::AptSource>],
     dry_run: bool,
 ) -> Result<Vec<String>> {
-    repo_files_converge(home, effective, apt_source_caps(), APT_SOURCE_NO_APT, dry_run)
+    repo_files_converge(home, effective, apt_source_caps(), "source", APT_SOURCE_NO_APT, dry_run)
 }
 
 fn repo_files_converge<R: RepoFile>(
     home: &Path,
     effective: &[OwnedRepo<R>],
     caps: RepoCaps,
+    noun: &str,
     why_not: &str,
     dry_run: bool,
 ) -> Result<Vec<String>> {
@@ -2179,7 +2180,7 @@ fn repo_files_converge<R: RepoFile>(
     }
     if !caps.converge {
         eprintln!(
-            "{} {} declared repo(s) not installed: {why_not}",
+            "{} {} declared {noun}(s) not installed: {why_not}",
             crate::ui::yellow(crate::ui::g_warn()),
             effective.len(),
         );
@@ -2191,7 +2192,13 @@ fn repo_files_converge<R: RepoFile>(
         // `gpgkey=file:///etc/pki/rpm-gpg/…` or `Signed-By:` reference is checked
         // when the repo is first consulted, so a key installed after its repo is
         // the same ordering bug one level down.
-        for (src, dest) in owned.repo.files() {
+        //
+        // So a key that fails to install stops its repo too: written anyway, the
+        // repo would cite a key that is not there, and every package from it
+        // would fail signature checks rather than report the repo missing.
+        let files = owned.repo.files();
+        let last = files.len() - 1;
+        for (i, (src, dest)) in files.into_iter().enumerate() {
             match crate::primitives::sysfile_apply(&home.join(&src), &dest, &rpm_repo_opts()) {
                 Ok(true) => written.push(dest.display().to_string()),
                 Ok(false) => {}
@@ -2199,11 +2206,21 @@ fn repo_files_converge<R: RepoFile>(
                 // fails to add: one unreadable asset must not strand the repos
                 // that are fine, and the package that needed it will report
                 // itself missing in the same run.
-                Err(e) => eprintln!(
-                    "{} could not install {}: {e}",
-                    crate::ui::yellow(crate::ui::g_warn()),
-                    dest.display()
-                ),
+                Err(e) => {
+                    eprintln!(
+                        "{} could not install {}: {e}",
+                        crate::ui::yellow(crate::ui::g_warn()),
+                        dest.display()
+                    );
+                    if i < last {
+                        eprintln!(
+                            "{} {} not installed either — it cites that key",
+                            crate::ui::yellow(crate::ui::g_warn()),
+                            owned.repo.dest().display()
+                        );
+                    }
+                    break;
+                }
             }
         }
     }

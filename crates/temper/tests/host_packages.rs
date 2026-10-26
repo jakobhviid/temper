@@ -42,7 +42,9 @@ impl Env {
         // assertion is on its order, and a test must not write to /etc.
         e.script(
             "sudo",
-            "case \"$1\" in -n|-v) exit 0;; install) echo \"sudo $*\" >> \"$LOG\"; exit 0;; esac\nexec \"$@\"\n",
+            "case \"$1\" in -n|-v) exit 0;; install) echo \"sudo $*\" >> \"$LOG\"; \
+             [ \"$2\" = -d ] && exit 0; src=$(eval echo \\\"\\${$(($# - 1))}\\\"); \
+             [ -e \"$src\" ] || exit 1; exit 0;; esac\nexec \"$@\"\n",
         );
         e
     }
@@ -589,4 +591,28 @@ fn an_apt_source_on_a_host_without_apt_is_unavailable() {
         .assert()
         .success();
     assert!(!e.log().contains("sources.list.d"), "{}", e.log());
+}
+
+/// A source whose key could not be installed is not written: it would cite a
+/// key that is not there, and every package from it would fail its signature
+/// check instead of the source reporting itself missing.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_source_whose_key_failed_is_not_written() {
+    let e = Env::new();
+    e.apt();
+    e.machine(&["apt"], &["apt"], &[]);
+    // The key asset is missing — a partial sync, a renamed file.
+    e.asset("assets/apt/vendor.sources", "Types: deb\nSigned-By: /etc/apt/keyrings/vendor.asc\n");
+    e.spec(&format!(
+        "{MACHINE}apt_sources = [{{ source = \"assets/apt/vendor.sources\", key = \"assets/apt/vendor.asc\" }}]\n"
+    ));
+    let out = e.temper().args(["install", "--yes"]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !e.log().contains("sources.list.d/vendor.sources"),
+        "the source must not be written without its key:\n{}",
+        e.log()
+    );
+    assert!(stderr.contains("cites that key"), "{stderr}");
 }

@@ -473,7 +473,9 @@ rpm_repos = [
 # `repo` is the `.repo` file, relative to the temper-home; it is installed
 #   root-owned 0644 to /etc/yum.repos.d/<basename>. `key` is optional and is
 #   installed the same way to /etc/pki/rpm-gpg/<basename>, BEFORE the repo that
-#   cites it — a gpgkey=file:// reference is useless if the key lands later.
+#   cites it — a gpgkey=file:// reference is useless if the key lands later —
+#   and a key that cannot be installed stops its repo too, which is then
+#   reported missing rather than written to cite a key that is not there.
 #   Neither takes a `to`: the destination is not a choice, since a repo dnf does
 #   not read is not a repo.
 #
@@ -526,8 +528,9 @@ apt_sources = [
 # `source` is the `.sources` (deb822) or `.list` file the vendor publishes,
 #   relative to the temper-home; installed root-owned 0644 to
 #   /etc/apt/sources.list.d/<basename>. `key` is optional and is installed the
-#   same way to /etc/apt/keyrings/<basename>, BEFORE the source — so the
-#   source's `Signed-By:` must name that path. Both are copied byte for byte: an
+#   same way to /etc/apt/keyrings/<basename>, BEFORE the source (and a key
+#   that cannot be installed stops its source) — so the source's `Signed-By:`
+#   must name that path. Both are copied byte for byte: an
 #   ASCII-armored `.asc` key works on apt 2.4 and later (Debian 12, Ubuntu
 #   22.04), a dearmored `.gpg` one everywhere. A source whose `Suites:` names a
 #   release codename is per-release, so a mixed Debian/Ubuntu fleet ships one
