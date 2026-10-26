@@ -178,18 +178,15 @@ so the headline matches what happened to the machine.
     from them, so a flag for splitting the two phases by hand has no caller. Not
     to be confused with `update --config-only` above, which is a different verb
     for a different caller and still open.
-- **`apt` packages can only come from sources the machine already has.** "Where
-  do this provider's packages come from" is a per-provider prerequisite;
-  `flatpak-remote` and `rpm-repo` are two instances of it, and a dnf host uses
-  `rpm_repos` as it is. apt has no declaration for it, so a vendor package
-  (Docker, VS Code, 1Password) needs its source set up by a `sysfile` step —
-  which runs after packages, so the first converge cannot resolve it. It is not a
-  cheap third: deb822 `.sources` files, dearmored binary keyrings under
-  `/etc/apt/keyrings` referenced by `Signed-By:`, and an `apt-get update` after
-  writing one. Forcing it into `rpm_repos` would need a wrong name or a fake
-  abstraction, so it is an `apt_sources` beside it, reusing the same file
-  primitive and the same pre-package stage. pacman has the same gap for
-  `pacman.conf` repositories and the AUR, and the AUR is not a repository at all.
+- **`pacman` packages can only come from the repositories `pacman.conf` already
+  names.** "Where do this provider's packages come from" is a per-provider
+  prerequisite, and `flatpak-remote`, `rpm-repo` and `apt-source` answer it for
+  their managers. pacman's answer is a section in one shared `pacman.conf`
+  rather than a file per repository, so it is a `block` edit plus a key
+  imported into pacman's own keyring (`pacman-key --add` / `--lsign-key`) — state
+  rather than a file, which the repo-file shape does not cover. The AUR is not a
+  repository at all: it builds from source through a helper, which is a
+  different feature.
 - **A declared package that is already installed as a dependency stays marked as
   one.** `install` installs what is missing and leaves what is present alone, so a
   package that arrived as a dependency keeps the manager's "automatic" mark even

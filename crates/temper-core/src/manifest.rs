@@ -225,6 +225,56 @@ impl RpmRepo {
     }
 }
 
+/// One apt source this spec supplies, as the file the vendor publishes, and the
+/// key it is signed with.
+///
+/// The sibling of `RpmRepo`, for the same reasons: the declaration points at an
+/// asset rather than at deb822 fields, so the bytes on disk are the vendor's,
+/// and the key travels with the source that cites it so the two land together,
+/// key first.
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AptSource {
+    /// The `.sources` (deb822) or `.list` file, relative to the temper-home.
+    /// Installed root-owned `0644` to `/etc/apt/sources.list.d/<basename>` —
+    /// apt reads both suffixes there and ignores any other.
+    pub source: String,
+    /// The key the source's `Signed-By:` names, relative to the temper-home.
+    /// Installed root-owned `0644` to `/etc/apt/keyrings/<basename>`,
+    /// **before** the source. Copied as-is: an ASCII-armored `.asc` key works
+    /// on apt 2.4 and later (Debian 12, Ubuntu 22.04), a dearmored `.gpg` one
+    /// everywhere.
+    #[serde(default)]
+    pub key: Option<String>,
+}
+
+impl AptSource {
+    /// Where the source file is installed.
+    pub fn dest(&self) -> PathBuf {
+        Path::new(APT_SOURCES_DIR).join(basename(&self.source))
+    }
+    /// Where the key is installed, if one is declared.
+    pub fn key_dest(&self) -> Option<PathBuf> {
+        self.key
+            .as_deref()
+            .map(|k| Path::new(APT_KEYRINGS_DIR).join(basename(k)))
+    }
+    /// Source/destination pairs in **apply order**: key before source.
+    pub fn files(&self) -> Vec<(String, PathBuf)> {
+        let mut out = Vec::new();
+        if let (Some(k), Some(d)) = (self.key.as_deref(), self.key_dest()) {
+            out.push((k.to_string(), d));
+        }
+        out.push((self.source.clone(), self.dest()));
+        out
+    }
+}
+
+/// Where apt reads additional sources.
+pub const APT_SOURCES_DIR: &str = "/etc/apt/sources.list.d";
+/// Where a third-party key named by `Signed-By:` conventionally lives.
+pub const APT_KEYRINGS_DIR: &str = "/etc/apt/keyrings";
+
 /// Where dnf reads repository definitions, on every rpm host, atomic or not.
 pub const RPM_REPOS_DIR: &str = "/etc/yum.repos.d";
 /// Where a `gpgkey=file://…` reference conventionally points.
@@ -481,6 +531,9 @@ pub struct Machine {
     /// bundle would write a repo onto every machine in the group.
     #[serde(default)]
     pub rpm_repos: Vec<RpmRepo>,
+    /// apt sources THIS machine supplies, on top of its bundles'.
+    #[serde(default)]
+    pub apt_sources: Vec<AptSource>,
     /// Extras THIS machine should not be told about, on top of the fleet
     /// `[ignore]`. Same reason: silencing something is a per-machine judgement
     /// far more often than a fleet one, and the fleet list could not express
@@ -618,6 +671,10 @@ pub struct Bundle {
     /// package cannot resolve from a repo that is not on disk yet.
     #[serde(default)]
     pub rpm_repos: Vec<RpmRepo>,
+    /// apt sources this bundle's `apt` packages come from — `rpm_repos`'s
+    /// sibling, at the same scope and converged at the same point.
+    #[serde(default)]
+    pub apt_sources: Vec<AptSource>,
     #[serde(default)]
     pub step: Vec<Step>,
     /// Drift-only assertions (no converge action).
@@ -1719,6 +1776,7 @@ mod tests {
             pacman: Vec::new(),
             flatpak_remotes: Vec::new(),
             rpm_repos: Vec::new(),
+            apt_sources: Vec::new(),
             retire: Vec::new(),
             retire_packages: Vec::new(),
             ignore: Default::default(),
@@ -1951,6 +2009,7 @@ gnome_extensions = [
             pacman: Vec::new(),
             flatpak_remotes: Vec::new(),
             rpm_repos: Vec::new(),
+            apt_sources: Vec::new(),
             retire: Vec::new(),
             retire_packages: Vec::new(),
             ignore: Default::default(),

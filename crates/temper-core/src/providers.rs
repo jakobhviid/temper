@@ -1936,9 +1936,9 @@ fn rpm_repo_opts() -> crate::primitives::SysfileOpts<'static> {
 /// which reads `/etc/zypp/repos.d`. A repo written there is read by nothing, so
 /// on such a host the category is `unavailable` with that reason, rather than a
 /// file temper writes, reports in sync, and nothing ever consults.
-pub fn rpm_repo_caps() -> RpmRepoCaps {
+pub fn rpm_repo_caps() -> RepoCaps {
     let rpm = have("rpm");
-    RpmRepoCaps {
+    RepoCaps {
         observe: rpm,
         converge: rpm && (have("dnf") || have("yum") || have("rpm-ostree")),
     }
@@ -1950,16 +1950,60 @@ pub const RPM_REPO_NO_CONSUMER: &str =
     "this host has rpm but neither dnf nor rpm-ostree, so nothing reads /etc/yum.repos.d \
      (openSUSE resolves through zypper and /etc/zypp/repos.d)";
 
+/// What this host can do about apt sources: the directory is apt's, so apt is
+/// both the reader and the reason to write.
+pub fn apt_source_caps() -> RepoCaps {
+    let apt = have("apt-get");
+    RepoCaps {
+        observe: apt,
+        converge: apt,
+    }
+}
+
+/// Why an apt source is not installed on a host without apt.
+pub const APT_SOURCE_NO_APT: &str = "this host has no apt";
+
 /// Its own type, not `RpmOstreeCaps`, for the reason the category exists: a
 /// repo's capabilities are not the layering tool's. Sharing the struct would
 /// have read as "repos are an rpm-ostree feature" on the one host where that is
 /// most wrong — a plain dnf box, which has repos and no layering at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RpmRepoCaps {
-    /// Can read `/etc/yum.repos.d`.
+pub struct RepoCaps {
+    /// Can read the repository directory.
     pub observe: bool,
     /// Can write it, and something on this host will read what is written.
     pub converge: bool,
+}
+
+/// A declared repository file and the key it cites, installed root-owned to
+/// fixed destinations: an `rpm_repos` entry or an `apt_sources` one. The two
+/// differ in where the files go and which tool reads them, and in nothing this
+/// module does with them — so the state, the dedup and the converge are written
+/// once.
+pub trait RepoFile: Clone {
+    /// Where the repository file itself goes — the dedup key.
+    fn dest(&self) -> PathBuf;
+    /// Source/destination pairs in apply order: the key before the file that
+    /// cites it.
+    fn files(&self) -> Vec<(String, PathBuf)>;
+}
+
+impl RepoFile for manifest::RpmRepo {
+    fn dest(&self) -> PathBuf {
+        manifest::RpmRepo::dest(self)
+    }
+    fn files(&self) -> Vec<(String, PathBuf)> {
+        manifest::RpmRepo::files(self)
+    }
+}
+
+impl RepoFile for manifest::AptSource {
+    fn dest(&self) -> PathBuf {
+        manifest::AptSource::dest(self)
+    }
+    fn files(&self) -> Vec<(String, PathBuf)> {
+        manifest::AptSource::files(self)
+    }
 }
 
 /// A declared repo and the spec unit that declared it.
@@ -1969,10 +2013,10 @@ pub struct RpmRepoCaps {
 /// different file than the one whose copy actually converges, and a finding that
 /// names the wrong file to edit is worse than one that names none.
 #[derive(Debug, Clone)]
-pub struct OwnedRepo {
-    /// The bundle that declared it, or `None` for the machine's own `rpm_repos`.
+pub struct OwnedRepo<R = manifest::RpmRepo> {
+    /// The bundle that declared it, or `None` for the machine's own list.
     pub from: Option<String>,
-    pub repo: manifest::RpmRepo,
+    pub repo: R,
 }
 
 /// One declared repo/key file: where it goes, how it compares, and who declared
@@ -1994,9 +2038,26 @@ pub struct RepoState {
 /// already use. The winner is the one that carries its declaring bundle forward,
 /// so the report names the file whose bytes are on disk.
 pub fn effective_rpm_repos(home: &Path, machine: &Machine) -> Result<Vec<OwnedRepo>> {
-    let mut out: Vec<OwnedRepo> = Vec::new();
+    effective_repo_files(home, machine, |b| &b.rpm_repos, &machine.rpm_repos)
+}
+
+/// Every apt source this machine declares, by the same rule as its repos.
+pub fn effective_apt_sources(
+    home: &Path,
+    machine: &Machine,
+) -> Result<Vec<OwnedRepo<manifest::AptSource>>> {
+    effective_repo_files(home, machine, |b| &b.apt_sources, &machine.apt_sources)
+}
+
+fn effective_repo_files<R: RepoFile>(
+    home: &Path,
+    machine: &Machine,
+    of_bundle: impl Fn(&manifest::Bundle) -> &[R],
+    own: &[R],
+) -> Result<Vec<OwnedRepo<R>>> {
+    let mut out: Vec<OwnedRepo<R>> = Vec::new();
     let mut seen = HashSet::new();
-    let mut push = |from: Option<&str>, r: &manifest::RpmRepo, out: &mut Vec<OwnedRepo>| {
+    let mut push = |from: Option<&str>, r: &R, out: &mut Vec<OwnedRepo<R>>| {
         if seen.insert(r.dest()) {
             out.push(OwnedRepo {
                 from: from.map(str::to_string),
@@ -2009,11 +2070,11 @@ pub fn effective_rpm_repos(home: &Path, machine: &Machine) -> Result<Vec<OwnedRe
         if manifest::gated(&bundle.os, &bundle.role, machine) {
             continue;
         }
-        for r in &bundle.rpm_repos {
+        for r in of_bundle(&bundle) {
             push(Some(app), r, &mut out);
         }
     }
-    for r in &machine.rpm_repos {
+    for r in own {
         push(None, r, &mut out);
     }
     Ok(out)
@@ -2026,7 +2087,10 @@ pub fn effective_rpm_repos(home: &Path, machine: &Machine) -> Result<Vec<OwnedRe
 /// makes a converge rewrite state it never inspected. Each row keeps the repo's
 /// declaring bundle, since a key and the repo that cites it are one declaration
 /// and answer to one file.
-pub fn rpm_repos_state(home: &Path, effective: &[OwnedRepo]) -> Result<Vec<RepoState>> {
+pub fn repo_files_state<R: RepoFile>(
+    home: &Path,
+    effective: &[OwnedRepo<R>],
+) -> Result<Vec<RepoState>> {
     let mut out = Vec::new();
     for owned in effective {
         for (src, dest) in owned.repo.files() {
@@ -2050,10 +2114,19 @@ pub fn rpm_repos_state(home: &Path, effective: &[OwnedRepo]) -> Result<Vec<RepoS
 /// prompt in the middle of the converge instead of at the keyboard before
 /// anything downloads.
 pub fn rpm_repos_pending(home: &Path, effective: &[OwnedRepo]) -> Vec<String> {
-    if !rpm_repo_caps().converge {
+    pending_writes(home, effective, rpm_repo_caps())
+}
+
+/// `rpm_repos_pending` for apt sources.
+pub fn apt_sources_pending(home: &Path, effective: &[OwnedRepo<manifest::AptSource>]) -> Vec<String> {
+    pending_writes(home, effective, apt_source_caps())
+}
+
+fn pending_writes<R: RepoFile>(home: &Path, effective: &[OwnedRepo<R>], caps: RepoCaps) -> Vec<String> {
+    if !caps.converge {
         return Vec::new();
     }
-    rpm_repos_state(home, effective)
+    repo_files_state(home, effective)
         .unwrap_or_default()
         .into_iter()
         .filter(|r| r.state != crate::primitives::FileState::InSync)
@@ -2074,29 +2147,50 @@ pub fn rpm_repos_converge(
     effective: &[OwnedRepo],
     dry_run: bool,
 ) -> Result<Vec<String>> {
+    let caps = rpm_repo_caps();
+    let why_not = if caps.observe {
+        RPM_REPO_NO_CONSUMER
+    } else {
+        "this host has no rpm"
+    };
+    repo_files_converge(home, effective, caps, why_not, dry_run)
+}
+
+/// Install every declared apt source, key first, before any apt install — the
+/// same contract as `rpm_repos_converge`. The `apt-get update` that makes a new
+/// source visible runs as part of the install that needs it.
+pub fn apt_sources_converge(
+    home: &Path,
+    effective: &[OwnedRepo<manifest::AptSource>],
+    dry_run: bool,
+) -> Result<Vec<String>> {
+    repo_files_converge(home, effective, apt_source_caps(), APT_SOURCE_NO_APT, dry_run)
+}
+
+fn repo_files_converge<R: RepoFile>(
+    home: &Path,
+    effective: &[OwnedRepo<R>],
+    caps: RepoCaps,
+    why_not: &str,
+    dry_run: bool,
+) -> Result<Vec<String>> {
     if dry_run || effective.is_empty() {
         return Ok(Vec::new());
     }
-    let caps = rpm_repo_caps();
     if !caps.converge {
         eprintln!(
-            "{} {} declared repo(s) not installed: {}",
+            "{} {} declared repo(s) not installed: {why_not}",
             crate::ui::yellow(crate::ui::g_warn()),
             effective.len(),
-            if caps.observe {
-                RPM_REPO_NO_CONSUMER
-            } else {
-                "this host has no rpm"
-            }
         );
         return Ok(Vec::new());
     }
     let mut written = Vec::new();
     for owned in effective {
-        // `files()` yields the key before the repo that cites it. A
-        // `gpgkey=file:///etc/pki/rpm-gpg/…` reference is checked when the repo
-        // is first consulted, so a key installed after its repo is the same
-        // ordering bug one level down.
+        // `files()` yields the key before the file that cites it. A
+        // `gpgkey=file:///etc/pki/rpm-gpg/…` or `Signed-By:` reference is checked
+        // when the repo is first consulted, so a key installed after its repo is
+        // the same ordering bug one level down.
         for (src, dest) in owned.repo.files() {
             match crate::primitives::sysfile_apply(&home.join(&src), &dest, &rpm_repo_opts()) {
                 Ok(true) => written.push(dest.display().to_string()),
@@ -3079,6 +3173,7 @@ mod gating_tests {
             pacman: Vec::new(),
             flatpak_remotes: Vec::new(),
             rpm_repos: Vec::new(),
+            apt_sources: Vec::new(),
             retire: Vec::new(),
             retire_packages: Vec::new(),
             ignore: Default::default(),

@@ -249,6 +249,12 @@ rpm_repos = [{ repo = "assets/rpm-repos/terra.repo" }]
                             #   none. That includes openSUSE, which has rpm but
                             #   resolves through zypper and /etc/zypp/repos.d, so a
                             #   file here would be read by nothing.
+apt_sources = [{ source = "assets/apt/vendor.sources", key = "assets/apt/vendor.asc" }]
+                            # optional; apt sources THIS machine supplies, unioned
+                            #   with its bundles'. The apt sibling of `rpm_repos`,
+                            #   installed at the same point for the same reason;
+                            #   see `apt_sources` under the bundle below. On a host
+                            #   without apt they report `unavailable`.
 brew_trust = ["me/tap"]     # optional; taps THIS machine trusts, unioned with
                             #   [brew].trust. Machine scope, so `reconcile` both
                             #   absorbs into and drops from it — the fleet list
@@ -512,6 +518,25 @@ rpm_repos = [
 #   consumer differs — `rpm-ostree install` stages a deployment needing a reboot,
 #   `dnf install` does not — and that belongs to the package converge, never to
 #   the repo. So repos are declared identically everywhere rpm is.
+# apt sources this bundle's `apt` packages come from — the same shape, scope and
+# ordering as `rpm_repos`.
+apt_sources = [
+    { source = "assets/apt/github-cli.sources", key = "assets/apt/githubcli-archive-keyring.gpg" },
+]
+# `source` is the `.sources` (deb822) or `.list` file the vendor publishes,
+#   relative to the temper-home; installed root-owned 0644 to
+#   /etc/apt/sources.list.d/<basename>. `key` is optional and is installed the
+#   same way to /etc/apt/keyrings/<basename>, BEFORE the source — so the
+#   source's `Signed-By:` must name that path. Both are copied byte for byte: an
+#   ASCII-armored `.asc` key works on apt 2.4 and later (Debian 12, Ubuntu
+#   22.04), a dearmored `.gpg` one everywhere. A source whose `Suites:` names a
+#   release codename is per-release, so a mixed Debian/Ubuntu fleet ships one
+#   per release in os/role-gated bundles or on the machine.
+#   `install` refreshes apt's lists before installing anything, so a package
+#   from a source written in the same run resolves on that run. Removal follows
+#   `rpm_repos`: a source temper wrote and the spec no longer declares is residue,
+#   removed by `prune` after the packages; the image's own sources
+#   (debian.sources, ubuntu.sources) are never reported.
 
 # Every bundle-level key must come BEFORE the first table header: once `[ignore]`
 # is open, TOML reads what follows as belonging to it, so a `packages` line below
@@ -795,6 +820,10 @@ There is no `yum` field: on EL8 and later `yum` is dnf, and a `dnf` list covers
 it. Nor a `zypper`, `apk` or `nix` one — those hosts have no package list in the
 schema. A list for the host package managers is a list of names: no versions
 (temper never pins or upgrades), no groups or patterns, no per-package repo.
+
+An `apt_sources` entry takes `source` and `key` and nothing else, for the same
+reasons: no `to`, and no deb822 fields (`URIs`, `Suites`, `Signed-By`) — the
+file is the declaration.
 
 An `rpm_repos` entry takes `repo` and `key` and nothing else. The plausible
 guesses are all errors, each for a reason: no `to` (both destinations are fixed —

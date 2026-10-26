@@ -723,6 +723,31 @@ sync database as it stands and never runs `-Sy`, which would be a partial
 upgrade; a package pacman cannot find or download usually means the database is
 stale, and `sudo pacman -Syu` is yours to run.
 
+## 9d. Declare where apt packages come from
+
+**When:** an `apt` package comes from a vendor's repository (GitHub CLI, Docker,
+VS Code) rather than Debian's or Ubuntu's.
+
+```toml
+# apps/gh.toml
+apt         = ["gh"]
+apt_sources = [
+    { source = "assets/apt/github-cli.sources", key = "assets/apt/githubcli-archive-keyring.gpg" },
+]
+```
+
+`rpm_repos`' sibling, at the same two scopes and converged at the same point:
+the key lands in `/etc/apt/keyrings/`, then the source in
+`/etc/apt/sources.list.d/`, then apt refreshes its lists and installs — one run
+on a clean machine. Ship the vendor's own files, with the source's `Signed-By:`
+pointing at `/etc/apt/keyrings/<the key's file name>`. A source naming a
+release codename (`Suites: noble`) belongs in a bundle or machine gated to that
+release.
+
+Removal mirrors `rpm_repos`: drop the declaration and the files temper wrote
+are residue that `prune` removes after the packages, if you have not edited
+them. The image's own sources are never touched.
+
 ## 10. Per-machine versions of the fleet lists
 
 **When:** you want something on one box only.
@@ -731,8 +756,8 @@ Every category exists at both scopes, because "on this machine only" is an
 ordinary thing to want. Declared in a bundle, a thing belongs to the group and
 `reconcile` will never edit it from one machine; declared on the machine, that
 machine's `reconcile` owns both directions — for every category `reconcile`
-reaches. The exception is `rpm_repos`: it has both scopes like the rest, and you
-edit it by hand at either, because absorbing a repo means copying a file *into*
+reaches. The exceptions are `rpm_repos` and `apt_sources`: they have both scopes
+like the rest, and you edit them by hand at either, because absorbing a repo means copying a file *into*
 the folder rather than adding a token to a list. The matrix in
 `ARCHITECTURE.md` is the per-category answer.
 
@@ -855,6 +880,7 @@ which is why it has verbs of its own.
 | rpm-ostree layered packages | `install` (remove: `prune`, which stages a deployment) | `reconcile` — machine scope |
 | dnf / apt / pacman packages | `install` (remove: `prune`, for what was installed by name since the baseline) | `reconcile` — machine scope |
 | rpm repos (`rpm_repos`) | `install`, before any package (remove: `prune`, after the un-layer) | you author it by hand — absorbing one means copying a file into the folder |
+| apt sources (`apt_sources`) | `install`, before any apt package (remove: `prune`, after the packages) | you author it by hand, as for rpm repos |
 | brew tap-trust | `install` / `update` (remove: `prune`) | `reconcile` — the fleet list needs `--include-trust` |
 | deployed-file residue | n/a — it is what a *dropped* step left | `prune` removes it if untouched, reports it if you edited it |
 | retirements (`retire`, `retire_packages`) | `prune` enacts them | you author them by hand; `temper retired` reviews them |

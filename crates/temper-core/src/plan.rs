@@ -277,6 +277,10 @@ fn root_steps(
             home,
             &providers::effective_rpm_repos(home, machine)?,
         ));
+        own.extend(providers::apt_sources_pending(
+            home,
+            &providers::effective_apt_sources(home, machine)?,
+        ));
     }
     for (_, step) in &resolved.steps {
         if !is_step(step) {
@@ -582,30 +586,38 @@ fn deployed_paths(home: &Path, machine: &Machine) -> Result<crate::ledger::Ledge
     // own repos — which temper never wrote — stay invisible. That is the reason
     // there is no `[ignore].rpm_repo` list: enumerating `/etc/yum.repos.d` as
     // extras would report fedora, updates and rpmfusion on every run.
-    for owned in providers::effective_rpm_repos(home, machine)? {
-        for (src, dest) in owned.repo.files() {
-            let target = dest.display().to_string();
-            let hash = std::fs::read(home.join(&src))
-                .ok()
-                .map(|b| blake3::hash(&b).to_hex().to_string());
-            out.insert(
-                crate::ledger::Deployed::key(&target, None),
-                crate::ledger::Deployed {
-                    hash: hash.unwrap_or_default(),
-                    kind: "rpm-repo".to_string(),
-                    path: target,
-                    marker: None,
-                },
-            );
-        }
+    // apt sources are the same thing in apt's directories, and the same reason
+    // holds: debian.sources and ubuntu.sources are the image's, never extras.
+    let rpm = providers::effective_rpm_repos(home, machine)?
+        .into_iter()
+        .flat_map(|o| o.repo.files())
+        .map(|f| ("rpm-repo", f));
+    let apt = providers::effective_apt_sources(home, machine)?
+        .into_iter()
+        .flat_map(|o| providers::RepoFile::files(&o.repo))
+        .map(|f| ("apt-source", f));
+    for (kind, (src, dest)) in rpm.chain(apt) {
+        let target = dest.display().to_string();
+        let hash = std::fs::read(home.join(&src))
+            .ok()
+            .map(|b| blake3::hash(&b).to_hex().to_string());
+        out.insert(
+            crate::ledger::Deployed::key(&target, None),
+            crate::ledger::Deployed {
+                hash: hash.unwrap_or_default(),
+                kind: kind.to_string(),
+                path: target,
+                marker: None,
+            },
+        );
     }
     Ok(out)
 }
 
 /// What a package-only converge does that `undo` cannot take back.
 ///
-/// The package installs themselves are journaled. These three are not, and each
-/// is recorded as `revertible: No` in `interface.rs` — so reporting an empty
+/// The package installs themselves are journaled. These are not, and each is
+/// recorded as `revertible: No` in `interface.rs` — so reporting an empty
 /// list here contradicted the tool's own capability table.
 fn packages_only_unrevertible(
     brew_trust: &[String],
@@ -646,11 +658,17 @@ fn packages_only_unrevertible(
         &crate::providers::effective_rpm_repos(home, machine).unwrap_or_default(),
     )
     .is_empty();
-    let touched: [(&str, bool); 4] = [
+    let sources_to_write = !crate::providers::apt_sources_pending(
+        home,
+        &crate::providers::effective_apt_sources(home, machine).unwrap_or_default(),
+    )
+    .is_empty();
+    let touched: [(&str, bool); 5] = [
         ("brew-trust", untrusted),
         ("flatpak-remote", remotes_to_add),
         ("gnome-extensions", switches_to_flip),
         ("rpm-repo", repos_to_write),
+        ("apt-source", sources_to_write),
     ];
     touched
         .iter()
@@ -852,6 +870,16 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         absorb: &[Answer::Hand {
             file: "the `.repo` asset in the temper folder, declared in `rpm_repos`",
             why: "absorbing a repo means copying a file INTO the folder and \
+                  declaring it — authoring, which no reconcile does",
+        }],
+    },
+    KindSpec {
+        name: "apt-source",
+        detects: Detects::Differs,
+        converge: &[Answer::Verb("temper install")],
+        absorb: &[Answer::Hand {
+            file: "the `.sources` asset in the temper folder, declared in `apt_sources`",
+            why: "absorbing a source means copying a file INTO the folder and \
                   declaring it — authoring, which no reconcile does",
         }],
     },
@@ -1779,7 +1807,7 @@ pub fn run_drift(
         // repos under one label and drop a repo-only bundle out of the report,
         // leaving a name that matches no file in the folder.
         let caps = providers::rpm_repo_caps();
-        for r in providers::rpm_repos_state(home, &effective_repos)? {
+        for r in providers::repo_files_state(home, &effective_repos)? {
             // A repo the machine declares itself has no bundle, and the machine
             // is not an app: the provider name labels the group, and the in-sync
             // list — which counts apps — leaves it out.
@@ -1801,6 +1829,26 @@ pub fn run_drift(
             let mut f = Finding::state(app, "rpm-repo", target, state);
             if caps.observe && !caps.converge {
                 f.detail = Some(providers::RPM_REPO_NO_CONSUMER.to_string());
+            }
+            findings.push(f);
+        }
+    }
+    // apt sources, the same way: grouped under the declaring bundle, and
+    // `unavailable` — never missing — on a host without apt.
+    let effective_sources = providers::effective_apt_sources(home, machine)?;
+    if !effective_sources.is_empty() {
+        let caps = providers::apt_source_caps();
+        for r in providers::repo_files_state(home, &effective_sources)? {
+            let app = r.from.as_deref().unwrap_or("apt-source");
+            let state = if caps.converge {
+                r.state
+            } else {
+                crate::primitives::FileState::Unavailable
+            };
+            let target = r.dest.display().to_string();
+            let mut f = Finding::state(app, "apt-source", target, state);
+            if !caps.converge {
+                f.detail = Some(providers::APT_SOURCE_NO_APT.to_string());
             }
             findings.push(f);
         }
@@ -2302,6 +2350,13 @@ pub fn run_install(
     providers::rpm_repos_converge(
         home,
         &providers::effective_rpm_repos(home, machine)?,
+        dry_run,
+    )?;
+    // apt sources likewise, before any apt install. The `apt-get update` that
+    // makes a new source visible is part of that install.
+    providers::apt_sources_converge(
+        home,
+        &providers::effective_apt_sources(home, machine)?,
         dry_run,
     )?;
     // The journal opens BEFORE the converge, not after it. It used to be created

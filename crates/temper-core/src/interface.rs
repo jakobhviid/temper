@@ -239,6 +239,34 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         // after the un-layer, never before it.
         residue: Col::Yes,
     },
+    // `rpm-repo`'s sibling, answering every column the same way for the same
+    // reasons: the base image's own sources (debian.sources, ubuntu.sources)
+    // are never extras, and what temper wrote is ledger residue.
+    ProviderSpec {
+        name: "apt-source",
+        kinds: &["apt-source"],
+        fleet_scope: Col::NA(
+            "a source belongs to the bundle whose packages need it — group scope, gated",
+        ),
+        machine_scope: Col::Yes,
+        observe: Col::Yes,
+        install: Col::Yes,
+        prune: Col::NA(
+            "an undeclared source is the image's, not an extra; what temper wrote is residue",
+        ),
+        reconcile: Col::NA(
+            "absorbing a source means copying a file INTO the folder and declaring it — \
+             authoring, which no reconcile does",
+        ),
+        ignore: Col::NA(
+            "nothing to silence: only sources temper deployed are ever reported, so the \
+             image's own never appear",
+        ),
+        revertible: Col::No(
+            "a source is root-owned state written outside the journal, like `sysfile`",
+        ),
+        residue: Col::Yes,
+    },
     ProviderSpec {
         name: "rpm-ostree",
         kinds: &["rpm-ostree", "rpm-ostree-extra"],

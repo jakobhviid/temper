@@ -231,6 +231,7 @@ above.
 | `rpm-ostree` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `dnf` / `apt` / `pacman` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `rpm-repo` | n/a | ✅ | ✅ | ✅ | n/a | n/a | n/a | n/a | ✅ | ❌ | ✅ |
+| `apt-source` | n/a | ✅ | ✅ | ✅ | n/a | n/a | n/a | n/a | ✅ | ❌ | ✅ |
 | `dconf` | ✅ | ✅ | ✅ | ⚠ | ❌ | ✅ | ✅ | ⚠ | ✅ | ✅ | ❌ |
 | `deployed-files` (`copy` / `sysfile` / `block`) | ✅ | n/a | ✅ | ✅ | ✅ | n/a | n/a | ❌ | ✅ | ⚠ | ✅ |
 | `profile` | ✅ | ❌ | ✅ | ⚠ | ❌ | ❌ | ❌ | ❌ | ⚠ | ❌ | ❌ |
@@ -252,7 +253,9 @@ wrote are ever reported, which is what keeps the base image's own — fedora,
 updates, rpmfusion — out of the report. That answers columns 5, 8 and 11
 together, and it is why there is no `[ignore]` list for repos to need. Column 6
 is authoring: absorbing a repo means copying a file *into* the folder, which no
-`reconcile` does.
+`reconcile` does. `apt-source` is the same row in apt's directories
+(`/etc/apt/sources.list.d`, `/etc/apt/keyrings`), for the same reasons: the
+image's `debian.sources` is never an extra, and what temper wrote is residue.
 
 `dnf`, `apt` and `pacman` fill every column, and two of them only because of a
 rule the others do not need. **Extras (5, 6) are counted from a baseline.** Each

@@ -102,6 +102,7 @@ mod tests {
             pacman: Vec::new(),
             flatpak_remotes: Vec::new(),
             rpm_repos: Vec::new(),
+            apt_sources: Vec::new(),
             retire: Vec::new(),
             retire_packages: Vec::new(),
             ignore: Default::default(),

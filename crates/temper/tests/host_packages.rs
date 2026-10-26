@@ -38,7 +38,12 @@ impl Env {
         // Escalation is real in production and pass-through here: the fake
         // manager behind it is what records the effect. `-n -v` / `-v` are the
         // credential checks, answered "held".
-        e.script("sudo", "case \"$1\" in -n|-v) exit 0;; esac\nexec \"$@\"\n");
+        // A root-owned file write (`sudo install …`) is recorded, never run: the
+        // assertion is on its order, and a test must not write to /etc.
+        e.script(
+            "sudo",
+            "case \"$1\" in -n|-v) exit 0;; install) echo \"sudo $*\" >> \"$LOG\"; exit 0;; esac\nexec \"$@\"\n",
+        );
         e
     }
 
@@ -181,6 +186,12 @@ impl Env {
 
     fn spec(&self, body: &str) {
         fs::write(self.home.path().join("temper.toml"), body).unwrap();
+    }
+
+    fn asset(&self, rel: &str, body: &str) {
+        let p = self.home.path().join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, body).unwrap();
     }
 
     fn bundle(&self, name: &str, body: &str) {
@@ -507,4 +518,75 @@ fn a_bundles_dnf_list_is_inert_on_an_atomic_host() {
     assert!(out.status.success());
     assert!(!String::from_utf8_lossy(&out.stdout).contains("could not finish"));
     assert!(!e.log().contains("dnf install"));
+}
+
+/// An apt source lands before the install that resolves from it — key, then
+/// source, then the list refresh, then the install — so a vendor package
+/// installs on a clean machine's first run.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_apt_source_lands_key_first_and_before_the_install_that_needs_it() {
+    let e = Env::new();
+    e.apt();
+    e.machine(&["apt"], &["apt"], &[]);
+    e.asset(
+        "assets/apt/vendor.sources",
+        "Types: deb\nURIs: https://example.invalid/apt\nSuites: stable\nComponents: main\n\
+         Signed-By: /etc/apt/keyrings/vendor.asc\n",
+    );
+    e.asset("assets/apt/vendor.asc", "not a real key\n");
+    e.spec(&format!(
+        "{MACHINE}apt = [\"vendor-tool\"]\n\
+         apt_sources = [{{ source = \"assets/apt/vendor.sources\", key = \"assets/apt/vendor.asc\" }}]\n"
+    ));
+    let out = e.temper().args(["install", "--yes"]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let log = e.log();
+    let at = |needle: &str| {
+        log.lines()
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("`{needle}` never ran:\n{log}"))
+    };
+    assert!(at("/etc/apt/keyrings/vendor.asc") < at("/etc/apt/sources.list.d/vendor.sources"), "{log}");
+    assert!(at("/etc/apt/sources.list.d/vendor.sources") < at("apt-get update"), "{log}");
+    assert!(at("apt-get update") < at("apt-get install"), "{log}");
+    // A source is root-owned state outside the journal, and the run says so.
+    let said = String::from_utf8_lossy(&out.stdout) + String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("apt-source"), "undo cannot take a source back, and must say so:\n{said}");
+}
+
+/// On a host without apt, a declared source is `unavailable` — never missing,
+/// which would invite a converge to write it — and nothing is written.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_apt_source_on_a_host_without_apt_is_unavailable() {
+    let e = Env::new();
+    e.pacman();
+    e.machine(&["base"], &["base"], &[]);
+    e.asset("assets/apt/vendor.sources", "Types: deb\n");
+    e.spec(&format!(
+        "{MACHINE}apt_sources = [{{ source = \"assets/apt/vendor.sources\" }}]\n"
+    ));
+    let only_pacman = e.isolated_path();
+    let out = e
+        .temper()
+        .env("PATH", &only_pacman)
+        .args(["--json", "drift"])
+        .output()
+        .unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let src: Vec<_> = doc["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["kind"] == "apt-source")
+        .collect();
+    assert_eq!(src.len(), 1, "{doc}");
+    assert_eq!(src[0]["status"], "unavailable", "{doc}");
+    e.temper()
+        .env("PATH", &only_pacman)
+        .args(["install", "--yes"])
+        .assert()
+        .success();
+    assert!(!e.log().contains("sources.list.d"), "{}", e.log());
 }

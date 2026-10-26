@@ -33,8 +33,8 @@ contract, that folder is one application of it.
 - **Packages *and* config, one tool.** brew / cask / tap / flatpak / mas /
   VS Code / GNOME extensions / rpm-ostree, and the distro's own dnf (Fedora,
   RHEL family), apt (Debian, Ubuntu) and pacman (Arch) — and where they come
-  from, since a flatpak remote and an RPM repo are declared alongside the
-  packages that need them and converged before them. Plus file, key,
+  from, since a flatpak remote, an RPM repo and an apt source are declared
+  alongside the packages that need them and converged before them. Plus file, key,
   marker-block, and root-owned `/etc` config primitives.
 - **Drift is first-class.** `temper drift` is read-only and tells you what's out
   of sync **and the exact command to fix it** — in both directions.
@@ -44,7 +44,7 @@ contract, that folder is one application of it.
 - **Reversible, and it says where it isn't.** File writes, dconf keys and package
   installs are journaled; `temper undo` rolls back the last run, guarded so it
   never clobbers a since-changed file. A few things are root-owned state written
-  outside the journal — `sysfile`, RPM repos — and a run that touches one says so
+  outside the journal — `sysfile`, RPM repos, apt sources — and a run that touches one says so
   *before* you confirm rather than after.
 - **Keeps the spec in git (if it is git).** Spec-side writes can auto-commit +
   push a git-backed folder (`temper save`, or `temper configure set
