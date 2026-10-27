@@ -157,6 +157,7 @@ temper's report.
 | apt | Debian 12 and 13, Ubuntu 22.04 and 24.04 |
 | pacman | Arch Linux |
 | zypper, apk | openSUSE Tumbleweed, Alpine 3.22 — negative controls: temper must install and write nothing there |
+| Homebrew | on Debian 13, Ubuntu 24.04 and Fedora 44 |
 
 Ubuntu 24.04, Fedora 44 and Debian 13 also run as full virtual machines. The
 matrix covers:
@@ -165,14 +166,17 @@ matrix covers:
 - drift in both directions;
 - `prune`, including the dependencies it frees and the ones it keeps;
 - `undo` and `reconcile`;
+- that only packages someone asked for are offered or seeded, never the
+  dependencies they pulled in;
 - that an unrelated package the system no longer needs is never touched.
 
 The scripts and fixtures are in [`matrix/`](matrix/README.md), with what a
 container or VM runner has to provide.
 
-Not in the matrix: zypper and apk have no package list in temper, and image-based
+Not in the matrix: zypper and apk have no package list in temper; image-based
 Fedora (Silverblue, Bazzite, CoreOS) — where packages are layered with
-rpm-ostree — is the author's daily environment rather than a matrix row. RHEL 7
+rpm-ostree — is the author's daily environment rather than a matrix row; and
+macOS, whose Homebrew is the same code as the Linux rows run. RHEL 7
 and its `yum` are not supported; on EL 8 and later, `yum` is dnf.
 
 ## Known Limitations

@@ -283,14 +283,18 @@ dependency is always the manager's answer, never temper's.
 
 A removal does take the dependencies it frees — the ones the manager says only
 the removed packages needed — because a removal that leaves its libraries behind
-is not finished. It never runs the manager's plain autoremove, because that is
-whole-system: with one unrelated orphan on the box it took that orphan too, on
-every family measured, and on a long-lived machine it would take old kernels and
-earlier leftovers that nothing in the spec is about. Each manager scopes the
-question itself — dnf's own remove lists "unused dependencies", pacman's `-Rs`
-takes only its targets' — and apt, which has no scoped form, answers it as the
-difference between its autoremove before and after. Unneeded packages that are
-not the run's are counted and named, never touched.
+is not finished. It does not run the manager's plain autoremove when the manager
+can answer more narrowly, because that is whole-system: with one unrelated orphan
+on the box it took that orphan too, on every family measured — Homebrew's runs
+after every `brew uninstall` — and on a long-lived machine it would take old
+kernels and earlier leftovers that nothing in the spec is about. Each manager
+scopes the question itself — dnf's own remove lists "unused dependencies",
+pacman's `-Rs` takes only its targets' — and apt and brew, which have no scoped
+form, answer it as the difference between their autoremove before and after.
+Unneeded packages that are not the run's are counted and named, never touched.
+Only where a manager cannot answer the narrow question does its autoremove run
+instead, and the preview says so before anything is confirmed: leaving the
+dependencies behind would leave the junk the removal was meant to clear.
 
 - `install` journals the names it installed, read back, not every package that
   appeared during the run: an unattended upgrade waiting on the same lock would
@@ -368,7 +372,11 @@ The one real deviation is **brew**, which prunes via `brew bundle cleanup` rathe
 than `brew uninstall`, because cleanup is dependency-aware: a formula kept only as
 another package's transitive dependency must not be removed. That is a
 correctness requirement, and it is the documented exception rather than a second
-pattern.
+pattern. What cleanup lists still goes through the same rule as every other
+package manager: a formula Homebrew holds as a dependency (`installed_on_request`
+false) is never an extra — it is offered by no `reconcile`, seeded by no `init`,
+and removed only as a dependency an extra freed, or kept when it was unneeded
+already.
 
 **Column 10 was never a real constraint, and saying so cost a release.** "Packages
 cannot be journaled" was repeated until someone asked why: the set temper installs

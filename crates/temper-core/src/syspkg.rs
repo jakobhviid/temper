@@ -759,6 +759,10 @@ pub struct Release {
     pub held: Vec<(String, &'static str)>,
     /// Already gone — nothing to do.
     pub gone: Vec<String>,
+    /// The manager could not say which dependencies only `remove` needed, so
+    /// its own autoremove runs after the removal instead — whole-system, and
+    /// said in the preview — rather than leaving them behind.
+    pub autoremove: bool,
 }
 
 /// Plan letting go of `pkgs`. `only_marked` are packages temper never installed,
@@ -807,16 +811,9 @@ pub fn release_plan(
     if !plan.remove.is_empty() {
         match freed_dependencies(pm, &plan.remove, true) {
             Some(deps) => plan.deps = deps,
-            // Not knowing is not "none": say what stays, and why.
-            None => eprintln!(
-                "{} {} could not say which dependencies removing {} frees{} — they stay, \
-                 for `{}`",
-                crate::ui::yellow(crate::ui::g_warn()),
-                pm.name(),
-                plan.remove.join(", "),
-                if pm == SysPm::Dnf { " (dnf 4 needs root to answer)" } else { "" },
-                autoremove_hint(pm)
-            ),
+            // Not knowing is not "none", and leaving them would leave junk: the
+            // manager's own autoremove runs instead, and the plan says so.
+            None => plan.autoremove = true,
         }
     }
     Some(plan)
@@ -962,6 +959,10 @@ pub fn release(pm: SysPm, plan: &Release, verbose: bool) -> (Vec<String>, Vec<St
     }
     let removed = remove(pm, &set, verbose);
     let demoted = mark(pm, &plan.demote, false);
+    if plan.autoremove && !removed.is_empty() {
+        autoremove(pm, verbose);
+        return (removed, demoted);
+    }
     // Unneeded packages that are not this run's: told, never touched. A plain
     // autoremove would take them, and whether to is the user's call.
     if !removed.is_empty() {
@@ -977,9 +978,43 @@ pub fn release(pm: SysPm, plan: &Release, verbose: bool) -> (Vec<String>, Vec<St
     (removed, demoted)
 }
 
-/// The manager's own clean-up, named for the user to run. temper never runs it:
-/// it is whole-system — apt's took an unrelated orphan in the same breath — and
-/// that is the manager's call, not a spec's.
+/// Run the manager's own autoremove — the fallback for a removal whose freed
+/// dependencies could not be worked out on their own.
+fn autoremove(pm: SysPm, verbose: bool) {
+    let label = format!("{} autoremove", pm.name());
+    match pm {
+        SysPm::Dnf => {
+            crate::providers::run_child(privileged(pm, &["autoremove", "-y"]), verbose, &label, "removing unneeded packages");
+        }
+        SysPm::Apt => {
+            crate::providers::run_child(
+                privileged(pm, &["autoremove", "-y", "-o", APT_LOCK_WAIT]),
+                verbose,
+                &label,
+                "removing unneeded packages",
+            );
+        }
+        // pacman lists one layer of orphans at a time; each removal can free the
+        // next.
+        SysPm::Pacman => {
+            for _ in 0..10 {
+                let orphans = lines("pacman", &["-Qdtq"]).unwrap_or_default();
+                if orphans.is_empty() {
+                    break;
+                }
+                let mut args = vec!["-Rns", "--noconfirm"];
+                args.extend(orphans.iter().map(String::as_str));
+                if !crate::providers::run_child(privileged(pm, &args), verbose, &label, "removing orphans") {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// The manager's own clean-up, named for the user to run. temper runs it only
+/// as the fallback above: it is whole-system — apt's took an unrelated orphan
+/// in the same breath — and otherwise that is the user's call, not a spec's.
 pub fn autoremove_hint(pm: SysPm) -> &'static str {
     match pm {
         SysPm::Dnf => "sudo dnf autoremove",

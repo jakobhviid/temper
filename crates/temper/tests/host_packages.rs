@@ -174,7 +174,8 @@ impl Env {
         self.script("dpkg", "echo amd64\n");
         self.script(
             "apt-get",
-            "if [ \"$1\" = -s ] && [ \"$2\" = autoremove ]; then shift; shift; \
+            "if [ \"$1\" = -s ] && [ \"$2\" = autoremove ] && [ -e \"$S/no-sim\" ]; then exit 100; fi\n\
+             if [ \"$1\" = -s ] && [ \"$2\" = autoremove ]; then shift; shift; \
                for p in \"$@\"; do echo \"Remv $p [1.0]\"; done; for d in $(freed \"$@\"); do echo \"Remv $d [1.0]\"; done; \
                for o in $(orphans); do echo \"Remv $o [1.0]\"; done; exit 0; fi\n\
              if [ \"$1\" = -s ] && [ \"$3\" = --auto-remove ]; then shift; shift; shift; \
@@ -825,4 +826,32 @@ fn prune_previews_and_removes_the_dependencies_only_its_extras_needed() {
         assert!(have.contains(&"shared".to_string()), "keeper still needs it");
         assert!(have.contains(&"stale".to_string()), "not this prune's orphan");
     }
+}
+
+/// Where the package manager cannot say which dependencies only the removed
+/// packages needed, its own autoremove runs after them — previewed as such —
+/// rather than leaving them behind.
+#[cfg(target_os = "linux")]
+#[test]
+fn prune_falls_back_to_the_managers_autoremove_and_says_so() {
+    let e = Env::new();
+    e.apt();
+    e.machine(&["apt"], &["apt"], &[]);
+    e.spec(&format!("{MACHINE}apt = [\"jq\"]\n"));
+    e.temper().args(["install", "--yes"]).assert().success();
+    e.hand_install("cowsay");
+    fs::write(e.pm.path().join("no-sim"), "").unwrap();
+
+    let doc: serde_json::Value = serde_json::from_slice(
+        &e.temper().args(["--json", "prune", "--dry-run"]).output().unwrap().stdout,
+    )
+    .unwrap();
+    assert_eq!(doc["apt"], serde_json::json!(["cowsay"]), "{doc}");
+    assert_eq!(doc["autoremove"], serde_json::json!(["apt"]), "{doc}");
+    let out = e.temper().args(["prune", "--dry-run"]).output().unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("run apt's autoremove"));
+
+    e.temper().args(["prune", "--yes"]).assert().success();
+    assert!(e.log().contains("apt-get remove -y -o DPkg::Lock::Timeout=300 cowsay"), "{}", e.log());
+    assert!(e.log().contains("apt-get autoremove -y"), "{}", e.log());
 }

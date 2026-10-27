@@ -216,16 +216,11 @@ fn run_uninstall(provider: &str, packages: &[String]) -> bool {
             c.args(["uninstall", "-y", "--noninteractive", "--system"]);
             c
         }
-        "brew" => {
-            let mut c = std::process::Command::new("brew");
-            c.args(["uninstall", "--formula"]);
-            c
-        }
-        "cask" => {
-            let mut c = std::process::Command::new("brew");
-            c.args(["uninstall", "--cask"]);
-            c
-        }
+        // Homebrew autoremoves the whole system after every uninstall; this
+        // removes what the run installed and only the formulae that leaves
+        // unneeded (see `brew_uninstall`).
+        "brew" => return crate::providers::brew_uninstall("--formula", packages),
+        "cask" => return crate::providers::brew_uninstall("--cask", packages),
         "vscode" => {
             // One flag per extension, so this is handled below rather than by
             // appending bare args.
@@ -548,7 +543,13 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
                     cl.noted(&format!(
                         "would un-install {provider}: {} package(s){}{}",
                         plan.remove.len(),
-                        if plan.deps.is_empty() {
+                        if plan.autoremove {
+                            format!(
+                                ", then run {provider}'s autoremove — it could not say which \
+                                 dependencies only they needed, so that also removes anything \
+                                 else it holds as no longer needed"
+                            )
+                        } else if plan.deps.is_empty() {
                             String::new()
                         } else {
                             format!(
@@ -571,8 +572,14 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
                 }
                 reverted += packages.len();
                 cl.noted(&format!(
-                    "would un-install {provider}: {} package(s)",
-                    packages.len()
+                    "would un-install {provider}: {} package(s){}",
+                    packages.len(),
+                    if matches!(provider.as_str(), "brew" | "cask") {
+                        ", and the formulae that leaves unneeded — not ones brew held as \
+                         unneeded already"
+                    } else {
+                        ""
+                    }
                 ));
                 continue;
             }

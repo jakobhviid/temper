@@ -1,0 +1,5 @@
+# Fixture for brew.sh: one declared formula, in the machine's own Brewfile.
+[[machine]]
+name = "m"
+os = "linux"
+brewfile = "brewfiles/m"

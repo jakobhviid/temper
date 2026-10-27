@@ -44,8 +44,9 @@ temper init            # name inferred from hostname; --role to skip the ask
 `init` adds a `[[machine]]` block (creating `temper.toml` if the folder has
 none), wires up `brewfiles/<name>`, and then seeds it from the machine's live
 state — it is `reconcile --current-state-wins --include-trust` under the hood, so
-you get dependency-aware brew extras, `[ignore]`
-respected, canonical ordering, a preview, and an undo. It refuses to touch a
+you get dependency-aware brew extras — only formulae installed on request, never
+what Homebrew pulled in for them — `[ignore]` respected, canonical ordering, a
+preview, and an undo. It refuses to touch a
 machine that's already declared, pointing you at `reconcile` instead.
 
 Seeding is the one place the probe opt-in is lifted. Everywhere else a manager
@@ -305,6 +306,13 @@ of the drift. You pick a direction and run what it prints:
     leaves it alone. That matters because `brew bundle cleanup` decides for
     itself what to remove, so temper has to name the ignored packages in the
     file it hands over rather than merely filtering them out of the report.
+  - An extra is what someone **asked for**, never what it pulled in. Install
+    `jq` by hand and drift, `reconcile` and `prune` name `jq`; `oniguruma`, which
+    Homebrew installed for it, is not an extra and is never offered to the
+    spec. `prune` removes `jq` and lists `oniguruma` beside it as "a dependency
+    only the packages above needed". A formula Homebrew already held as
+    unneeded before — what `brew autoremove` would take — is left alone and
+    counted. dnf, apt and pacman work the same way (§9c).
 
 > **An empty prune says why it is empty.** A manager that is installed and
 > failing cannot be asked what it holds, and its silence is not the same as
@@ -586,10 +594,15 @@ what to undo`), so "can I take this back?" is answered while the run is still a
 forecast.
 Package installs are reverted too: what the run installed is un-installed — brew
 formulae and casks, flatpaks, App Store apps, GNOME extensions, and layered rpms
-(which stages a deployment, as layering did). For dnf, apt and pacman that is the
-packages the run installed by name, with the dependencies only they needed; one
-that something installed since has come to need is kept, marked as a dependency,
-and a package the run only marked as yours is marked back (§9c). An *upgrade* by
+(which stages a deployment, as layering did). A brew revert takes the formulae
+the run installed and the formulae that leaves unneeded, and nothing Homebrew
+held as unneeded before: its own whole-system autoremove after `brew uninstall`
+is switched off for the run. For dnf, apt and pacman it is the packages the run
+installed by name, with the dependencies only they needed; one that something
+installed since has come to need is kept, marked as a dependency, and a package
+the run only marked as yours is marked back (§9c). Where a package manager cannot
+say which dependencies only those packages needed, its own autoremove runs
+instead. An *upgrade* by
 `update` is not revertible, and neither is a repo, source, tap-trust or remote
 the run wrote — the run says so before it starts.
 
@@ -753,8 +766,9 @@ things through it: install a package the spec names, mark a named package as
 yours, remove a named package nothing else needs — together with the
 dependencies the package manager says only that package needed — or mark a named
 package as a dependency again. It never decides what a dependency is, never
-upgrades (the OS owns versions), and never runs a whole-system autoremove, which
-would also take unneeded packages that have nothing to do with the spec.
+upgrades (the OS owns versions), and does not run a whole-system autoremove,
+which would also take unneeded packages that have nothing to do with the spec —
+except as the fallback below, which the preview announces.
 
 **`install`.** Repos and sources are written first, then one batched install per
 manager, as root (one password for the whole run). apt refreshes its package
@@ -827,8 +841,12 @@ leftover from your own removals — are only counted ("the package manager lists
 N other package(s) as no longer needed") with the command that removes them.
 Whether to run it is yours. On dnf 4 (EL 8, 9 and 10), working out the freed
 dependencies needs root, so `prune` asks for the password before its preview,
-`--dry-run` included. If they cannot be worked out, the run says so and removes
-only the named packages.
+`--dry-run` included. If the package manager cannot say which dependencies only
+the removed packages needed, its own autoremove runs after the removal instead —
+whole-system, so it also takes anything else it holds as unneeded. The preview
+says so before you confirm (`run apt's autoremove — it could not say which
+dependencies only the packages above needed…`), and `--json` lists the package
+manager under `autoremove`.
 
 What it looks like, on a Debian box where `bc` was installed by hand and an
 old orphan was already there:
@@ -843,8 +861,9 @@ prune m: 3 item(s) removed
 ```
 
 `prune --json` lists the removals under `dnf`, `apt` and `pacman` as bare package
-names. `dependencies` (freed) and `demote` (kept as dependencies) hold
-`"<manager> <name>"` strings, `unremovable` holds `{manager, name, why}`
+names. `dependencies` (freed — brew's too) and `demote` (kept as dependencies)
+hold `"<manager> <name>"` strings, `autoremove` names the package managers
+whose own autoremove will run, `unremovable` holds `{manager, name, why}`
 objects, `unavailable` names package managers it could not ask, and `failed`
 names anything that did not go as planned.
 

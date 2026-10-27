@@ -1100,6 +1100,7 @@ fn with_declared_trust(body: &str, trust: &[String]) -> String {
 pub fn prune_apply(
     effective: &[Pkg],
     extras: &[(Manager, String)],
+    brew_deps: &BrewExtras,
     ignore: &crate::manifest::Ignore,
     trust: &[String],
 ) -> Result<()> {
@@ -1130,6 +1131,37 @@ pub fn prune_apply(
         for line in ignored_brewfile_lines(ignore) {
             body.push_str(&line);
             body.push('\n');
+        }
+        // …and everything cleanup would take that the confirmed plan did not
+        // name: a formula that is unneeded already (brew's autoremove would take
+        // it, and that is not this prune's to do), or anything that appeared
+        // since the plan was made. Written as keepers, so cleanup removes the
+        // plan and nothing more. Under the autoremove fallback the plan named
+        // every unneeded formula, so only what appeared since is kept.
+        let planned: HashSet<&str> = extras
+            .iter()
+            .map(|(_, n)| n.as_str())
+            .chain(brew_deps.dependencies.iter().map(String::as_str))
+            .collect();
+        let unneeded = if brew_deps.autoremove {
+            brew_dependency_formulae().unwrap_or_default()
+        } else {
+            HashSet::new()
+        };
+        let casks: HashSet<String> = run_lines("brew", &["list", "--cask"])
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        for (m, n) in brew_extras_inner(effective, ignore, false).unwrap_or_default() {
+            if planned.contains(n.as_str()) || unneeded.contains(&n) {
+                continue;
+            }
+            let line = match m {
+                Manager::Tap => format!("tap \"{n}\"\n"),
+                _ if casks.contains(&n) => format!("cask \"{n}\"\n"),
+                _ => format!("brew \"{n}\"\n"),
+            };
+            body.push_str(&line);
         }
         // …and the same for trust, which brew reconciles from this file too:
         // `cleanup --force` calls `Trust.replace!` with the file's `trusted:`
@@ -1163,7 +1195,14 @@ pub fn prune_apply(
         // Streamed on purpose: prune is destructive, confirmed, and the user
         // is watching it happen. Under `--json` that stream would land in the
         // document, so it goes to stderr instead.
-        let status = Command::new("brew")
+        // Homebrew's own autoremove after each uninstall is whole-system; the
+        // dependencies this prune frees are already in the plan. Left on only
+        // for the fallback, where the plan said it would run.
+        let mut cleanup = Command::new("brew");
+        if !brew_deps.autoremove {
+            cleanup.env("HOMEBREW_NO_AUTOREMOVE", "1");
+        }
+        let status = cleanup
             .args(["bundle", "cleanup", "--force"])
             .args(&flags)
             .arg("--file")
@@ -2583,6 +2622,63 @@ pub fn rpm_ostree_requested() -> Option<Vec<String>> {
 
 
 #[cfg(test)]
+mod brew_dependency_tests {
+    use super::*;
+
+    fn set(xs: &[&str]) -> HashSet<String> {
+        xs.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Homebrew's record, as `brew info --json=v2 --installed` prints it (the
+    /// shape measured on Homebrew 7.0.11): `installed_on_request` false is a
+    /// dependency, by short and full name.
+    #[test]
+    fn a_formula_not_installed_on_request_is_a_dependency() {
+        let json = br#"{"formulae":[
+            {"name":"jq","full_name":"jq","installed":[{"installed_on_request":true}]},
+            {"name":"oniguruma","full_name":"oniguruma","installed":[{"installed_on_request":false}]},
+            {"name":"sesh","full_name":"joshmedeski/sesh/sesh","installed":[{"installed_on_request":false}]}
+        ],"casks":[]}"#;
+        assert_eq!(
+            parse_brew_dependency_formulae(json).unwrap(),
+            set(&["oniguruma", "sesh", "joshmedeski/sesh/sesh"])
+        );
+        assert!(parse_brew_dependency_formulae(b"not json").is_none());
+    }
+
+    #[test]
+    fn brews_autoremove_dry_run_names_its_orphans() {
+        let out = "==> Would autoremove 2 unneeded formulae:\ntree\nlibedit\n";
+        assert_eq!(parse_autoremove_dry_run(out), set(&["tree", "libedit"]));
+        assert!(parse_autoremove_dry_run("").is_empty());
+    }
+
+    /// The asked-for formula is the extra; its dependency goes with it; an
+    /// orphan brew held as unneeded already is neither. Without brew's orphan
+    /// list, the fallback is brew's own autoremove.
+    #[test]
+    fn cleanup_splits_into_extras_and_the_dependencies_they_free() {
+        let raw = vec![
+            (Manager::Brew, "jq".to_string()),
+            (Manager::Brew, "oniguruma".to_string()),
+            (Manager::Brew, "tree".to_string()),
+            (Manager::Tap, "user/tap".to_string()),
+        ];
+        let deps = set(&["oniguruma", "tree"]);
+        let split = split_brew_extras(raw.clone(), &deps, Some(&set(&["tree"])));
+        assert_eq!(
+            split.extras,
+            vec![(Manager::Brew, "jq".to_string()), (Manager::Tap, "user/tap".to_string())]
+        );
+        assert_eq!(split.dependencies, vec!["oniguruma".to_string()]);
+        assert!(!split.autoremove);
+
+        let fallback = split_brew_extras(raw, &deps, None);
+        assert!(fallback.dependencies.is_empty() && fallback.autoremove);
+    }
+}
+
+#[cfg(test)]
 mod converge_dispatch_tests {
     use super::{converge_via, ConvergeVia};
     use crate::packages::Manager;
@@ -3279,7 +3375,194 @@ pub fn rpm_converge(effective: &[String], dry_run: bool, verbose: bool) -> Resul
 /// name (it round-trips as a `tap` line); a formula/cask keeps brew's short name
 /// and is tagged `Brew` for the caller to reclassify/qualify. `[ignore]` applied.
 pub fn brew_extras(effective: &[Pkg], ignore: &manifest::Ignore) -> Result<Vec<(Manager, String)>> {
-    brew_extras_inner(effective, ignore, false)
+    Ok(brew_extras_split(effective, ignore, false)?.extras)
+}
+
+/// What `brew bundle cleanup` would remove, split the way Homebrew's own
+/// records split it.
+///
+/// `cleanup` lists every installed formula the Brewfile does not account for,
+/// dependencies included: with `jq` installed by hand it lists `oniguruma`
+/// beside it. Reported as extras, a dependency was offered to `reconcile`,
+/// seeded by `init` and listed by `prune` as though someone had asked for it.
+/// Homebrew records the difference (`installed_on_request`), so a formula held
+/// only as a dependency is never an extra: it belongs to whatever needed it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct BrewExtras {
+    /// Formulae installed on request, casks and taps — what drift reports,
+    /// reconcile offers and prune removes by name.
+    pub extras: Vec<(Manager, String)>,
+    /// Formulae held as dependencies that removing `extras` leaves unneeded —
+    /// not the ones `brew autoremove` would take already.
+    pub dependencies: Vec<String>,
+    /// Brew could not list what it holds as unneeded, so the dependencies of
+    /// the extras cannot be told apart from older orphans. Removing the extras
+    /// then takes every unneeded formula — brew's own autoremove, said so in
+    /// the preview.
+    pub autoremove: bool,
+}
+
+/// `brew_extras`, with the dependencies `prune` removes alongside.
+pub fn brew_extras_split(
+    effective: &[Pkg],
+    ignore: &manifest::Ignore,
+    seed: bool,
+) -> Result<BrewExtras> {
+    let raw = brew_extras_inner(effective, ignore, seed)?;
+    if raw.is_empty() {
+        return Ok(BrewExtras::default());
+    }
+    // Without Homebrew's record, a dependency cannot be told from a formula
+    // someone asked for, and every one reads as an extra, as it always has.
+    let Some(deps) = brew_dependency_formulae() else {
+        return Ok(BrewExtras {
+            extras: raw,
+            ..Default::default()
+        });
+    };
+    Ok(split_brew_extras(raw, &deps, brew_orphans().as_ref()))
+}
+
+/// The split itself, apart from brew, so it is testable.
+fn split_brew_extras(
+    raw: Vec<(Manager, String)>,
+    deps: &HashSet<String>,
+    orphans: Option<&HashSet<String>>,
+) -> BrewExtras {
+    let (candidates, extras): (Vec<_>, Vec<_>) = raw
+        .into_iter()
+        .partition(|(m, n)| *m == Manager::Brew && deps.contains(n));
+    let candidates: Vec<String> = candidates.into_iter().map(|(_, n)| n).collect();
+    match orphans {
+        Some(o) => BrewExtras {
+            extras,
+            dependencies: candidates.into_iter().filter(|n| !o.contains(n)).collect(),
+            autoremove: false,
+        },
+        None => BrewExtras {
+            extras,
+            dependencies: Vec::new(),
+            autoremove: true,
+        },
+    }
+}
+
+/// Installed formulae Homebrew holds as somebody's dependency — not installed
+/// on request — by name and full name. `None` when it cannot be read.
+fn brew_dependency_formulae() -> Option<HashSet<String>> {
+    let out = Command::new("brew")
+        .args(["info", "--json=v2", "--installed"])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_brew_dependency_formulae(&out.stdout)
+}
+
+fn parse_brew_dependency_formulae(json: &[u8]) -> Option<HashSet<String>> {
+    let v: serde_json::Value = serde_json::from_slice(json).ok()?;
+    let mut out = HashSet::new();
+    for f in v.get("formulae")?.as_array()? {
+        let on_request = f
+            .get("installed")
+            .and_then(|i| i.as_array())
+            .and_then(|i| i.first())
+            .and_then(|r| r.get("installed_on_request"))
+            .and_then(|b| b.as_bool());
+        if on_request == Some(false) {
+            for key in ["name", "full_name"] {
+                if let Some(n) = f.get(key).and_then(|n| n.as_str()) {
+                    out.insert(n.to_string());
+                }
+            }
+        }
+    }
+    Some(out)
+}
+
+/// The formulae `brew autoremove` would remove now: held as dependencies, and
+/// needed by nothing. `None` when brew could not say.
+pub fn brew_orphans() -> Option<HashSet<String>> {
+    if !have("brew") {
+        return None;
+    }
+    let out = Command::new("brew")
+        .args(["autoremove", "--dry-run"])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(parse_autoremove_dry_run(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// Names under brew's "==> Would autoremove N unneeded formula(e):" heading.
+fn parse_autoremove_dry_run(text: &str) -> HashSet<String> {
+    let mut on = false;
+    let mut out = HashSet::new();
+    for line in text.lines() {
+        if line.starts_with("==>") {
+            on = line.contains("Would autoremove");
+            continue;
+        }
+        let name = line.trim();
+        if on && !name.is_empty() && !name.contains(' ') {
+            out.insert(name.to_string());
+        }
+    }
+    out
+}
+
+/// `brew uninstall` of what a run installed, scoped like a prune.
+///
+/// Homebrew runs a whole-system autoremove after every uninstall: reverting
+/// `jq` took `oniguruma` with it, which is right, and an unrelated orphan too,
+/// which no undo had shown. So the autoremove is switched off, the named
+/// packages go, and then only the formulae that became unneeded because they
+/// went — brew's own list after, less its list before. If brew cannot list
+/// them, its autoremove runs as it would have. Returns whether the named
+/// packages were uninstalled.
+pub fn brew_uninstall(kind: &str, names: &[String]) -> bool {
+    if names.is_empty() {
+        return true;
+    }
+    let before = brew_orphans();
+    let mut cmd = Command::new("brew");
+    cmd.args(["uninstall", kind]).args(names);
+    if before.is_some() {
+        cmd.env("HOMEBREW_NO_AUTOREMOVE", "1");
+    }
+    let ok = cmd
+        .stdout(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    let Some(before) = before else {
+        return ok;
+    };
+    match brew_orphans() {
+        Some(after) => {
+            let freed: Vec<&String> = after.difference(&before).collect();
+            if !freed.is_empty() {
+                let _ = Command::new("brew")
+                    .args(["uninstall", "--formula"])
+                    .args(&freed)
+                    .env("HOMEBREW_NO_AUTOREMOVE", "1")
+                    .stdout(Stdio::null())
+                    .status();
+            }
+        }
+        None => {
+            let _ = Command::new("brew")
+                .arg("autoremove")
+                .stdout(Stdio::null())
+                .status();
+        }
+    }
+    ok
 }
 
 /// `brew_extras` for the SEED case, where the empty declared set is the point
@@ -3292,7 +3575,7 @@ pub fn brew_extras(effective: &[Pkg], ignore: &manifest::Ignore) -> Result<Vec<(
 /// **nothing**, on a host with 200 formulae, while the docs promised "full
 /// manager coverage".
 pub fn brew_extras_seeding(ignore: &manifest::Ignore) -> Result<Vec<(Manager, String)>> {
-    brew_extras_inner(&[], ignore, true)
+    Ok(brew_extras_split(&[], ignore, true)?.extras)
 }
 
 fn brew_extras_inner(

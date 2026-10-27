@@ -2669,7 +2669,12 @@ pub struct PrunePlan {
     /// them out — removed with them, so a prune leaves no orphans of its own.
     /// Never an orphan that was there already: a plain autoremove would take
     /// those, and temper does not.
-    pub dependencies: Vec<(syspkg::SysPm, String)>,
+    pub dependencies: Vec<(&'static str, String)>,
+    /// Package managers whose own autoremove runs after the removals: the
+    /// dependencies only those packages needed could not be worked out on their
+    /// own, so the manager's whole-system clean-up takes them — together with
+    /// anything else it holds as no longer needed. Said in the preview.
+    pub autoremove: Vec<&'static str>,
     /// Host-package-manager extras to keep but mark as dependencies again:
     /// something installed needs them, or temper only ever marked them as
     /// asked-for. They stay installed, and the manager's own autoremove takes
@@ -2725,7 +2730,10 @@ impl PrunePlan {
             out.push((pm.name(), n.clone()));
         }
         for (pm, n) in &self.dependencies {
-            out.push(("dependencies", format!("{} {n}", pm.name())));
+            out.push(("dependencies", format!("{pm} {n}")));
+        }
+        for pm in &self.autoremove {
+            out.push(("autoremove", pm.to_string()));
         }
         for (pm, n) in &self.demote {
             out.push(("demote", format!("{} {n}", pm.name())));
@@ -2809,6 +2817,12 @@ impl PrunePlan {
                 self.dependencies.len()
             ));
         }
+        if !self.autoremove.is_empty() {
+            out.push(format!(
+                "runs the package manager's own autoremove ({})",
+                self.autoremove.join(", ")
+            ));
+        }
         if !self.demote.is_empty() {
             out.push(format!(
                 "marks {} package(s) as dependencies (they stay installed)",
@@ -2829,6 +2843,7 @@ impl PrunePlan {
         "apt",
         "pacman",
         "dependencies",
+        "autoremove",
         "demote",
         "flatpak_remotes",
         "residue",
@@ -2847,6 +2862,11 @@ impl PrunePlan {
             "dnf" | "apt" | "pacman" => format!("remove {list} package {item}"),
             "dependencies" => format!(
                 "remove {item} — a dependency only the packages above needed"
+            ),
+            "autoremove" => format!(
+                "run {item}'s autoremove — it could not say which dependencies only the \
+                 packages above needed, so this also removes anything else {item} holds \
+                 as no longer needed"
             ),
             "demote" => format!(
                 "mark {item} as a dependency — it stays installed, for what needs it"
@@ -2939,7 +2959,13 @@ fn package_extras(
 /// `package-unavailable` — while `prune --json` emitted `"extras": []` either
 /// way, which reads as a clean machine.
 /// Extras, plus the managers that could not be asked for them.
-type ExtrasObserved = (Vec<(packages::Manager, String)>, Vec<packages::Manager>);
+/// The third part is brew's split: the dependencies a removal of its extras
+/// frees, which `prune` previews and removes with them.
+type ExtrasObserved = (
+    Vec<(packages::Manager, String)>,
+    Vec<packages::Manager>,
+    providers::BrewExtras,
+);
 
 fn package_extras_observed(
     home: &Path,
@@ -2948,7 +2974,7 @@ fn package_extras_observed(
 ) -> Result<ExtrasObserved> {
     let effective = packages::effective_set(home, machine)?;
     if effective.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok((Vec::new(), Vec::new(), providers::BrewExtras::default()));
     }
     let installed = providers::probe(&effective)?;
     let unavailable: Vec<packages::Manager> = installed.unavailable_managers().collect();
@@ -2962,8 +2988,9 @@ fn package_extras_observed(
                 )
             })
             .collect();
-    out.extend(providers::brew_extras(&effective, ignore)?);
-    Ok((out, unavailable))
+    let brew = providers::brew_extras_split(&effective, ignore, false)?;
+    out.extend(brew.extras.iter().cloned());
+    Ok((out, unavailable, brew))
 }
 
 #[cfg(test)]
@@ -3102,7 +3129,8 @@ mod prune_plan_tests {
                 (syspkg::SysPm::Dnf, "cowsay".into()),
                 (syspkg::SysPm::Apt, "cowsay".into()),
             ],
-            dependencies: vec![(syspkg::SysPm::Dnf, "oniguruma".into())],
+            dependencies: vec![("dnf", "oniguruma".into())],
+            autoremove: vec!["apt"],
             demote: vec![(syspkg::SysPm::Pacman, "oniguruma".into())],
             flatpak_remotes: vec!["vendor".into()],
             residue: vec!["~/.config/gone".into()],
@@ -3121,7 +3149,7 @@ mod prune_plan_tests {
             )],
         };
         assert!(!p.is_empty());
-        assert_eq!(p.len(), 11, "a list prune acts on is not being counted");
+        assert_eq!(p.len(), 12, "a list prune acts on is not being counted");
 
         // …and each list alone is both non-empty and counted, so no single
         // variant can be the one that is silently dropped.
@@ -3133,6 +3161,7 @@ mod prune_plan_tests {
             PrunePlan { system: vec![p.system[0].clone()], ..Default::default() },
             PrunePlan { demote: p.demote.clone(), ..Default::default() },
             PrunePlan { dependencies: p.dependencies.clone(), ..Default::default() },
+            PrunePlan { autoremove: p.autoremove.clone(), ..Default::default() },
             PrunePlan { flatpak_remotes: p.flatpak_remotes.clone(), ..Default::default() },
             PrunePlan { residue: p.residue.clone(), ..Default::default() },
         ] {
@@ -3190,7 +3219,7 @@ pub fn run_prune(
     ignore: &Ignore,
     brew_trust: &[String],
 ) -> Result<PrunePlan> {
-    let (mut packages, unavailable) = package_extras_observed(home, machine, ignore)?;
+    let (mut packages, unavailable, brew) = package_extras_observed(home, machine, ignore)?;
     let mut unavailable: Vec<&'static str> = unavailable.iter().map(|m| m.as_str()).collect();
     // A flatpak extra is removable from either installation temper can name —
     // `prune` issues one batched call per scope. What it cannot name is a custom
@@ -3289,6 +3318,14 @@ pub fn run_prune(
     // at plan time, so the preview and the confirm describe the run that will
     // happen rather than one the executor then declines.
     let (mut system, mut dependencies, mut demote) = (Vec::new(), Vec::new(), Vec::new());
+    let mut autoremove: Vec<&'static str> = Vec::new();
+    // brew's: what removing its extras frees, from Homebrew's own records.
+    if !brew.extras.is_empty() {
+        dependencies.extend(brew.dependencies.iter().map(|d| ("brew", d.clone())));
+        if brew.autoremove {
+            autoremove.push("brew");
+        }
+    }
     for &pm in syspkg::SysPm::ALL {
         if !syspkg::caps(pm).converge {
             continue;
@@ -3302,7 +3339,10 @@ pub fn run_prune(
                     continue;
                 };
                 system.extend(plan.remove.into_iter().map(|p| (pm, p)));
-                dependencies.extend(plan.deps.into_iter().map(|p| (pm, p)));
+                dependencies.extend(plan.deps.into_iter().map(|p| (pm.name(), p)));
+                if plan.autoremove {
+                    autoremove.push(pm.name());
+                }
                 demote.extend(plan.demote.into_iter().map(|p| (pm, p)));
                 unremovable.extend(plan.held.into_iter().map(|(p, why)| (pm.name(), p, why)));
             }
@@ -3318,6 +3358,7 @@ pub fn run_prune(
         rpm_ostree: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
         system,
         dependencies,
+        autoremove,
         demote,
         flatpak_remotes: providers::remotes_extras(
             &providers::effective_remotes(home, machine)?,
@@ -3357,7 +3398,17 @@ pub fn commit_prune(
         // trust store from the same file: what temper leaves out, brew takes
         // away. Note the ordering below — this runs before `untrust_taps`, so a
         // wipe here could not be repaired by it either.
-        providers::prune_apply(&effective, &plan.packages, ignore, brew_trust)?;
+        let brew_deps = providers::BrewExtras {
+            extras: Vec::new(),
+            dependencies: plan
+                .dependencies
+                .iter()
+                .filter(|(m, _)| *m == "brew")
+                .map(|(_, n)| n.clone())
+                .collect(),
+            autoremove: plan.autoremove.contains(&"brew"),
+        };
+        providers::prune_apply(&effective, &plan.packages, &brew_deps, ignore, brew_trust)?;
     }
     if !plan.untrust.is_empty() {
         providers::untrust_taps(&plan.untrust)?;
@@ -3394,8 +3445,14 @@ pub fn commit_prune(
         };
         let release = syspkg::Release {
             remove: of(&plan.system),
-            deps: of(&plan.dependencies),
+            deps: plan
+                .dependencies
+                .iter()
+                .filter(|(m, _)| *m == pm.name())
+                .map(|(_, n)| n.clone())
+                .collect(),
             demote: of(&plan.demote),
+            autoremove: plan.autoremove.contains(&pm.name()),
             ..Default::default()
         };
         if release.remove.is_empty() && release.demote.is_empty() {

@@ -107,7 +107,8 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         // The one real deviation from install/uninstall symmetry, and it is a
         // correctness requirement: `brew bundle cleanup` is dependency-aware, so
         // a formula kept only as another package's transitive dependency is not
-        // removed. `brew uninstall` would take it.
+        // removed. An extra is a formula installed on request; what it pulled
+        // in goes with it, and an orphan from before is left (`brew_extras_split`).
         prune: Col::Yes,
         reconcile: Col::Yes,
         ignore: Col::Yes,

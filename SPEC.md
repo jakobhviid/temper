@@ -357,7 +357,11 @@ it as `[brew].trust` (see `[brew].trust` above).
 > The same holds for `flatpak` and `mas`. Declaring *one* opts that manager in —
 > thereafter its installed-but-undeclared entries are reported, with
 > `[ignore].<manager>` as the escape hatch. (brew-family is the exception: any
-> declaration at all enables the dependency-aware brew extras computation.)
+> declaration at all enables the dependency-aware brew extras computation.) An
+> extra is a package someone asked for: a formula Homebrew installed only as a
+> dependency (`installed_on_request` false) is never reported, offered by
+> `reconcile` or seeded by `init`. `prune` removes it only as a dependency an
+> extra freed, and leaves one that was unneeded already.
 >
 > **A manager that is present and *fails* reports `package-unavailable`**, and
 > both directions are skipped for it. A non-zero `brew list`, a `mas list` on a
@@ -446,7 +450,8 @@ pacman = ["fd", "tmux"]              # Arch
 #     only it needed — is WORKFLOWS §9c. In one line: temper installs, marks and
 #     removes only the packages the spec names, plus the dependencies the
 #     package manager itself says only those packages needed; it never upgrades
-#     and never runs a whole-system autoremove.
+#     and runs a whole-system autoremove only where the package manager cannot
+#     answer more narrowly — said in the preview first.
 #   dnf on an image-based host (Silverblue, Bazzite, CoreOS) cannot install, so
 #     there a bundle's `dnf` list is inert, like another family's, and the
 #     machine's own `dnf` list reports unavailable naming `rpm_ostree`.
