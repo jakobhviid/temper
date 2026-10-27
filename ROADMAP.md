@@ -203,9 +203,14 @@ so the headline matches what happened to the machine.
   author off. The structural answer is the ledger recording that a destination
   existed before temper's first write there, with `prune` restoring (or
   reporting) such a file instead of deleting it. That applies to `sysfile` too.
-- **`retire_packages` takes Brewfile-grammar tokens only.** There is no way to say
-  "this dnf, apt or pacman package must not be installed"; such a package can
-  only be an extra, which the baseline hides if it predates temper.
+- **`retire_packages` takes Brewfile-grammar tokens only — deliberately.** A dnf,
+  apt or pacman package installed by name after the baseline is an extra, so
+  dropping it from the spec is enough for `prune`. What a retirement would add is
+  removing a package that predates temper — the base system, the riskiest removal
+  there is, and one `prune`'s own rules mostly answer by keeping the package as a
+  dependency, so "must not be installed" could not be promised. On an image-based
+  host the base belongs to the image. A `dnf`, `apt` or `pacman` token is rejected
+  when the folder loads. Worth revisiting only with a real case.
 - **Two declared repos may define the same repo id, and nothing says so.**
   `rpm_repos` deduplicates by destination *filename*, so two bundles shipping
   `brave.repo` and `brave-browser.repo` that both contain `[brave-browser]`
