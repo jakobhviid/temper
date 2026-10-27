@@ -166,8 +166,11 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         revertible: Col::No(
             "remote-add is not journaled yet; the pattern applies but is unwired",
         ),
+        // Prune and the extras it answers cover only the remotes temper added —
+        // recorded when it adds one — so a remote the image ships, flathub above
+        // all, is never an extra however undeclared it is.
         residue: Col::NA(
-            "a remote leaves nothing behind: un-declaring it makes it an extra, which prune answers",
+            "a remote leaves nothing behind: un-declaring one temper added makes it an extra, which prune answers",
         ),
     },
     ProviderSpec {

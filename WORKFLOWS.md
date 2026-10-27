@@ -715,12 +715,23 @@ the ledger existed, and things temper never put there.
 flatpak_remotes = ["vendor https://example.com/vendor.flatpakrepo"]
 ```
 
-The **name** is the identity and the url is what drifts, so a remote configured
-under a different url is reported and re-pointed rather than reported forever.
+The **name** is the identity. Declared by its repository url, a remote is also
+checked by url, and one configured under a different url is reported and
+re-pointed. Declared by a `.flatpakrepo` file, as vendors publish them, it is
+matched by name alone: the file's url is not the repository's — flatpak stores
+the `Url=` inside the file — so there is nothing to compare it with.
 Remotes are added *before* the packages that come from them, for the same reason
-tap-trust runs before brew. Remotes are read from **both** installations — one
-the image provides already satisfies a declaration — and written to, and removed
-from, your **user** one, which is the only one temper may touch.
+tap-trust runs before brew, and to the **system** installation, because that is
+where `install` puts every flatpak and an app can only come from a remote in its
+own installation. One the image provides there (flathub) already satisfies a
+declaration. temper adds a remote as root, through the same one password ask as
+a repo file, so it works over ssh too.
+
+temper remembers the remotes it added, and only those are ever extras: drop a
+declaration and `prune` removes the remote — after the apps — while an
+undeclared remote temper did not add, flathub above all, is never reported or
+touched. flatpak itself refuses to delete a remote that installed apps still use,
+and `prune` reports that rather than forcing it.
 
 ## 9b. Declare where rpm packages come from
 

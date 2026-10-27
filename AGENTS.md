@@ -186,7 +186,7 @@ worth telling apart before you go looking for a bug:
   the same SHA yields the same version. Do **not** push an empty commit to "retry".
 
 **Changed the Linux package support** — `dnf` / `apt` / `pacman`, `rpm_repos`,
-`apt_sources`, `pacman_repos`, brew's extras, or how prune, undo or drift treat any of them? The suite fakes the package
+`apt_sources`, `pacman_repos`, `flatpak_remotes`, brew's extras, or how prune, undo or drift treat any of them? The suite fakes the package
 managers, so also run [`matrix/`](matrix/README.md) on the 12 distributions the
 README's "Where it runs" names, before pushing. That section is a claim new users
 rely on; keep the matrix and the README listing the same distributions.

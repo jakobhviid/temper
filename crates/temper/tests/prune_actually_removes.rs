@@ -146,18 +146,24 @@ fn prune_unlayers_an_undeclared_rpm() {
     );
 }
 
-/// A flatpak remote the spec does not declare is an extra. The scope flag is the
-/// point: temper models the **user** installation, and deleting a system remote
-/// is not the same operation.
+/// A remote temper added that nothing declares any more is an extra; one it did
+/// not add — flathub, which every installed app updates from — never is. Removal
+/// is from the system installation, where temper adds them, through `sudo`, and
+/// without `--force`, so flatpak still refuses a remote installed apps use.
 #[test]
-fn prune_deletes_an_undeclared_flatpak_remote_at_user_scope() {
+fn prune_deletes_a_remote_temper_added_and_no_other() {
     let e = Env::new();
+    e.stub("sudo", "\"$@\"");
     e.stub(
         "flatpak",
         "case \"$1\" in \
-         remotes) echo 'keep\thttps://keep.example/repo'; echo 'stray\thttps://stray.example/repo' ;; \
+         remotes) echo 'keep\thttps://keep.example/repo'; echo 'stray\thttps://stray.example/repo'; \
+                  echo 'flathub\thttps://dl.flathub.org/repo/' ;; \
          esac",
     );
+    let added = e.state.path().join("flatpak-remotes");
+    fs::create_dir_all(&added).unwrap();
+    fs::write(added.join("t.json"), r#"["keep","stray"]"#).unwrap();
     // `flatpak_remotes` is a list of "<name> <url>" strings, not a table array.
     e.spec(&format!(
         "[[machine]]\nname = \"t\"\nos = \"{}\"\n\
@@ -168,19 +174,47 @@ fn prune_deletes_an_undeclared_flatpak_remote_at_user_scope() {
     e.temper().args(["prune", "--yes"]).output().unwrap();
 
     let called = e.log("flatpak");
-    let del = called
-        .lines()
-        .find(|l| l.starts_with("remote-delete"))
-        .unwrap_or_else(|| panic!("flatpak remote-delete never ran; calls were:\n{called}"));
+    let deletes: Vec<&str> = called.lines().filter(|l| l.starts_with("remote-delete")).collect();
+    assert_eq!(deletes, vec!["remote-delete --system stray"], "calls were:\n{called}");
+    assert!(e.log("sudo").contains("flatpak remote-delete --system stray"), "{}", e.log("sudo"));
+    let left: Vec<String> =
+        serde_json::from_str(&fs::read_to_string(added.join("t.json")).unwrap()).unwrap();
+    assert_eq!(left, vec!["keep"], "a removed remote is not temper's to remember");
+}
+
+/// `install` adds a declared remote to the system installation — the one apps
+/// install into — through `sudo`, and records it as temper's. One already there
+/// under another url is re-pointed, and stays the machine's.
+#[test]
+fn install_adds_a_declared_remote_system_wide_and_records_only_what_it_added() {
+    let e = Env::new();
+    e.stub("sudo", "\"$@\"");
+    e.stub(
+        "flatpak",
+        "case \"$1\" in remotes) echo 'flathub\thttps://dl.flathub.org/repo/' ;; esac",
+    );
+    e.spec(&format!(
+        "[[machine]]\nname = \"t\"\nos = \"{}\"\n\
+         flatpak_remotes = [\"vendor https://vendor.example/repo\", \"flathub https://mirror.example/flathub/\"]\n",
+        os()
+    ));
+
+    e.temper().args(["install", "--yes"]).output().unwrap();
+
+    let called = e.log("flatpak");
     assert!(
-        del.contains("stray") && !del.contains("keep"),
-        "only the undeclared remote may be deleted: {del:?}"
+        called.contains("remote-add --system --if-not-exists vendor https://vendor.example/repo"),
+        "{called}"
     );
     assert!(
-        del.contains("--user"),
-        "temper models the user installation — an unscoped delete is a different \
-         operation on a different set of remotes: {del:?}"
+        called.contains("remote-modify --system --url https://mirror.example/flathub/ flathub"),
+        "{called}"
     );
+    let added: Vec<String> = serde_json::from_str(
+        &fs::read_to_string(e.state.path().join("flatpak-remotes/t.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(added, vec!["vendor"], "flathub was there before temper");
 }
 
 /// The positive half of tap-untrust. A test asserting `brew untrust` did *not*

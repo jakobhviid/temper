@@ -218,7 +218,10 @@ retire = ["~/.config/old-app"]  # optional; paths that must NOT exist. `prune`
                             #   the same path.
 flatpak_remotes = ["vendor https://example.com/vendor.flatpakrepo"]
                             # optional; remotes THIS machine adds, as "<name> <url>".
-                            #   The name is the identity; the url can drift.
+                            #   The name is the identity; a repository url is
+                            #   checked too, a `.flatpakrepo` one is not. Added
+                            #   to the system installation, where `install` puts
+                            #   apps; `prune` removes only remotes temper added.
 rpm_ostree = ["proton-vpn"] # optional; rpms THIS machine layers, unioned with its
                             #   bundles' lists. Machine scope, so reconcile absorbs
                             #   and drops here.

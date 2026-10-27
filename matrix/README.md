@@ -13,6 +13,7 @@ with temper's report of itself.
 | `apt-source.sh` | `fixtures/apt-source` | a vendor apt source (GitHub CLI's): one run installs from it; dropping it, running `install`, then `prune` removes the package, the source and its key |
 | `rpm-repo.sh` | `fixtures/rpm-repo` | a vendor rpm repo (GitHub CLI's): one run installs from it with dnf |
 | `pacman-repo.sh` | `fixtures/pacman-repo` | a third-party pacman repo, built and signed by the script: one run trusts its key, reads it and installs from it without syncing any other database; dropping it, running `install`, then `prune` removes the package, the repo file and the key, and pacman still reads its configuration; a key imported by hand before temper survives `prune` |
+| `flatpak-remote.sh` | `fixtures/flatpak-remote` | a vendor flatpak remote declared by its `.flatpakrepo` file: added to the system installation (where apps install), in sync, still pointing at its repository after a second install; `prune` removes it once undeclared and leaves flathub, which temper did not add |
 | `brew.sh` | `fixtures/brew` | Homebrew, installed fresh: after `jq` is installed by hand, drift, `reconcile` and `init` name `jq` and never `oniguruma`, which came with it; `prune` and `undo` remove both, and an orphan brew already held as unneeded survives both, still held as unneeded; a retired formula that is not installed is not planned; `oniguruma` declared and then dropped from the Brewfile is reported, kept by `prune` as `jq`'s dependency, and leaves with `jq` |
 
 ## The distributions
@@ -25,6 +26,7 @@ with temper's report of itself.
 | pacman | Arch Linux | host-packages, pacman-repo |
 | zypper, apk (negative controls) | openSUSE Tumbleweed, Alpine 3.22 | host-packages |
 | Homebrew | Debian 13, Ubuntu 24.04, Fedora 44 | brew |
+| flatpak | Fedora 44, Debian 13, Ubuntu 24.04, Arch Linux | flatpak-remote |
 
 As system containers, plus Ubuntu 24.04, Fedora 44 and Debian 13 as virtual
 machines — real systemd, and Ubuntu's background updater holding apt's lock at
@@ -58,6 +60,6 @@ scripts/matrix.sh -u -t matrix/host-packages.sh \
 Add `--vm` for the virtual-machine rows. `brew.sh` installs Homebrew itself, which
 needs `git curl procps file build-essential python3` (`procps-ng`, `gcc` on
 Fedora) — pass them with `-s`. `pacman-repo.sh` builds its package with `makepkg`,
-which needs `fakeroot`. The apt-source and rpm-repo scripts
+which needs `fakeroot`, and `flatpak-remote.sh` needs `flatpak`. The apt-source and rpm-repo scripts
 reach the internet (GitHub's package servers); the keys and repo files in their
 fixtures are GitHub's published, public ones.

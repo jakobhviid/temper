@@ -398,7 +398,7 @@ pub fn plan(
                 &providers::effective_extension_specs(home, machine)?,
                 &machine_extension_uuids(machine),
             ),
-            remote_adds: providers::remotes_extras(&providers::effective_remotes(home, machine)?, ignore),
+            remote_adds: providers::remotes_extras(&providers::effective_remotes(home, machine)?, ignore, &machine.name),
             remote_drops: machine_remote_drops(machine),
         rpm_adds: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
             rpm_drops: providers::rpm_ostree_machine_absent(&machine.rpm_ostree),
@@ -556,7 +556,7 @@ pub fn plan(
         rpm_drops: providers::rpm_ostree_machine_absent(&machine.rpm_ostree),
         system_adds: system.0,
         system_drops: system.1,
-        remote_adds: providers::remotes_extras(&providers::effective_remotes(home, machine)?, ignore),
+        remote_adds: providers::remotes_extras(&providers::effective_remotes(home, machine)?, ignore, &machine.name),
         remote_drops: machine_remote_drops(machine),
         dconf: dconf_plans(home, machine)?,
     })

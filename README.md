@@ -158,11 +158,12 @@ temper's report.
 | pacman | Arch Linux |
 | zypper, apk | openSUSE Tumbleweed, Alpine 3.22 — negative controls: temper must install and write nothing there |
 | Homebrew | on Debian 13, Ubuntu 24.04 and Fedora 44 |
+| flatpak remotes | on Fedora 44, Debian 13, Ubuntu 24.04 and Arch Linux |
 
 Ubuntu 24.04, Fedora 44 and Debian 13 also run as full virtual machines. The
 matrix covers:
 - installing from the distribution's repositories and from a vendor's (an rpm
-  repo, an apt source and a pacman repo);
+  repo, an apt source, a pacman repo and a flatpak remote);
 - drift in both directions;
 - `prune`, including the dependencies it frees and the ones it keeps;
 - `undo` and `reconcile`;

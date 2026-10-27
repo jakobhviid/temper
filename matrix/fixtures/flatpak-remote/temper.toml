@@ -1,0 +1,5 @@
+# Fixture for flatpak-remote.sh: one vendor remote, declared on the machine.
+[[machine]]
+name = "m"
+os = "linux"
+flatpak_remotes = ["flathub-beta https://flathub.org/beta-repo/flathub-beta.flatpakrepo"]

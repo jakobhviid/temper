@@ -2924,36 +2924,18 @@ pub fn effective_remotes(home: &Path, machine: &Machine) -> Result<Vec<(String, 
     Ok(out)
 }
 
-/// Every configured remote, **both installations**, three-valued.
+/// Every remote in the **system** installation, three-valued.
 ///
-/// This is the observe side of a *declaration*: "does the machine have the
-/// remote I declared?" is answered by either installation having it, which is why
-/// it carries no scope flag. Reading only `--user` made a remote the image
-/// provides system-wide permanently `missing`, and added a duplicate user copy on
-/// every converge. `None` is "could not ask", never "no remotes".
+/// The system installation is where `install` puts every flatpak, and an app can
+/// only come from a remote in its own installation — so a declared remote is
+/// there or it is no use, whatever the user installation holds. That one the
+/// image provides there already satisfies a declaration. `None` is "could not
+/// ask", never "no remotes".
 pub fn flatpak_remotes_installed() -> Option<Vec<(String, String)>> {
-    remotes_in_scope(&[])
+    remotes_in_scope(&["--system"])
 }
 
-/// The remotes temper may **remove** — the user installation only, because that
-/// is the only one `remotes_delete` writes to.
-///
-/// Deliberately narrower than the app path, which removes from both
-/// installations: deleting a *system* remote is not the app case scaled up.
-/// `remote-delete` is passed `--force`, which overrides flatpak's own refusal to
-/// drop a remote that installed apps still update from — so on a spec declaring
-/// one vendor remote, an undeclared `flathub` would become an extra prune offers
-/// to force-delete out from under everything installed from it. That is a fleet
-/// decision, recorded in ROADMAP under "Bugs", not a symmetry to complete here.
-pub fn flatpak_user_remotes() -> Option<Vec<(String, String)>> {
-    remotes_in_scope(&["--user"])
-}
-
-/// Remotes visible in the given scope. With no scope flag `flatpak remotes`
-/// spans **both** installations, which is what a declaration has to be checked
-/// against: reading only `--user` made a declared remote that exists system-wide
-/// permanently `missing`, and every converge added a duplicate user-scope copy
-/// of a remote the machine already had.
+/// Remotes visible in the given scope.
 fn remotes_in_scope(scope: &[&str]) -> Option<Vec<(String, String)>> {
     if !have("flatpak") {
         return None;
@@ -2978,7 +2960,8 @@ fn remotes_in_scope(scope: &[&str]) -> Option<Vec<(String, String)>> {
     )
 }
 
-/// Declared remotes that are absent, or present under a different url.
+/// Declared remotes the system installation lacks, or holds under a different
+/// url.
 pub fn remotes_missing(effective: &[(String, String)]) -> Vec<String> {
     if effective.is_empty() {
         return Vec::new();
@@ -2988,101 +2971,172 @@ pub fn remotes_missing(effective: &[(String, String)]) -> Vec<String> {
     };
     effective
         .iter()
-        .filter(|(n, u)| !live.iter().any(|(ln, lu)| ln == n && lu.trim_end_matches('/') == u.trim_end_matches('/')))
+        .filter(|(n, u)| !live.iter().any(|(ln, lu)| ln == n && remote_url_matches(u, lu)))
         .map(|(n, u)| format!("{n} {u}"))
         .collect()
 }
 
-/// Remotes configured but declared nowhere. Gated on declaring at least one, the
-/// probe invariant every other manager follows.
-pub fn remotes_extras(effective: &[(String, String)], ignore: &manifest::Ignore) -> Vec<String> {
-    if effective.is_empty() {
-        return Vec::new();
-    }
-    // Only the user installation, because that is the only one `remotes_delete`
-    // can act on. Offering a system remote would be a removal with no code path
-    // behind it — the defect the feature interface exists to catch.
-    let Some(live) = flatpak_user_remotes() else {
-        return Vec::new();
-    };
-    let mut out: Vec<String> = live
-        .into_iter()
-        .map(|(n, _)| n)
-        .filter(|n| {
-            !effective.iter().any(|(en, _)| en == n) && !ignore.flatpak_remote.contains(n)
-        })
-        .collect();
-    out.sort();
-    out
+/// Whether a declared remote's url describes the one configured. A
+/// `.flatpakrepo` url names the file the remote is made from, not the repository
+/// — flatpak stores the `Url=` inside the file — so such a remote matches by name
+/// alone, and is never re-pointed at the file. A repository url must match.
+fn remote_url_matches(declared: &str, live: &str) -> bool {
+    is_flatpakrepo(declared) || declared.trim_end_matches('/') == live.trim_end_matches('/')
 }
 
-/// Add declared remotes. `--if-not-exists` makes it idempotent, `--user` keeps
-/// it in the scope temper owns.
-pub fn remotes_converge(effective: &[(String, String)], dry_run: bool) -> Result<Vec<String>> {
+fn is_flatpakrepo(url: &str) -> bool {
+    url.to_ascii_lowercase().ends_with(".flatpakrepo")
+}
+
+/// What a converge would add as root — the root ask has to cover it.
+pub fn remotes_pending(effective: &[(String, String)]) -> Vec<String> {
+    remotes_missing(effective)
+        .into_iter()
+        .map(|r| format!("flatpak remote {r}"))
+        .collect()
+}
+
+/// Where the names of the remotes temper added live — so `prune` removes only
+/// those, never one the image or a person put there, flathub above all.
+fn remotes_added_path(machine: &str) -> PathBuf {
+    crate::journal::state_root()
+        .join("flatpak-remotes")
+        .join(format!("{machine}.json"))
+}
+
+/// The remotes temper added to the system installation on this machine.
+pub fn remotes_added(machine: &str) -> BTreeSet<String> {
+    fs::read(remotes_added_path(machine))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn save_remotes_added(machine: &str, names: &BTreeSet<String>) -> Result<()> {
+    let p = remotes_added_path(machine);
+    if let Some(dir) = p.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    fs::write(&p, serde_json::to_vec_pretty(names)?)?;
+    Ok(())
+}
+
+/// Remotes temper added that nothing declares any more, and that are still
+/// there. Only those: an undeclared remote temper did not add — flathub, which
+/// every installed app updates from — is not an extra, however it got there.
+pub fn remotes_extras(
+    effective: &[(String, String)],
+    ignore: &manifest::Ignore,
+    machine: &str,
+) -> Vec<String> {
+    let added = remotes_added(machine);
+    if added.is_empty() {
+        return Vec::new();
+    }
+    let Some(live) = flatpak_remotes_installed() else {
+        return Vec::new();
+    };
+    added
+        .into_iter()
+        .filter(|n| {
+            live.iter().any(|(ln, _)| ln == n)
+                && !effective.iter().any(|(en, _)| en == n)
+                && !ignore.flatpak_remote.contains(n)
+        })
+        .collect()
+}
+
+/// Add declared remotes to the system installation, as root — `sudo`, the same
+/// one ask as a repo file, rather than polkit, which has no way to ask over ssh.
+/// A remote already there under another url is re-pointed (`remote-modify`):
+/// the name is the identity and the url is what drifts. Only a remote this adds
+/// is recorded as temper's.
+pub fn remotes_converge(
+    effective: &[(String, String)],
+    machine: &str,
+    dry_run: bool,
+) -> Result<Vec<String>> {
     if dry_run || effective.is_empty() || !have("flatpak") {
         return Ok(Vec::new());
     }
     let missing = remotes_missing(effective);
-    // One invocation per remote is unavoidable here: `remote-add` takes exactly
-    // one name/url pair, unlike every other converge on this page.
-    let mut added = Vec::new();
+    if missing.is_empty() {
+        return Ok(Vec::new());
+    }
+    let present: Vec<String> = flatpak_remotes_installed()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    let mut added = remotes_added(machine);
+    let mut changed = Vec::new();
     for token in &missing {
         let Some((name, url)) = parse_remote(token) else {
             continue;
         };
-        // `--if-not-exists` exits 0 doing nothing when the name is already
-        // configured with a DIFFERENT url — and the url is exactly what
-        // `remotes_missing` compares, so such a remote reported missing forever
-        // and every converge claimed to have added it. The name is the identity
-        // and the url is the thing that drifts, so converging one means setting
-        // it: `remote-modify` where it exists, `remote-add` where it does not.
-        let exists = flatpak_user_remotes()
-            .unwrap_or_default()
-            .iter()
-            .any(|(n, _)| *n == name);
-        let args: Vec<&str> = if exists {
-            vec!["remote-modify", "--user", "--url", &url, &name]
+        let exists = present.contains(&name);
+        let mut cmd = as_root("flatpak");
+        if exists {
+            cmd.args(["remote-modify", "--system", "--url", &url, &name]);
         } else {
-            vec!["remote-add", "--user", "--if-not-exists", &name, &url]
-        };
-        let ok = Command::new("flatpak")
-            .args(&args)
-            .stdin(Stdio::null())
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if ok {
-            added.push(name);
-        } else {
-            eprintln!(
-                "{} flatpak remote-add {name} failed — skipped",
+            cmd.args(["remote-add", "--system", "--if-not-exists", &name, &url]);
+        }
+        let out = cmd.stdin(Stdio::null()).output();
+        match out {
+            Ok(o) if o.status.success() => {
+                if !exists {
+                    added.insert(name.clone());
+                }
+                changed.push(name);
+            }
+            Ok(o) => eprintln!(
+                "{} flatpak remote {name} not {}: {}",
+                crate::ui::yellow(crate::ui::g_warn()),
+                if exists { "re-pointed" } else { "added" },
+                String::from_utf8_lossy(&o.stderr).trim()
+            ),
+            Err(e) => eprintln!(
+                "{} flatpak remote {name} not added: {e}",
                 crate::ui::yellow(crate::ui::g_warn())
-            );
+            ),
         }
     }
-    Ok(added)
+    let _ = save_remotes_added(machine, &added);
+    Ok(changed)
 }
 
-/// Remove undeclared remotes — the prune side.
-pub fn remotes_delete(names: &[String]) -> Result<()> {
-    if names.is_empty() {
-        return Ok(());
-    }
-    if !have("flatpak") {
-        bail!("flatpak not found — cannot remove remotes on this host");
-    }
-    let landed = batch_then_isolate(names, "flatpak remote-delete", false, |batch| {
-        let mut c = Command::new("flatpak");
-        c.args(["remote-delete", "--user", "--force"]);
-        for n in batch {
-            c.arg(n);
+/// Remove remotes temper added — the prune side. Without `--force`: flatpak
+/// refuses to delete a remote installed apps still update from, and that
+/// refusal is the guard, said rather than overridden. Returns the ones left.
+pub fn remotes_delete(machine: &str, names: &[String]) -> Vec<String> {
+    let mut added = remotes_added(machine);
+    let mut left = Vec::new();
+    for name in names {
+        let mut cmd = as_root("flatpak");
+        cmd.args(["remote-delete", "--system", name]).stdin(Stdio::null());
+        match cmd.output() {
+            Ok(o) if o.status.success() => {
+                added.remove(name);
+            }
+            Ok(o) => {
+                eprintln!(
+                    "{} flatpak remote {name} not removed: {}",
+                    crate::ui::yellow(crate::ui::g_warn()),
+                    String::from_utf8_lossy(&o.stderr).trim()
+                );
+                left.push(name.clone());
+            }
+            Err(e) => {
+                eprintln!(
+                    "{} flatpak remote {name} not removed: {e}",
+                    crate::ui::yellow(crate::ui::g_warn())
+                );
+                left.push(name.clone());
+            }
         }
-        c
-    });
-    if landed.len() != names.len() {
-        bail!("could not remove every remote");
     }
-    Ok(())
+    let _ = save_remotes_added(machine, &added);
+    left
 }
 
 /// What this host can do about rpm-ostree layering, answered once.
@@ -3135,6 +3189,21 @@ pub fn rpm_ostree_requested() -> Option<Vec<String>> {
     requested_from_status(&out.stdout)
 }
 
+
+#[cfg(test)]
+mod remote_url_tests {
+    use super::remote_url_matches;
+
+    /// A `.flatpakrepo` file's url is not the repository url flatpak stores, so
+    /// a remote declared by it matches by name; a repository url must match.
+    #[test]
+    fn a_flatpakrepo_declaration_matches_by_name() {
+        let live = "https://dl.flathub.org/beta-repo/";
+        assert!(remote_url_matches("https://flathub.org/beta-repo/flathub-beta.flatpakrepo", live));
+        assert!(remote_url_matches("https://dl.flathub.org/beta-repo", live));
+        assert!(!remote_url_matches("https://mirror.example/beta-repo/", live));
+    }
+}
 
 #[cfg(test)]
 mod pacman_key_tests {

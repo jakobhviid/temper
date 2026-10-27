@@ -285,6 +285,7 @@ fn root_steps(
             home,
             &providers::effective_pacman_repos(home, machine)?,
         ));
+        own.extend(providers::remotes_pending(&providers::effective_remotes(home, machine)?));
     }
     for (_, step) in &resolved.steps {
         if !is_step(step) {
@@ -1830,7 +1831,7 @@ pub fn run_drift(
             }),
         });
     }
-    for r in providers::remotes_extras(&effective_remotes, ignore) {
+    for r in providers::remotes_extras(&effective_remotes, ignore, &machine.name) {
         findings.push(Finding {
             app: "flatpak-remote".into(),
             kind: "flatpak-remote-extra",
@@ -2481,7 +2482,7 @@ pub fn run_install(
     // run on a fresh box could not resolve a vendor app at all — it failed
     // (best-effort, warned), the remote appeared, and only a SECOND converge
     // installed it. Same reason tap-trust runs before brew.
-    providers::remotes_converge(&providers::effective_remotes(home, machine)?, dry_run)?;
+    providers::remotes_converge(&providers::effective_remotes(home, machine)?, &machine.name, dry_run)?;
     // Repos before the packages that resolve from them — the rpm-side sibling of
     // the remote converge above, and the same bug: `rpm-ostree install` resolves
     // against `/etc/yum.repos.d` as it stands when the call is made, so a repo
@@ -3621,6 +3622,7 @@ pub fn run_prune(
         flatpak_remotes: providers::remotes_extras(
             &providers::effective_remotes(home, machine)?,
             ignore,
+            &machine.name,
         ),
         residue,
         residue_edited,
@@ -3826,7 +3828,7 @@ pub fn commit_prune(
         let removed = providers::pacman_keys_remove(&machine.name, &plan.pacman_keys);
         failed.extend(plan.pacman_keys.iter().filter(|k| !removed.contains(k)).cloned());
     }
-    providers::remotes_delete(&plan.flatpak_remotes)?;
+    failed.extend(providers::remotes_delete(&machine.name, &plan.flatpak_remotes));
     Ok(PruneOutcome { reboot, failed })
 }
 

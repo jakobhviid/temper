@@ -28,31 +28,7 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 
 ## Bugs
 
-**A declared flatpak remote is added where the converge cannot use it.** temper
-adds remotes with `remote-add --user` (`providers::remotes_converge`) while
-installing apps with `install --system`, and a system-scope install cannot
-resolve a user-scope remote. So an app declared from a vendor remote temper itself
-added has nowhere to pull from, while the declaration reads as satisfied —
-`remotes_missing` observes **both** installations, so the remote is found and the
-install still fails.
-
-Fixing it is not the one-line mirror of the app-scope fix, which is why it is
-here rather than done:
-
-- **Adding is easy; removing is the decision.** `remotes_extras` is correctly
-  gated on the spec declaring at least one remote, and reads only the user
-  installation because `remotes_delete` passes `--user --force`. Point both at the
-  system installation and, on a spec declaring one vendor remote, `flathub`
-  becomes an undeclared extra — so `prune` would offer to force-delete the remote
-  every installed app updates from. `--force` is there precisely because
-  `remote-delete` otherwise refuses a remote with apps installed from it.
-- Three honest options, and it is a fleet-behaviour call: keep removal user-scope
-  and add system-scope remotes only; drop `--force` so flatpak's own refusal is
-  the guard; or gate system-scope removal behind an explicit opt-in, the way
-  `--include-trust` gates fleet-scope taps.
-- Whichever wins, **an app and the remote it comes from must name the same
-  installation** — that is the invariant the app-scope pairing test now holds for
-  install-vs-uninstall, and remotes are outside it.
+None known.
 
 ## Scope-model gaps (known, ranked, each one a filled ⚠ or ❌ in the feature matrix)
 
