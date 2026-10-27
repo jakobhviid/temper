@@ -209,6 +209,13 @@ so does `--dry-run`. Set `TEMPER_NO_SUDO_KEEPALIVE=1` to opt out (you'll get
 Homebrew's per-cask prompts back). App Store prompts are Apple's own and can't be
 cached this way — `mas` may still ask per app.
 
+**Something that asks mid-run is named, not drawn over.** When a program temper
+runs asks for a password or an answer on the terminal anyway — a `sudo` that cannot
+reuse the run's login, polkit, an `ssh` passphrase under `git pull` — the progress
+line stops drawing, the question stays on screen, and temper says who is asking and
+for what (`sudo is asking for jakob's password, to run \`dnf install -y cowsay\``).
+Answer it there; the progress line comes back once it is answered.
+
 **Unattended runs say so instead of dying mysteriously.** Over ssh without a tty, from
 cron, or with stdin piped, there is nowhere to type a password — so a run that needs
 root warns up front, naming what needs it, rather than looking healthy until the

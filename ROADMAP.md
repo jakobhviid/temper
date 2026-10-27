@@ -28,48 +28,6 @@ See `ARCHITECTURE.md` for the model and `SPEC.md` for the implemented schema.
 
 ## Bugs
 
-**A password prompt in the package phase is invisible, and only its silence is
-reported.** `sudo`, `pkttyagent` and PAM write their prompt to `/dev/tty`, not to
-the pipes `providers::run_with_spinner` captures, so the question lands under the
-live region and the region's redraw erases it. `ui::StallWatch` bounds the damage
-— a child that says nothing for 90 seconds stops the animation and prints a line
-telling the user a hidden prompt may be waiting, and since a static line
-overwrites nothing, the password can be typed and the run continues. What the
-user never gets is the question itself: which account, which tool, which of three
-possible prompts. They are told to answer something, not what.
-
-Two things would close the rest, and both are known:
-
-- **Spend the signal temper already computes.** `sudo::reusable_by_children()`
-  answers whether a child can use a credential temper holds, and `acquire`'s doc
-  records the consequence when it cannot — "the run continues exactly as it did
-  before, with Homebrew prompting for itself when it gets there". A phase that
-  knows a prompt is coming could stream that child instead of animating it, the
-  way `-v` already does at all four `run_child` sites, and the prompt would arrive
-  intact rather than 90 seconds later in paraphrase.
-- **Decide what "could prompt" means for polkit.** It is not sudo, and
-  `sudo::cached()` says nothing about it, so `rpm-ostree` and a system-scope
-  `flatpak` need their own answer. flatpak's `--noninteractive` does not supply
-  one: it is documented as *"Produce minimal output and avoid most questions…
-  suitable for use in non-interactive situations, e.g. in a build script"* —
-  flatpak's own questions, with polkit unmentioned. The no-interaction flag that
-  lets GNOME Software avoid dialogs is library-side and nothing says the CLI
-  option sets it, so plan for flatpak being a prompter.
-  → `flatpak update --system --noninteractive` over ssh, with no polkit agent.
-
-Prior art agrees on the shape and only half of it transfers. Mole's `mo clean` hit
-this exactly (tw93/Mole#1084) and fixed it (#1085) by putting `sudo -n` on every
-privileged call so it fails closed, plus adopting a cached sudo session before the
-phase begins; the general CLI pattern is to probe `sudo -n true` and branch before
-any animation exists. temper cannot do the first half — Homebrew shells out to
-`/usr/bin/sudo` from its own Ruby, and there is no flag to add to someone else's
-invocation. The timing half is the part that applies.
-
-The step phase has the whole answer already, because there temper owns every
-escalation: `plan::apply_one` clears the region for any step `may_prompt` names —
-`exec` and `sysfile`, the two primitives that reach `sudo` — so a password or
-fingerprint asked there is legible.
-
 **A declared flatpak remote is added where the converge cannot use it.** temper
 adds remotes with `remote-add --user` (`providers::remotes_converge`) while
 installing apps with `install --system`, and a system-scope install cannot
@@ -418,6 +376,11 @@ in the feature matrix.
   `sudo`, so it depends on `mas` being on **root's** PATH.
 - **`MAS_NO_AUTO_INDEX`.** temper sets it to mute the Spotlight reindex and
   ARCHITECTURE states it as fact; it is not in mas's documented environment.
+- **Spotting a subprocess that asks.** `asking::snapshot` reads `ps -A -o
+  pid=,ppid=,wchan=,args=` on macOS and takes a `ttyin` wait channel as a process
+  reading its terminal; the childless-`sudo` signal is the same as on Linux. Both
+  are from documentation and BSD convention, not from a Mac: a converge where
+  Homebrew's `sudo` asks under the spinner should announce it.
 - **`profile_apply` counts a cancelled dialog as a change.** It writes the
   content stamp and returns `Changed` as soon as `open` returns — which is when
   the window appears, not when the user approves. Declining a profile therefore

@@ -161,6 +161,7 @@ pub fn spinner(msg: &str) -> indicatif::ProgressBar {
     );
     pb.set_message(msg.to_string());
     pb.enable_steady_tick(SPINNER_TICK);
+    watch_for_askers(&pb);
     pb
 }
 
@@ -176,7 +177,138 @@ pub fn spinner_counted(len: u64, msg: &str) -> indicatif::ProgressBar {
     );
     pb.set_message(msg.to_string());
     pb.enable_steady_tick(SPINNER_TICK);
+    watch_for_askers(&pb);
     pb
+}
+
+// --- a subprocess asking the user ---------------------------------------------
+
+/// The live regions, held weakly so a finished one simply drops out.
+static LIVE: std::sync::Mutex<Vec<indicatif::WeakProgressBar>> = std::sync::Mutex::new(Vec::new());
+
+/// How often the watcher looks. Fast enough that a question is rarely redrawn
+/// over at all, and the announcement follows within a fraction of a second. A
+/// look on macOS spawns `ps`, so it looks less often there.
+#[cfg(not(target_os = "macos"))]
+const ASK_SCAN: std::time::Duration = std::time::Duration::from_millis(60);
+#[cfg(target_os = "macos")]
+const ASK_SCAN: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Keep a live region from drawing over a subprocess that is asking the user
+/// something, and say who is asking.
+///
+/// `sudo`, polkit and `ssh` ask on `/dev/tty`, which none of temper's pipes
+/// capture, so a question lands under the region and its next redraw erases it.
+/// One watcher, started with the first region, looks through temper's own
+/// subprocesses for one waiting on the user (`asking::find`). On first sight it
+/// stops every live region drawing — the target goes hidden, which clears
+/// nothing, so a question already on screen stays — and on the next look, still
+/// there, it names the asker and what for. When the asker is gone the regions
+/// draw again, from the line the cursor is on.
+///
+/// Every region, because a question can come from any child: Homebrew's
+/// installer, an `exec` script's own `sudo`, flatpak's polkit agent, the `ssh`
+/// under a `git pull`. [`StallWatch`] stays the backstop for an asker this
+/// cannot see.
+fn watch_for_askers(pb: &indicatif::ProgressBar) {
+    if json_mode() || !std::io::stderr().is_terminal() {
+        return;
+    }
+    if let Ok(mut live) = LIVE.lock() {
+        live.push(pb.downgrade());
+    }
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        std::thread::spawn(|| {
+            let mut state = AskState::default();
+            loop {
+                std::thread::sleep(ASK_SCAN);
+                // Upgraded under the list's lock, checked outside it: asking a
+                // bar anything takes the bar's own lock, which `suspend` holds
+                // for as long as the step it wraps runs.
+                let live: Vec<indicatif::ProgressBar> = match LIVE.lock() {
+                    Ok(mut live) => {
+                        live.retain(|w| w.upgrade().is_some());
+                        live.iter().filter_map(|w| w.upgrade()).collect()
+                    }
+                    Err(_) => return,
+                };
+                let live: Vec<indicatif::ProgressBar> =
+                    live.into_iter().filter(|p| !p.is_finished()).collect();
+                let found = if live.is_empty() { None } else { crate::asking::find() };
+                let draw = |target: fn() -> indicatif::ProgressDrawTarget| {
+                    for pb in &live {
+                        pb.set_draw_target(target());
+                    }
+                };
+                match state.observe(found.as_ref()) {
+                    Ask::Nothing => {}
+                    Ask::Freeze => draw(indicatif::ProgressDrawTarget::hidden),
+                    Ask::Announce(line) => {
+                        draw(indicatif::ProgressDrawTarget::hidden);
+                        // Below whatever is on the line — the question itself,
+                        // if it was drawn before the region stopped.
+                        eprintln!("\n  {} {line}", cyan(g_arrow()));
+                    }
+                    Ask::Resume => draw(indicatif::ProgressDrawTarget::stderr),
+                }
+            }
+        });
+    });
+}
+
+/// What the watcher does about what it just saw.
+#[derive(Debug, PartialEq, Eq)]
+enum Ask {
+    Nothing,
+    /// First sight: stop drawing, before saying anything.
+    Freeze,
+    /// Still there a look later: say who is asking and what for.
+    Announce(String),
+    Resume,
+}
+
+/// The watcher's memory between looks. Two looks before speaking, so a `sudo`
+/// caught in the instant between authenticating and starting its command is not
+/// announced as asking.
+#[derive(Debug, Default)]
+struct AskState {
+    seen: Option<u32>,
+    announced: Option<u32>,
+    frozen: bool,
+}
+
+impl AskState {
+    fn observe(&mut self, found: Option<&crate::asking::Asker>) -> Ask {
+        let Some(a) = found else {
+            self.seen = None;
+            self.announced = None;
+            return if std::mem::take(&mut self.frozen) {
+                Ask::Resume
+            } else {
+                Ask::Nothing
+            };
+        };
+        if self.announced == Some(a.pid) {
+            return Ask::Nothing;
+        }
+        if self.seen == Some(a.pid) {
+            self.announced = Some(a.pid);
+            self.frozen = true;
+            let how = if a.password {
+                "type it here; it is not shown as you type"
+            } else {
+                "answer it here"
+            };
+            return Ask::Announce(format!("{} — {how}", a.what));
+        }
+        self.seen = Some(a.pid);
+        if std::mem::replace(&mut self.frozen, true) {
+            Ask::Nothing
+        } else {
+            Ask::Freeze
+        }
+    }
 }
 
 // --- aligned columns ----------------------------------------------------------
@@ -734,6 +866,7 @@ impl Checklist {
             );
             pb.set_message(phase.to_string());
             pb.enable_steady_tick(SPINNER_TICK);
+            watch_for_askers(&pb);
             pb
         });
         Checklist { pb }
@@ -837,6 +970,47 @@ impl Checklist {
         if let Some(pb) = self.pb {
             pb.finish_and_clear();
         }
+    }
+}
+
+#[cfg(test)]
+mod ask_tests {
+    use super::{Ask, AskState};
+    use crate::asking::Asker;
+
+    fn sudo(pid: u32) -> Asker {
+        Asker { pid, what: "sudo is asking for jakob's password".into(), password: true }
+    }
+
+    /// Stop drawing on first sight, speak on the second, once; draw again when
+    /// it is gone. A sudo seen once and gone is not announced.
+    #[test]
+    fn the_watcher_freezes_then_names_then_resumes() {
+        let mut s = AskState::default();
+        assert_eq!(s.observe(None), Ask::Nothing);
+        assert_eq!(s.observe(Some(&sudo(7))), Ask::Freeze);
+        assert_eq!(
+            s.observe(Some(&sudo(7))),
+            Ask::Announce(
+                "sudo is asking for jakob's password — type it here; it is not shown as you type"
+                    .into()
+            )
+        );
+        assert_eq!(s.observe(Some(&sudo(7))), Ask::Nothing);
+        assert_eq!(s.observe(None), Ask::Resume);
+        assert_eq!(s.observe(None), Ask::Nothing);
+
+        // Caught between authenticating and starting its command.
+        assert_eq!(s.observe(Some(&sudo(8))), Ask::Freeze);
+        assert_eq!(s.observe(None), Ask::Resume);
+
+        // A question that is not a password says so differently.
+        let ssh = Asker { pid: 9, what: "`ssh host` is waiting for an answer".into(), password: false };
+        assert_eq!(s.observe(Some(&ssh)), Ask::Freeze);
+        assert_eq!(
+            s.observe(Some(&ssh)),
+            Ask::Announce("`ssh host` is waiting for an answer — answer it here".into())
+        );
     }
 }
 

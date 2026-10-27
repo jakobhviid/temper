@@ -57,11 +57,28 @@ and they apply to new code as much as old:
    every 20s with the elapsed time, because appending is what makes it safe and a
    line printed once says nothing about the next ten minutes.
 
-   The same split governs a captured child (`ui::StallWatch`). Silence stops the
-   animation after 10s, since redrawing is precisely what erases a prompt, and
-   then a heartbeat appends the elapsed time and the child's own last line. Both
-   halves matter: a frozen line is as unreadable as an erased prompt, and a
-   converge people kill halfway costs more than either.
+   A captured child can still ask — Homebrew's own `sudo` where the run's login
+   cannot be reused, polkit, the `ssh` under a `git pull` — so every live region
+   registers with one watcher (`ui::watch_for_askers`) that looks through temper's
+   own subprocesses for one waiting on the user (`asking::find`). Two signals,
+   because the usual asker cannot be inspected: a `sudo` (`doas`, `su`, `pkexec`)
+   that has not started its command — it runs as root, so its descriptors are
+   closed to us, but one still childless after a look is asking, and `-n` never
+   asks; and a process blocked in `read` on a terminal, which Linux shows in
+   `/proc/<pid>/syscall` and macOS as the `ttyin` wait channel. On first sight the
+   regions' draw target goes hidden, which clears nothing, so a question already
+   drawn stays; a look later it is announced, below the question; when it is gone
+   the regions draw again from the cursor's line. Looking walks down from temper
+   through each thread's `/proc/<pid>/task/*/children`, so it costs what temper
+   runs rather than what the machine does. The step phase does not need it, since
+   an `exec` already has the terminal to itself.
+
+   The same split governs a captured child (`ui::StallWatch`), as the backstop for
+   an asker the watcher cannot see. Silence stops the animation after 10s, since
+   redrawing is precisely what erases a prompt, and then a heartbeat appends the
+   elapsed time and the child's own last line. Both halves matter: a frozen line
+   is as unreadable as an erased prompt, and a converge people kill halfway costs
+   more than either.
 
    Rows are aligned by `ui::Columns`, shared with `drift` so both views measure the
    same way rather than each hard-coding a width. It works because temper **plans

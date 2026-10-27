@@ -21,6 +21,7 @@
 //! The ReinstallScripts migration this crate grew out of is complete: every
 //! module below is implemented and exercised end-to-end (see ../../README.md).
 
+pub mod asking; // which subprocess is waiting for the user to type
 pub mod dconf;
 pub mod interface;
 pub mod ledger; // whole-desktop dconf snapshots: capture (filtered) + drift + restore
