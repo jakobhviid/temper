@@ -258,6 +258,12 @@ apt_sources = [{ source = "assets/apt/vendor.sources", key = "assets/apt/vendor.
                             #   see `apt_sources` under the bundle below. On a host
                             #   without apt they report `unavailable`; a bundle's
                             #   are inert there, as its `apt` list is.
+pacman_repos = [{ repo = "assets/pacman/vendor.conf", key = "assets/pacman/vendor.asc" }]
+                            # optional; pacman repos THIS machine supplies, unioned
+                            #   with its bundles'. The pacman sibling of
+                            #   `rpm_repos`; see `pacman_repos` under the bundle
+                            #   below. On a host without pacman they report
+                            #   `unavailable`; a bundle's are inert there.
 brew_trust = ["me/tap"]     # optional; taps THIS machine trusts, unioned with
                             #   [brew].trust. Machine scope, so `reconcile` both
                             #   absorbs into and drops from it — the fleet list
@@ -537,6 +543,32 @@ apt_sources = [
 #   `rpm_repos`: a source temper wrote and the spec no longer declares is residue,
 #   removed by `prune` after the packages; the image's own sources
 #   (debian.sources, ubuntu.sources) are never reported.
+# pacman repos this bundle's `pacman` packages come from — the same scope and
+# ordering as `rpm_repos`.
+pacman_repos = [
+    { repo = "assets/pacman/vendor.conf", key = "assets/pacman/vendor.asc" },
+]
+# `repo` is the repo's section — `[name]` and its `Server`, `Include` and
+#   `SigLevel` lines — relative to the temper-home; installed root-owned 0644 to
+#   /etc/pacman.d/temper/<basename>, which must end in `.conf` (anything else
+#   is a load error: pacman would never read it). pacman reads repositories from
+#   pacman.conf, not a directory, so temper adds `Include =
+#   /etc/pacman.d/temper/*.conf` to /etc/pacman.conf as a marked region, and a
+#   comment-only 00-temper.conf beside the repos — pacman refuses its whole
+#   configuration when an Include matches no file. Both stay once written:
+#   inert without repo files, and removing them out of order would leave pacman
+#   unable to start. `key` is optional: an exported OpenPGP public key
+#   (`gpg --export --armor <id>`), imported into pacman's keyring and locally
+#   signed — `pacman-key --add`, `--lsign-key` — BEFORE the repo is written; a
+#   key that cannot be imported stops its repo. temper fetches no key from a
+#   keyserver: it travels with the folder, as an apt source's does. `install`
+#   fetches the database of a repo pacman has never synced — that repo's alone;
+#   syncing the rest without upgrading would be the partial upgrade Arch does
+#   not support — so a package from a repo written in the same run resolves on
+#   that run. Removal follows `rpm_repos`: a repo file temper wrote and the spec
+#   no longer declares is residue, removed by `prune` after the packages, and
+#   `prune` deletes the keys temper imported once no declared repo uses them —
+#   never a key the machine had before.
 
 # Every bundle-level key must come BEFORE the first table header: once `[ignore]`
 # is open, TOML reads what follows as belonging to it, so a `packages` line below
@@ -824,6 +856,10 @@ schema. A list for the host package managers is a list of names: no versions
 An `apt_sources` entry takes `source` and `key` and nothing else, for the same
 reasons: no `to`, and no deb822 fields (`URIs`, `Suites`, `Signed-By`) — the
 file is the declaration.
+
+A `pacman_repos` entry takes `repo` and `key` and nothing else: no `to` (the
+directory is fixed), no `name`, `server` or `siglevel` (the file is the
+declaration), and no `keyserver` or key id — the key is a file in the folder.
 
 An `rpm_repos` entry takes `repo` and `key` and nothing else. The plausible
 guesses are all errors, each for a reason: no `to` (both destinations are fixed —

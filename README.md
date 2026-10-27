@@ -33,7 +33,7 @@ contract, that folder is one application of it.
 - **Packages *and* config, one tool.** brew / cask / tap / flatpak / mas /
   VS Code / GNOME extensions / rpm-ostree, and the distro's own dnf (Fedora,
   RHEL family), apt (Debian, Ubuntu) and pacman (Arch) — and where they come
-  from, since a flatpak remote, an RPM repo and an apt source are declared
+  from, since a flatpak remote, an RPM repo, an apt source and a pacman repo are declared
   alongside the packages that need them and converged before them. Plus file, key,
   marker-block, and root-owned `/etc` config primitives.
 - **Drift is first-class.** `temper drift` is read-only and tells you what's out
@@ -44,7 +44,7 @@ contract, that folder is one application of it.
 - **Reversible, and it says where it isn't.** File writes, dconf keys and package
   installs are journaled; `temper undo` rolls back the last run, guarded so it
   never clobbers a since-changed file. A few things are root-owned state written
-  outside the journal — `sysfile`, RPM repos, apt sources — and a run that touches one says so
+  outside the journal — `sysfile`, RPM repos, apt sources, pacman repos — and a run that touches one says so
   *before* you confirm rather than after.
 - **Keeps the spec in git (if it is git).** Spec-side writes can auto-commit +
   push a git-backed folder (`temper save`, or `temper configure set
@@ -162,7 +162,7 @@ temper's report.
 Ubuntu 24.04, Fedora 44 and Debian 13 also run as full virtual machines. The
 matrix covers:
 - installing from the distribution's repositories and from a vendor's (an rpm
-  repo and an apt source);
+  repo, an apt source and a pacman repo);
 - drift in both directions;
 - `prune`, including the dependencies it frees and the ones it keeps;
 - `undo` and `reconcile`;

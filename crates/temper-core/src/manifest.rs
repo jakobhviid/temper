@@ -270,6 +270,48 @@ impl AptSource {
     }
 }
 
+/// One pacman repository this spec supplies: the repo's section as a file, and
+/// the key its packages are signed with.
+///
+/// The sibling of `RpmRepo` and `AptSource`, with one difference pacman forces.
+/// pacman reads repositories from sections of one `pacman.conf`, not from a
+/// directory, so temper adds one `Include` of a directory it owns
+/// ([`PACMAN_REPOS_DIR`]) and each repo is a file there. And pacman trusts keys
+/// from its own keyring, not from a file a repo cites, so the key is imported
+/// into that keyring and locally signed rather than installed as a file.
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PacmanRepo {
+    /// The repo's section — `[name]` and its `Server`, `Include` and
+    /// `SigLevel` lines — relative to the temper-home. Installed root-owned
+    /// `0644` to `/etc/pacman.d/temper/<basename>`, which must end in `.conf`:
+    /// that is the pattern the `Include` matches.
+    pub repo: String,
+    /// The key the repo's packages are signed with: an exported OpenPGP public
+    /// key, relative to the temper-home. Imported into pacman's keyring and
+    /// locally signed (`pacman-key --add`, `--lsign-key`) **before** the repo is
+    /// written, so the first sync can verify what it fetches.
+    #[serde(default)]
+    pub key: Option<String>,
+}
+
+impl PacmanRepo {
+    /// Where the repo file is installed.
+    pub fn dest(&self) -> PathBuf {
+        Path::new(PACMAN_REPOS_DIR).join(basename(&self.repo))
+    }
+    /// The files to install. The key is not one: it goes into pacman's keyring.
+    pub fn files(&self) -> Vec<(String, PathBuf)> {
+        vec![(self.repo.clone(), self.dest())]
+    }
+}
+
+/// The directory temper's pacman repo files go in, read through one `Include`.
+pub const PACMAN_REPOS_DIR: &str = "/etc/pacman.d/temper";
+/// A comment-only file that keeps the `Include` matching something: pacman
+/// refuses its whole configuration when an `Include` pattern matches no file.
+pub const PACMAN_REPOS_PLACEHOLDER: &str = "00-temper.conf";
+
 /// Where apt reads additional sources.
 pub const APT_SOURCES_DIR: &str = "/etc/apt/sources.list.d";
 /// Where a third-party key named by `Signed-By:` conventionally lives.
@@ -534,6 +576,9 @@ pub struct Machine {
     /// apt sources THIS machine supplies, on top of its bundles'.
     #[serde(default)]
     pub apt_sources: Vec<AptSource>,
+    /// pacman repositories THIS machine supplies, on top of its bundles'.
+    #[serde(default)]
+    pub pacman_repos: Vec<PacmanRepo>,
     /// Extras THIS machine should not be told about, on top of the fleet
     /// `[ignore]`. Same reason: silencing something is a per-machine judgement
     /// far more often than a fleet one, and the fleet list could not express
@@ -675,6 +720,10 @@ pub struct Bundle {
     /// sibling, at the same scope and converged at the same point.
     #[serde(default)]
     pub apt_sources: Vec<AptSource>,
+    /// pacman repositories this bundle's `pacman` packages come from, at the
+    /// same scope and converged at the same point.
+    #[serde(default)]
+    pub pacman_repos: Vec<PacmanRepo>,
     #[serde(default)]
     pub step: Vec<Step>,
     /// Drift-only assertions (no converge action).
@@ -1146,7 +1195,32 @@ pub(crate) fn no_shared_keyspace(exts: &[GnomeExtension], whose: &str) -> Result
 /// than at the end of a converge.
 fn reject_bad_retire(ft: &TemperToml) -> Result<()> {
     for m in &ft.machine {
-        validate_retire(&m.retire, &m.retire_packages, &format!("machine '{}'", m.name))?;
+        let whose = format!("machine '{}'", m.name);
+        validate_retire(&m.retire, &m.retire_packages, &whose)?;
+        validate_pacman_repos(&m.pacman_repos, &whose)?;
+    }
+    Ok(())
+}
+
+/// A pacman repo file pacman would read. One not ending in `.conf` is installed
+/// and then never matched by the `Include`; the placeholder's name is temper's.
+pub fn validate_pacman_repos(repos: &[PacmanRepo], whose: &str) -> Result<()> {
+    for r in repos {
+        let name = basename(&r.repo);
+        if !name.ends_with(".conf") {
+            anyhow::bail!(
+                "{whose} declares the pacman repo `{}`, which pacman would never read: \
+                 temper includes `{PACMAN_REPOS_DIR}/*.conf`, so the file's name must end in `.conf`",
+                r.repo
+            );
+        }
+        if name == PACMAN_REPOS_PLACEHOLDER {
+            anyhow::bail!(
+                "{whose} declares the pacman repo `{}`, but `{PACMAN_REPOS_PLACEHOLDER}` is the \
+                 placeholder temper keeps in {PACMAN_REPOS_DIR} — rename the file",
+                r.repo
+            );
+        }
     }
     Ok(())
 }
@@ -1245,6 +1319,7 @@ pub fn load_bundle(home: &Path, name: &str) -> Result<Bundle> {
             no_shared_keyspace(&b.gnome_extensions, &whose)?;
             no_path_in_a_uuid(&b.gnome_extensions, &whose)?;
             validate_retire(&b.retire, &b.retire_packages, &whose)?;
+            validate_pacman_repos(&b.pacman_repos, &whose)?;
             Ok(b)
         }
         Err(e) => {
@@ -1777,6 +1852,7 @@ mod tests {
             flatpak_remotes: Vec::new(),
             rpm_repos: Vec::new(),
             apt_sources: Vec::new(),
+            pacman_repos: Vec::new(),
             retire: Vec::new(),
             retire_packages: Vec::new(),
             ignore: Default::default(),
@@ -1888,6 +1964,19 @@ mod tests {
         // adjacent scope is where the first version of this stopped.
         let b: Bundle = toml::from_str("retire_packages = [\"nonsense\"]").unwrap();
         assert!(super::validate_retire(&b.retire, &b.retire_packages, "bundle 'a'").is_err());
+    }
+
+    /// A pacman repo file pacman would never read — one not matched by the
+    /// `*.conf` Include, or one named like temper's placeholder — is a load error.
+    #[test]
+    fn a_pacman_repo_must_be_a_conf_file_pacman_reads() {
+        let repo = |r: &str| super::PacmanRepo { repo: r.into(), key: None };
+        assert!(super::validate_pacman_repos(&[repo("assets/pacman/vendor.conf")], "machine 't'").is_ok());
+        let e = super::validate_pacman_repos(&[repo("assets/pacman/vendor.repo")], "machine 't'")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("must end in `.conf`"), "{e}");
+        assert!(super::validate_pacman_repos(&[repo("assets/00-temper.conf")], "machine 't'").is_err());
     }
 
     /// A dconf subtree must start and end with `/`.
@@ -2010,6 +2099,7 @@ gnome_extensions = [
             flatpak_remotes: Vec::new(),
             rpm_repos: Vec::new(),
             apt_sources: Vec::new(),
+            pacman_repos: Vec::new(),
             retire: Vec::new(),
             retire_packages: Vec::new(),
             ignore: Default::default(),

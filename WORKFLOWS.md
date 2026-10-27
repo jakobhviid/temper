@@ -761,7 +761,7 @@ never touched, and never reported, so there is no ignore list to maintain.
 
 **When:** a box runs Fedora or an EL rebuild (dnf), Debian or Ubuntu (apt), or
 Arch (pacman), and you want packages from its own repositories. (Vendor
-repositories: `rpm_repos`, §9b, and `apt_sources`, §9d.)
+repositories: `rpm_repos`, §9b, `apt_sources`, §9d, and `pacman_repos`, §9e.)
 
 ```toml
 # apps/cli.toml — one bundle, a list per family
@@ -964,6 +964,49 @@ that `prune` removes after the packages, if you have not edited them. Never name
 later would delete it. To add a component or a mirror, ship a file of your own
 name.
 
+## 9e. Declare where pacman packages come from
+
+**When:** a `pacman` package comes from a repository `pacman.conf` does not
+name — a vendor's, or one that builds the AUR, such as Chaotic-AUR.
+
+```toml
+# apps/vendor.toml
+pacman       = ["vendor-tool"]
+pacman_repos = [
+    { repo = "assets/pacman/vendor.conf", key = "assets/pacman/vendor.asc" },
+]
+```
+
+```
+# assets/pacman/vendor.conf — the repo's section, as the vendor documents it
+[vendor]
+Server = https://repo.example.com/$repo/$arch
+```
+
+The same two scopes and the same point in the converge as `rpm_repos`, with two
+differences pacman makes. pacman reads repositories from `pacman.conf`, so the
+first `install` adds `Include = /etc/pacman.d/temper/*.conf` there as a marked
+region, beside a comment-only `00-temper.conf` (pacman refuses its whole
+configuration when an `Include` matches no file), and each repo is a file in that
+directory — its name must end in `.conf`. And pacman trusts a key from its own
+keyring, not from a file, so the `key` — an exported public key, `gpg --export
+--armor <id>`, shipped in the folder — is imported and locally signed before the
+repo is written. Then `install` fetches that repo's database alone and installs:
+one run on a clean machine. It does not sync the other databases; that, without
+an upgrade, is the partial upgrade Arch does not support, and upgrading is
+`sudo pacman -Syu`, yours to run.
+
+`drift` reports each repo file, the `Include`, and each key: `missing from
+pacman's keyring` or `not locally signed` when it is not trusted. Drop the
+declaration and the repo file is residue that `prune` removes after the
+packages, and `prune` deletes the keys temper imported once no declared repo uses
+them — never a key the machine had before. The `Include` and `00-temper.conf`
+stay: inert without repo files, and removing them in the wrong order would leave
+pacman unable to read its configuration. On a host without pacman, a bundle's
+repos are inert and a machine's own report `unavailable`. The AUR itself is not
+a repository — it builds from source through a helper — so `pacman_repos` reaches
+it only through a repo that builds it.
+
 ## 10. Per-machine versions of the fleet lists
 
 **When:** you want something on one box only.
@@ -972,7 +1015,7 @@ Every category exists at both scopes, because "on this machine only" is an
 ordinary thing to want. Declared in a bundle, a thing belongs to the group and
 `reconcile` will never edit it from one machine; declared on the machine, that
 machine's `reconcile` owns both directions — for every category `reconcile`
-reaches. The exceptions are `rpm_repos` and `apt_sources`: they have both scopes
+reaches. The exceptions are `rpm_repos`, `apt_sources` and `pacman_repos`: they have both scopes
 like the rest, and you edit them by hand at either, because absorbing a repo means copying a file *into*
 the folder rather than adding a token to a list. The matrix in
 `ARCHITECTURE.md` is the per-category answer.
@@ -1097,6 +1140,7 @@ which is why it has verbs of its own.
 | dnf / apt / pacman packages | `install` (remove: `prune`, for what was installed by name since the baseline) | `reconcile` — machine scope |
 | rpm repos (`rpm_repos`) | `install`, before any package (remove: `prune`, after the un-layer) | you author it by hand — absorbing one means copying a file into the folder |
 | apt sources (`apt_sources`) | `install`, before any apt package (remove: `prune`, after the packages) | you author it by hand, as for rpm repos |
+| pacman repos (`pacman_repos`) | `install`, before any pacman package (remove: `prune`, after the packages, and the keys temper imported) | you author it by hand, as for rpm repos |
 | brew tap-trust | `install` / `update` (remove: `prune`) | `reconcile` — the fleet list needs `--include-trust` |
 | deployed-file residue | n/a — it is what a *dropped* step left | `prune` removes it if untouched, reports it if you edited it |
 | retirements (`retire`, `retire_packages`) | `prune` enacts them | you author them by hand; `temper retired` reviews them |

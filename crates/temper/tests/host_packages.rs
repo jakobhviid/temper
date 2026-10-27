@@ -659,6 +659,46 @@ fn an_apt_source_on_a_host_without_apt_is_unavailable() {
     assert!(!e.log().contains("sources.list.d"), "{}", e.log());
 }
 
+/// pacman repos follow the same rule: a bundle's are inert on a host without
+/// pacman, and the machine's own are `unavailable`, with nothing written.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_pacman_repo_on_a_host_without_pacman_is_inert_or_unavailable() {
+    let e = Env::new();
+    e.apt();
+    e.machine(&["base"], &["base"], &[]);
+    e.asset("assets/pacman/vendor.conf", "[vendor]\nServer = file:///srv/vendor\n");
+    e.bundle(
+        "cli",
+        "os = \"linux\"\npacman_repos = [{ repo = \"assets/pacman/vendor.conf\" }]\n",
+    );
+    e.spec(&format!("{MACHINE}apps = [\"cli\"]\n"));
+    let only_apt = e.isolated_path();
+    let drift = |e: &Env| -> serde_json::Value {
+        let out = e.temper().env("PATH", &only_apt).args(["--json", "drift"]).output().unwrap();
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let doc = drift(&e);
+    assert!(findings(&doc, &["pacman-repo"]).is_empty(), "a bundle's repos are inert here: {doc}");
+
+    // The machine's own, alone: declared by a bundle too, the bundle's copy wins
+    // the dedup, as for every repo kind.
+    e.spec(&format!(
+        "{MACHINE}pacman_repos = [{{ repo = \"assets/pacman/vendor.conf\" }}]\n"
+    ));
+    let doc = drift(&e);
+    let own: Vec<_> = doc["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["kind"] == "pacman-repo")
+        .collect();
+    assert_eq!(own.len(), 1, "{doc}");
+    assert_eq!(own[0]["status"], "unavailable", "{doc}");
+    e.temper().env("PATH", &only_apt).args(["install", "--yes"]).assert().success();
+    assert!(!e.log().contains("pacman.d"), "{}", e.log());
+}
+
 /// A source whose key could not be installed is not written: it would cite a
 /// key that is not there, and every package from it would fail its signature
 /// check instead of the source reporting itself missing.

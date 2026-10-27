@@ -232,6 +232,7 @@ above.
 | `dnf` / `apt` / `pacman` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `rpm-repo` | n/a | ✅ | ✅ | ✅ | n/a | n/a | n/a | n/a | ✅ | ❌ | ✅ |
 | `apt-source` | n/a | ✅ | ✅ | ✅ | n/a | n/a | n/a | n/a | ✅ | ❌ | ✅ |
+| `pacman-repo` | n/a | ✅ | ✅ | ✅ | n/a | n/a | n/a | n/a | ✅ | ❌ | ✅ |
 | `dconf` | ✅ | ✅ | ✅ | ⚠ | ❌ | ✅ | ✅ | ⚠ | ✅ | ✅ | ❌ |
 | `deployed-files` (`copy` / `sysfile` / `block`) | ✅ | n/a | ✅ | ✅ | ✅ | n/a | n/a | ❌ | ✅ | ⚠ | ✅ |
 | `profile` | ✅ | ❌ | ✅ | ⚠ | ❌ | ❌ | ❌ | ❌ | ⚠ | ❌ | ❌ |
@@ -246,7 +247,7 @@ guaranteed to fail, which is worse than none. The run names them at plan time
 instead (Principle #7, AGENTS.md question 7), so the limit is known before it is
 accepted. Teaching `undo` to escalate is the follow-on and is in `ROADMAP.md`.
 
-An `n/a` in column 1 for `flatpak-remote`, `rpm-repo` and `apt-source` means there
+An `n/a` in column 1 for `flatpak-remote`, `rpm-repo`, `apt-source` and `pacman-repo` means there
 is no fleet-wide list in `temper.toml`. Each is declared in a bundle (group scope,
 gated with it) or on the machine, because a remote or repo belongs to the
 packages that need it, and an ungated fleet list would write one onto every box.
@@ -261,6 +262,9 @@ is authoring: absorbing a repo means copying a file *into* the folder, which no
 `reconcile` does. `apt-source` is the same row in apt's directories
 (`/etc/apt/sources.list.d`, `/etc/apt/keyrings`), for the same reasons: the
 image's `debian.sources` is never an extra, and what temper wrote is residue.
+`pacman-repo` is the row again for pacman, with its key in pacman's keyring
+rather than a file: `prune` deletes the keys temper imported, once no declared
+repo uses them, and leaves any the machine had before.
 
 `dnf`, `apt` and `pacman` fill every column, and two of them only because of a
 rule the others do not need. **Extras (5, 6) are counted from a baseline.** Each
@@ -319,8 +323,8 @@ database through dnf and cannot install with it, so a bundle's `dnf` list is ine
 there too. A machine's *own* list for such a manager cannot mean anything else, so
 it is reported `unavailable`, naming `rpm_ostree` where that applies. Repos and
 sources follow the same rule: a bundle's `rpm_repos` on a host nothing would read
-them on, or its `apt_sources` on a host without apt, are inert; the machine's own
-are `unavailable`.
+them on, or its `apt_sources` or `pacman_repos` on a host without that manager, are
+inert; the machine's own are `unavailable`.
 
 The ordering is the feature, in both directions. Repos converge **before** any
 package, because `rpm-ostree install` and `dnf install` resolve against

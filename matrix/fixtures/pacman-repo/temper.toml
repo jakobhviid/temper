@@ -1,0 +1,6 @@
+# Fixture for pacman-repo.sh: a bundle that installs one package from a
+# third-party repo. The repo, its package and its key are built by the script.
+[[machine]]
+name = "m"
+os = "linux"
+apps = ["vendor"]

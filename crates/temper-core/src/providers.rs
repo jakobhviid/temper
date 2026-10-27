@@ -2290,6 +2290,470 @@ fn repo_files_converge<R: RepoFile>(
     Ok(written)
 }
 
+// --- pacman repos: where pacman packages come from ---------------------------
+
+/// What this host can do about pacman repositories: pacman reads them.
+pub fn pacman_repo_caps() -> RepoCaps {
+    let pacman = have("pacman");
+    RepoCaps {
+        observe: pacman,
+        converge: pacman,
+    }
+}
+
+/// Why a pacman repo is not installed on a host without pacman.
+pub const PACMAN_REPO_NO_PACMAN: &str = "this host has no pacman";
+
+impl RepoFile for manifest::PacmanRepo {
+    fn dest(&self) -> PathBuf {
+        manifest::PacmanRepo::dest(self)
+    }
+    fn files(&self) -> Vec<(String, PathBuf)> {
+        manifest::PacmanRepo::files(self)
+    }
+}
+
+/// Every pacman repo this machine declares, by the same rule as its rpm repos.
+pub fn effective_pacman_repos(
+    home: &Path,
+    machine: &Machine,
+) -> Result<Vec<OwnedRepo<manifest::PacmanRepo>>> {
+    effective_repo_files(home, machine, |b| &b.pacman_repos, &machine.pacman_repos)
+}
+
+const PACMAN_CONF: &str = "/etc/pacman.conf";
+const PACMAN_GNUPG: &str = "/etc/pacman.d/gnupg";
+const PACMAN_INCLUDE_MARKER: &str = "pacman-repos";
+const PACMAN_PLACEHOLDER_BODY: &str = "\
+# temper: keeps the Include in /etc/pacman.conf matching a file. pacman refuses
+# its whole configuration when an Include pattern matches none, so this stays
+# while temper's Include does. The other files here are temper's pacman_repos.
+";
+
+/// The placeholder, then the `Include` — the order they are written in, so the
+/// `Include` never matches no file.
+fn pacman_plumbing() -> [(PathBuf, String); 2] {
+    [
+        (
+            Path::new(manifest::PACMAN_REPOS_DIR).join(manifest::PACMAN_REPOS_PLACEHOLDER),
+            PACMAN_PLACEHOLDER_BODY.to_string(),
+        ),
+        (
+            PathBuf::from(PACMAN_CONF),
+            format!("Include = {}/*.conf\n", manifest::PACMAN_REPOS_DIR),
+        ),
+    ]
+}
+
+/// Content temper computes, as a file a primitive can read.
+fn staged(what: &str, body: &str) -> Result<PathBuf> {
+    let p = std::env::temp_dir().join(format!("temper-{what}-{}", std::process::id()));
+    fs::write(&p, body).with_context(|| format!("staging {}", p.display()))?;
+    Ok(p)
+}
+
+/// The state of what makes pacman read temper's repo directory: the placeholder
+/// file, and the `Include` as a marked region of `pacman.conf`.
+pub fn pacman_plumbing_state() -> Result<Vec<RepoState>> {
+    let mut out = Vec::new();
+    for (i, (dest, body)) in pacman_plumbing().into_iter().enumerate() {
+        let src = staged("pacman-plumbing", &body)?;
+        let state = if i == 0 {
+            crate::primitives::sysfile_state(&src, &dest, &rpm_repo_opts())
+        } else {
+            crate::primitives::block_state(&src, &dest, PACMAN_INCLUDE_MARKER, &rpm_repo_opts())
+        };
+        let _ = fs::remove_file(&src);
+        out.push(RepoState {
+            from: None,
+            dest,
+            state: state?,
+        });
+    }
+    Ok(out)
+}
+
+/// Write the placeholder, then the `Include`. Returns whether either changed.
+fn pacman_plumbing_apply() -> Result<bool> {
+    let mut changed = false;
+    for (i, (dest, body)) in pacman_plumbing().into_iter().enumerate() {
+        let src = staged("pacman-plumbing", &body)?;
+        let wrote = if i == 0 {
+            crate::primitives::sysfile_apply(&src, &dest, &rpm_repo_opts())
+        } else {
+            // A root-owned region is written through `sudo install` and is not
+            // journaled, so the journal here records nothing.
+            let mut unused = crate::journal::Journal::begin();
+            crate::primitives::block_apply(&src, &dest, PACMAN_INCLUDE_MARKER, &rpm_repo_opts(), &mut unused)
+        };
+        let _ = fs::remove_file(&src);
+        changed |= wrote?;
+    }
+    Ok(changed)
+}
+
+/// A command run as root: through `sudo` unless temper already is root.
+fn as_root(program: &str) -> Command {
+    if crate::syspkg::is_root() {
+        Command::new(program)
+    } else {
+        let mut c = Command::new("sudo");
+        c.arg(program);
+        c
+    }
+}
+
+/// How pacman's keyring holds a key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyState {
+    Absent,
+    /// In the keyring, but not locally signed, so packages it signed are not
+    /// trusted.
+    Unsigned,
+    Trusted,
+}
+
+/// The primary-key fingerprints an exported key file holds — read from the file
+/// alone, no keyring needed. `None` when gpg cannot read it.
+fn key_fingerprints(file: &Path) -> Option<Vec<String>> {
+    let out = Command::new("gpg")
+        .args(["--batch", "--with-colons", "--show-keys"])
+        .arg(file)
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let fprs = primary_fingerprints(&String::from_utf8_lossy(&out.stdout));
+    (!fprs.is_empty()).then_some(fprs)
+}
+
+/// The `fpr` record that follows each `pub` record in gpg's colon listing.
+/// Pure, so it is testable.
+fn primary_fingerprints(colons: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut after_pub = false;
+    for line in colons.lines() {
+        let f: Vec<&str> = line.split(':').collect();
+        match f.first().copied() {
+            Some("pub") => after_pub = true,
+            Some("fpr") if after_pub => {
+                if let Some(fpr) = f.get(9).filter(|s| !s.is_empty()) {
+                    out.push(fpr.to_string());
+                }
+                after_pub = false;
+            }
+            Some("sub") => after_pub = false,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// How pacman's keyring holds `fpr`, read from the keyring directly — which
+/// needs no root. `None` when the keyring cannot be read.
+fn pacman_key_state(fpr: &str) -> Option<KeyState> {
+    let out = Command::new("gpg")
+        .args(["--homedir", PACMAN_GNUPG, "--batch", "--no-auto-check-trustdb", "--with-colons", "--list-sigs", fpr])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return String::from_utf8_lossy(&out.stderr)
+            .contains("No public key")
+            .then_some(KeyState::Absent);
+    }
+    Some(key_state_of(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// A key `pacman-key --lsign-key` signed carries a signature whose class ends in
+/// `l` (local); an exportable one ends in `x`. Pure, so it is testable.
+fn key_state_of(colons: &str) -> KeyState {
+    let local = colons.lines().any(|l| {
+        let f: Vec<&str> = l.split(':').collect();
+        f.first() == Some(&"sig") && f.get(10).is_some_and(|c| c.ends_with('l'))
+    });
+    if local {
+        KeyState::Trusted
+    } else {
+        KeyState::Unsigned
+    }
+}
+
+/// Every declared repo key and how pacman's keyring holds it: `(declaring
+/// bundle, what to call it, state)`. A key file gpg cannot read, or a keyring it
+/// cannot open, is `None` — unavailable, never absent.
+pub fn pacman_keys_state(
+    home: &Path,
+    effective: &[OwnedRepo<manifest::PacmanRepo>],
+) -> Vec<(Option<String>, String, Option<KeyState>)> {
+    let mut out = Vec::new();
+    for owned in effective {
+        let Some(key) = &owned.repo.key else { continue };
+        let label = |what: &str| format!("{what} (key for {})", owned.repo.dest().display());
+        match key_fingerprints(&home.join(key)) {
+            None => out.push((owned.from.clone(), label(key), None)),
+            Some(fprs) => {
+                for fpr in fprs {
+                    out.push((owned.from.clone(), label(&fpr), pacman_key_state(&fpr)));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// What a converge would write as root — the root ask has to cover it.
+pub fn pacman_repos_pending(
+    home: &Path,
+    effective: &[OwnedRepo<manifest::PacmanRepo>],
+) -> Vec<String> {
+    let caps = pacman_repo_caps();
+    if !caps.converge || effective.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = pacman_plumbing_state()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| r.state != crate::primitives::FileState::InSync)
+        .map(|r| r.dest.display().to_string())
+        .collect();
+    out.extend(pending_writes(home, effective, caps));
+    out.extend(
+        pacman_keys_state(home, effective)
+            .into_iter()
+            .filter(|(_, _, s)| *s != Some(KeyState::Trusted))
+            .map(|(_, what, _)| format!("pacman's keyring: {what}")),
+    );
+    out
+}
+
+/// Where the fingerprints of keys temper imported live — so `prune` deletes
+/// only those, never a key the machine had before.
+fn pacman_imported_path(machine: &str) -> PathBuf {
+    crate::journal::state_root()
+        .join("pacman-keys")
+        .join(format!("{machine}.json"))
+}
+
+/// The keys temper imported into pacman's keyring on this machine.
+pub fn pacman_imported_keys(machine: &str) -> BTreeSet<String> {
+    fs::read(pacman_imported_path(machine))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn save_pacman_imported(machine: &str, keys: &BTreeSet<String>) -> Result<()> {
+    let p = pacman_imported_path(machine);
+    if let Some(dir) = p.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    fs::write(&p, serde_json::to_vec_pretty(keys)?)?;
+    Ok(())
+}
+
+fn quietly(mut cmd: Command) -> bool {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Put a key into pacman's keyring and sign it locally, so packages it signed
+/// are trusted. Returns the fingerprints it added that were not there before —
+/// the ones `prune` may delete — or `None` when the import failed.
+fn pacman_key_import(file: &Path, fprs: &[String]) -> Option<Vec<String>> {
+    let before: Vec<(String, Option<KeyState>)> =
+        fprs.iter().map(|f| (f.clone(), pacman_key_state(f))).collect();
+    if before.iter().any(|(_, s)| *s == Some(KeyState::Absent)) {
+        let mut add = as_root("pacman-key");
+        add.arg("--add").arg(file);
+        if !quietly(add) {
+            return None;
+        }
+    }
+    for (fpr, state) in &before {
+        if *state != Some(KeyState::Trusted) {
+            let mut sign = as_root("pacman-key");
+            sign.args(["--lsign-key", fpr]);
+            if !quietly(sign) {
+                return None;
+            }
+        }
+    }
+    Some(
+        before
+            .into_iter()
+            .filter(|(_, s)| *s == Some(KeyState::Absent))
+            .map(|(f, _)| f)
+            .collect(),
+    )
+}
+
+/// Remove keys temper imported from pacman's keyring. Returns the ones removed.
+pub fn pacman_keys_remove(machine: &str, fprs: &[String]) -> Vec<String> {
+    let mut imported = pacman_imported_keys(machine);
+    let mut removed = Vec::new();
+    for fpr in fprs {
+        let mut del = as_root("pacman-key");
+        del.args(["--delete", fpr]);
+        if quietly(del) || pacman_key_state(fpr) == Some(KeyState::Absent) {
+            imported.remove(fpr);
+            removed.push(fpr.clone());
+        }
+    }
+    let _ = save_pacman_imported(machine, &imported);
+    removed
+}
+
+/// The keys `prune` removes: imported by temper, and no longer the key of any
+/// repo this machine declares. `None` when a declared key cannot be read — then
+/// which keys are still needed is unknown, and none is removed.
+pub fn pacman_keys_unneeded(
+    home: &Path,
+    machine: &str,
+    effective: &[OwnedRepo<manifest::PacmanRepo>],
+) -> Option<Vec<String>> {
+    let imported = pacman_imported_keys(machine);
+    if imported.is_empty() || !pacman_repo_caps().converge {
+        return Some(Vec::new());
+    }
+    let mut needed = HashSet::new();
+    for owned in effective {
+        if let Some(key) = &owned.repo.key {
+            needed.extend(key_fingerprints(&home.join(key))?);
+        }
+    }
+    Some(imported.into_iter().filter(|f| !needed.contains(f)).collect())
+}
+
+/// The `[name]` a repo file declares — what pacman calls its database.
+fn pacman_repo_name(file: &Path) -> Option<String> {
+    fs::read_to_string(file).ok()?.lines().find_map(|l| {
+        let l = l.trim();
+        (l.starts_with('[') && l.ends_with(']') && l != "[options]")
+            .then(|| l[1..l.len() - 1].to_string())
+    })
+}
+
+/// Fetch one repo's database, and no other: pacman, run with a configuration of
+/// its own options and this repo alone. Syncing every database without
+/// upgrading is the partial upgrade Arch does not support; fetching the database
+/// of a repo pacman has never synced is not that, and without it the packages
+/// the same run declares from the repo cannot be found. Returns whether it
+/// fetched.
+fn pacman_sync_one(repo_file: &Path) -> bool {
+    let Ok(conf) = Command::new("pacman-conf").stdin(Stdio::null()).output() else {
+        return false;
+    };
+    // `pacman-conf` prints the effective configuration, `[options]` first.
+    let options: String = String::from_utf8_lossy(&conf.stdout)
+        .lines()
+        .take_while(|l| !l.starts_with('[') || *l == "[options]")
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let Ok(tmp) = staged(
+        "pacman-sync.conf",
+        &format!("{options}\nInclude = {}\n", repo_file.display()),
+    ) else {
+        return false;
+    };
+    let mut sync = as_root("pacman");
+    sync.arg("--config").arg(&tmp).args(["-Sy", "--noconfirm"]);
+    let ok = quietly(sync);
+    let _ = fs::remove_file(&tmp);
+    ok
+}
+
+/// Whether pacman has a database for the repo a file declares.
+fn pacman_has_db(repo_file: &Path) -> bool {
+    let Some(name) = pacman_repo_name(repo_file) else {
+        return true;
+    };
+    let db = run_lines("pacman-conf", &["DBPath"])
+        .ok()
+        .and_then(|l| l.into_iter().next())
+        .unwrap_or_else(|| "/var/lib/pacman/".into());
+    Path::new(&db).join("sync").join(format!("{name}.db")).exists()
+}
+
+/// Install every declared pacman repo — the `Include` and its placeholder, each
+/// repo's key into pacman's keyring, then the repo file — before any pacman
+/// install, and fetch the database of a repo pacman has not synced. A key that
+/// cannot be imported stops its repo, as an apt source's does. Returns what was
+/// written.
+pub fn pacman_repos_converge(
+    home: &Path,
+    machine: &str,
+    effective: &[OwnedRepo<manifest::PacmanRepo>],
+    dry_run: bool,
+) -> Result<Vec<String>> {
+    if dry_run || effective.is_empty() {
+        return Ok(Vec::new());
+    }
+    let warn = |msg: String| eprintln!("{} {msg}", crate::ui::yellow(crate::ui::g_warn()));
+    if !pacman_repo_caps().converge {
+        let own = effective.iter().filter(|o| o.from.is_none()).count();
+        if own > 0 {
+            warn(format!("{own} declared pacman repo(s) not installed: {PACMAN_REPO_NO_PACMAN}"));
+        }
+        return Ok(Vec::new());
+    }
+    let mut written = Vec::new();
+    match pacman_plumbing_apply() {
+        Ok(true) => written.push(PACMAN_CONF.to_string()),
+        Ok(false) => {}
+        Err(e) => {
+            warn(format!(
+                "could not make pacman read {}: {e} — no pacman repo is installed",
+                manifest::PACMAN_REPOS_DIR
+            ));
+            return Ok(written);
+        }
+    }
+    let mut imported = pacman_imported_keys(machine);
+    for owned in effective {
+        let dest = owned.repo.dest();
+        if let Some(key) = &owned.repo.key {
+            let file = home.join(key);
+            let Some(fprs) = key_fingerprints(&file) else {
+                warn(format!("could not read the key {key} — {} not installed, it needs that key", dest.display()));
+                continue;
+            };
+            match pacman_key_import(&file, &fprs) {
+                Some(added) => imported.extend(added),
+                None => {
+                    warn(format!(
+                        "could not add {key} to pacman's keyring — {} not installed, it needs that key",
+                        dest.display()
+                    ));
+                    continue;
+                }
+            }
+        }
+        match crate::primitives::sysfile_apply(&home.join(&owned.repo.repo), &dest, &rpm_repo_opts()) {
+            Ok(wrote) => {
+                if wrote {
+                    written.push(dest.display().to_string());
+                }
+                if (wrote || !pacman_has_db(&dest)) && !pacman_sync_one(&dest) {
+                    warn(format!(
+                        "could not fetch the database of {} — its packages are found after `sudo pacman -Syu`",
+                        dest.display()
+                    ));
+                }
+            }
+            Err(e) => warn(format!("could not install {}: {e}", dest.display())),
+        }
+    }
+    let _ = save_pacman_imported(machine, &imported);
+    Ok(written)
+}
+
 // --- rpm-ostree: layered rpms that can't be image-baked (Linux) ---------------
 
 pub fn effective_rpm(home: &Path, machine: &Machine) -> Result<Vec<String>> {
@@ -2639,6 +3103,34 @@ pub fn rpm_ostree_requested() -> Option<Vec<String>> {
     requested_from_status(&out.stdout)
 }
 
+
+#[cfg(test)]
+mod pacman_key_tests {
+    use super::*;
+
+    /// gpg's colon listing of an exported key: the primary key's fingerprint is
+    /// the `fpr` after `pub`, never a subkey's.
+    #[test]
+    fn a_key_file_names_its_primary_fingerprints() {
+        let colons = "pub:-:4096:1:AAAA:1:::-:::scESC::::::23::0:\n\
+fpr:::::::::0123456789ABCDEF0123456789ABCDEF01234567:\n\
+uid:-::::1::HASH::Vendor <v@example.com>::::::::::0:\n\
+sub:-:4096:1:BBBB:1::::::e::::::23:\n\
+fpr:::::::::FEDCBA9876543210FEDCBA9876543210FEDCBA98:\n";
+        assert_eq!(primary_fingerprints(colons), vec!["0123456789ABCDEF0123456789ABCDEF01234567"]);
+        assert!(primary_fingerprints("").is_empty());
+    }
+
+    /// `pacman-key --lsign-key` leaves a local signature, class `…l`; without
+    /// one, packages the key signed are not trusted.
+    #[test]
+    fn a_key_is_trusted_once_it_is_locally_signed() {
+        let unsigned = "pub:-:4096:1:AAAA:1:::-:::scESC:\nsig:::1:AAAA:1::::Vendor:13x:::::8:\n";
+        let signed = "pub:-:4096:1:AAAA:1:::-:::scESC:\nsig:::1:CCCC:1::::Pacman Keyring Master Key:10l:::::8:\n";
+        assert_eq!(key_state_of(unsigned), KeyState::Unsigned);
+        assert_eq!(key_state_of(signed), KeyState::Trusted);
+    }
+}
 
 #[cfg(test)]
 mod brew_dependency_tests {
@@ -3366,6 +3858,7 @@ mod gating_tests {
             flatpak_remotes: Vec::new(),
             rpm_repos: Vec::new(),
             apt_sources: Vec::new(),
+            pacman_repos: Vec::new(),
             retire: Vec::new(),
             retire_packages: Vec::new(),
             ignore: Default::default(),

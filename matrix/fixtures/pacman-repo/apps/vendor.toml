@@ -1,0 +1,3 @@
+os = "linux"
+pacman = ["temper-hello"]
+pacman_repos = [{ repo = "assets/pacman/temperrepo.conf", key = "assets/pacman/temperrepo.asc" }]

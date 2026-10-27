@@ -136,15 +136,9 @@ so the headline matches what happened to the machine.
     from them, so a flag for splitting the two phases by hand has no caller. Not
     to be confused with `update --config-only` above, which is a different verb
     for a different caller and still open.
-- **`pacman` packages can only come from the repositories `pacman.conf` already
-  names.** "Where do this provider's packages come from" is a per-provider
-  prerequisite, and `flatpak-remote`, `rpm-repo` and `apt-source` answer it for
-  their managers. pacman's answer is a section in one shared `pacman.conf`
-  rather than a file per repository, so it is a `block` edit plus a key
-  imported into pacman's own keyring (`pacman-key --add` / `--lsign-key`) — state
-  rather than a file, which the repo-file shape does not cover. The AUR is not a
-  repository at all: it builds from source through a helper, which is a
-  different feature.
+- **The AUR is not a repository.** It builds from source through a helper
+  (`paru`, `yay`), a different feature from `pacman_repos`, which reaches it only
+  through a repo that builds it, such as Chaotic-AUR.
 - **A Brewfile can declare a dependency.** `init` and `reconcile` offer only
   formulae installed on request, but a Brewfile written by hand can declare what
   a formula pulled in — `oniguruma` beside `jq`. Declared, it is asked for, and it

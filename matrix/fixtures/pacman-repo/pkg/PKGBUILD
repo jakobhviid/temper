@@ -1,0 +1,11 @@
+# A package only the matrix's own repo carries, so pacman can find it nowhere else.
+pkgname=temper-hello
+pkgver=1
+pkgrel=1
+pkgdesc='A package only the temper matrix repo carries'
+arch=(any)
+license=(MIT)
+options=(!strip !debug)
+package() {
+  install -Dm644 /dev/null "$pkgdir/usr/share/temper-hello/hello"
+}

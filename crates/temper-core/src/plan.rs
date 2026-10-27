@@ -281,6 +281,10 @@ fn root_steps(
             home,
             &providers::effective_apt_sources(home, machine)?,
         ));
+        own.extend(providers::pacman_repos_pending(
+            home,
+            &providers::effective_pacman_repos(home, machine)?,
+        ));
     }
     for (_, step) in &resolved.steps {
         if !is_step(step) {
@@ -601,7 +605,11 @@ fn deployed_paths(home: &Path, machine: &Machine) -> Result<crate::ledger::Ledge
         .into_iter()
         .flat_map(|o| providers::RepoFile::files(&o.repo))
         .map(|f| ("apt-source", f));
-    for (kind, (src, dest)) in rpm.chain(apt) {
+    let pacman = providers::effective_pacman_repos(home, machine)?
+        .into_iter()
+        .flat_map(|o| providers::RepoFile::files(&o.repo))
+        .map(|f| ("pacman-repo", f));
+    for (kind, (src, dest)) in rpm.chain(apt).chain(pacman) {
         let target = dest.display().to_string();
         let hash = std::fs::read(home.join(&src))
             .ok()
@@ -668,12 +676,18 @@ fn packages_only_unrevertible(
         &crate::providers::effective_apt_sources(home, machine).unwrap_or_default(),
     )
     .is_empty();
-    let touched: [(&str, bool); 5] = [
+    let pacman_to_write = !crate::providers::pacman_repos_pending(
+        home,
+        &crate::providers::effective_pacman_repos(home, machine).unwrap_or_default(),
+    )
+    .is_empty();
+    let touched: [(&str, bool); 6] = [
         ("brew-trust", untrusted),
         ("flatpak-remote", remotes_to_add),
         ("gnome-extensions", switches_to_flip),
         ("rpm-repo", repos_to_write),
         ("apt-source", sources_to_write),
+        ("pacman-repo", pacman_to_write),
     ];
     touched
         .iter()
@@ -885,6 +899,16 @@ pub const KIND_ANSWERS: &[KindSpec] = &[
         absorb: &[Answer::Hand {
             file: "the `.sources` asset in the temper folder, declared in `apt_sources`",
             why: "absorbing a source means copying a file INTO the folder and \
+                  declaring it — authoring, which no reconcile does",
+        }],
+    },
+    KindSpec {
+        name: "pacman-repo",
+        detects: Detects::Differs,
+        converge: &[Answer::Verb("temper install")],
+        absorb: &[Answer::Hand {
+            file: "the repo's `.conf` asset in the temper folder, declared in `pacman_repos`",
+            why: "absorbing a repo means copying a file INTO the folder and \
                   declaring it — authoring, which no reconcile does",
         }],
     },
@@ -1880,6 +1904,57 @@ pub fn run_drift(
             findings.push(f);
         }
     }
+    // pacman repos: the files, as for apt; what makes pacman read them; and
+    // each repo's key in pacman's keyring, which is what makes its packages
+    // trusted.
+    let effective_pacman = providers::effective_pacman_repos(home, machine)?;
+    if !effective_pacman.is_empty() {
+        let caps = providers::pacman_repo_caps();
+        if caps.converge {
+            for r in providers::pacman_plumbing_state()? {
+                let mut f = Finding::state("pacman-repo", "pacman-repo", r.dest.display().to_string(), r.state);
+                f.detail = Some(format!(
+                    "what makes pacman read {} — `temper install` writes it",
+                    crate::manifest::PACMAN_REPOS_DIR
+                ));
+                findings.push(f);
+            }
+        }
+        for r in providers::repo_files_state(home, &effective_pacman)? {
+            if !caps.converge && r.from.is_some() {
+                continue;
+            }
+            let app = r.from.as_deref().unwrap_or("pacman-repo");
+            let state = if caps.converge {
+                r.state
+            } else {
+                crate::primitives::FileState::Unavailable
+            };
+            let mut f = Finding::state(app, "pacman-repo", r.dest.display().to_string(), state);
+            if !caps.converge {
+                f.detail = Some(providers::PACMAN_REPO_NO_PACMAN.to_string());
+            }
+            findings.push(f);
+        }
+        if caps.converge {
+            for (from, what, state) in providers::pacman_keys_state(home, &effective_pacman) {
+                let (ok, status) = match state {
+                    Some(providers::KeyState::Trusted) => (true, "in sync"),
+                    Some(providers::KeyState::Unsigned) => (false, "not locally signed"),
+                    Some(providers::KeyState::Absent) => (false, "missing from pacman's keyring"),
+                    None => (true, "unavailable — the key or pacman's keyring could not be read"),
+                };
+                findings.push(Finding {
+                    app: from.unwrap_or_else(|| "pacman-repo".into()),
+                    kind: "pacman-repo",
+                    target: what,
+                    ok,
+                    status: status.into(),
+                    detail: None,
+                });
+            }
+        }
+    }
     let effective_rpm = providers::effective_rpm(home, machine)?;
     for pkg in providers::rpm_ostree_extras(&effective_rpm, ignore) {
         findings.push(Finding {
@@ -2421,6 +2496,15 @@ pub fn run_install(
         &providers::effective_apt_sources(home, machine)?,
         dry_run,
     )?;
+    // pacman repos too: the `Include`, each key, each repo file, and the
+    // database of a repo pacman has not synced yet, so a package the same run
+    // declares from it can be found.
+    providers::pacman_repos_converge(
+        home,
+        &machine.name,
+        &providers::effective_pacman_repos(home, machine)?,
+        dry_run,
+    )?;
     // The journal opens BEFORE the converge, not after it. It used to be created
     // for the config-step phase only, so `install --packages-only` returned
     // without ever journaling anything — packages were unrevertible because
@@ -2501,7 +2585,7 @@ pub fn run_install(
             if let Ok(l) = deployed_paths(home, machine) {
                 let written: crate::ledger::Ledger = l
                     .into_iter()
-                    .filter(|(_, r)| matches!(r.kind.as_str(), "rpm-repo" | "apt-source"))
+                    .filter(|(_, r)| matches!(r.kind.as_str(), "rpm-repo" | "apt-source" | "pacman-repo"))
                     .collect();
                 let _ = crate::ledger::record_some(&machine.name, &written);
             }
@@ -2695,6 +2779,9 @@ pub struct PrunePlan {
     /// asked-for. They stay installed, and the manager's own autoremove takes
     /// them once nothing needs them.
     pub demote: Vec<(&'static str, String)>,
+    /// Keys temper imported into pacman's keyring for a repo the spec no longer
+    /// declares — never one the machine had before temper added it.
+    pub pacman_keys: Vec<String>,
     /// Package managers that are installed and could not be asked what they
     /// hold. **Never removable**, and deliberately not in `items()`: nothing is
     /// planned for them, which is the point. They are here so an empty plan can
@@ -2752,6 +2839,9 @@ impl PrunePlan {
         }
         for (pm, n) in &self.demote {
             out.push(("demote", format!("{pm} {n}")));
+        }
+        for k in &self.pacman_keys {
+            out.push(("pacman_keys", k.clone()));
         }
         for r in &self.flatpak_remotes {
             out.push(("flatpak_remotes", r.clone()));
@@ -2844,6 +2934,12 @@ impl PrunePlan {
                 self.demote.len()
             ));
         }
+        if !self.pacman_keys.is_empty() {
+            out.push(format!(
+                "removes {} key(s) from pacman's keyring",
+                self.pacman_keys.len()
+            ));
+        }
         out
     }
 
@@ -2860,6 +2956,7 @@ impl PrunePlan {
         "dependencies",
         "autoremove",
         "demote",
+        "pacman_keys",
         "flatpak_remotes",
         "residue",
         "retired",
@@ -2885,6 +2982,10 @@ impl PrunePlan {
             ),
             "demote" => format!(
                 "mark {item} as a dependency — it stays installed, for what needs it"
+            ),
+            "pacman_keys" => format!(
+                "remove key {item} from pacman's keyring — temper imported it for a pacman repo \
+                 the spec no longer declares"
             ),
             "flatpak_remotes" => format!("remove flatpak remote {item}"),
             "residue" => format!("remove {item} (deployed by a step the spec dropped)"),
@@ -3233,6 +3334,7 @@ mod prune_plan_tests {
             dependencies: vec![("dnf", "oniguruma".into())],
             autoremove: vec!["apt"],
             demote: vec![("pacman", "oniguruma".into())],
+            pacman_keys: vec!["0123ABCD".into()],
             flatpak_remotes: vec!["vendor".into()],
             residue: vec!["~/.config/gone".into()],
             retired: vec!["~/.config/retired".into()],
@@ -3250,7 +3352,7 @@ mod prune_plan_tests {
             )],
         };
         assert!(!p.is_empty());
-        assert_eq!(p.len(), 12, "a list prune acts on is not being counted");
+        assert_eq!(p.len(), 13, "a list prune acts on is not being counted");
 
         // …and each list alone is both non-empty and counted, so no single
         // variant can be the one that is silently dropped.
@@ -3261,6 +3363,7 @@ mod prune_plan_tests {
             PrunePlan { rpm_ostree: p.rpm_ostree.clone(), ..Default::default() },
             PrunePlan { system: vec![p.system[0].clone()], ..Default::default() },
             PrunePlan { demote: p.demote.clone(), ..Default::default() },
+            PrunePlan { pacman_keys: p.pacman_keys.clone(), ..Default::default() },
             PrunePlan { dependencies: p.dependencies.clone(), ..Default::default() },
             PrunePlan { autoremove: p.autoremove.clone(), ..Default::default() },
             PrunePlan { flatpak_remotes: p.flatpak_remotes.clone(), ..Default::default() },
@@ -3456,10 +3559,24 @@ pub fn run_prune(
             syspkg::Extras::NoBaseline => {}
         }
     }
+    // Keys temper imported for pacman repos the spec has dropped. A declared
+    // key that cannot be read leaves which are still needed unknown, so none.
+    let pacman_keys = match providers::pacman_keys_unneeded(
+        home,
+        &machine.name,
+        &providers::effective_pacman_repos(home, machine)?,
+    ) {
+        Some(keys) => keys,
+        None => {
+            unavailable.push("pacman-key");
+            Vec::new()
+        }
+    };
     Ok(PrunePlan {
         packages,
         untrust,
         extensions,
+        pacman_keys,
         rpm_ostree: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
         system,
         dependencies,
@@ -3667,6 +3784,12 @@ pub fn commit_prune(
         }
     }
     let _ = crate::ledger::save(&machine.name, &recorded);
+    // After the residue above, which takes a dropped repo's file: a repo still
+    // on disk with its key gone would fail every sync.
+    if !plan.pacman_keys.is_empty() {
+        let removed = providers::pacman_keys_remove(&machine.name, &plan.pacman_keys);
+        failed.extend(plan.pacman_keys.iter().filter(|k| !removed.contains(k)).cloned());
+    }
     providers::remotes_delete(&plan.flatpak_remotes)?;
     Ok(PruneOutcome { reboot, failed })
 }

@@ -269,6 +269,36 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         ),
         residue: Col::Yes,
     },
+    // The same again for pacman, with one more thing written: the key goes into
+    // pacman's keyring, so `prune` deletes the keys temper imported once no
+    // declared repo uses them. The `Include` that reads the directory, and its
+    // placeholder, stay: inert without repo files, and removing them in the wrong
+    // order leaves pacman unable to read its configuration at all.
+    ProviderSpec {
+        name: "pacman-repo",
+        kinds: &["pacman-repo"],
+        fleet_scope: Col::NA(
+            "a repo belongs to the bundle whose packages need it — group scope, gated",
+        ),
+        machine_scope: Col::Yes,
+        observe: Col::Yes,
+        install: Col::Yes,
+        prune: Col::NA(
+            "an undeclared repo is pacman.conf's own, not an extra; what temper wrote is residue",
+        ),
+        reconcile: Col::NA(
+            "absorbing a repo means copying a file INTO the folder and declaring it — \
+             authoring, which no reconcile does",
+        ),
+        ignore: Col::NA(
+            "nothing to silence: only repos temper deployed are ever reported, so \
+             pacman.conf's own never appear",
+        ),
+        revertible: Col::No(
+            "a repo and its key are root-owned state written outside the journal, like `sysfile`",
+        ),
+        residue: Col::Yes,
+    },
     ProviderSpec {
         name: "rpm-ostree",
         kinds: &["rpm-ostree", "rpm-ostree-extra"],

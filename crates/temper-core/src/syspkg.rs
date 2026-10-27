@@ -477,7 +477,7 @@ pub fn forget_marked(machine: &str, pm: SysPm, pkgs: &[String]) -> Result<()> {
 
 /// Whether this process already runs as root, so `sudo` is neither needed nor,
 /// in a minimal container, necessarily installed.
-fn is_root() -> bool {
+pub(crate) fn is_root() -> bool {
     std::fs::read_to_string("/proc/self/status")
         .ok()
         .and_then(|s| {
