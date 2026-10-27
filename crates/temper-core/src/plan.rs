@@ -2537,6 +2537,23 @@ pub fn run_install(
             .map(|p| (p.manager, p.match_name()))
             .collect()
     };
+    // Over ssh, polkit has no way to ask for the password a system-wide flatpak
+    // install may need — said before the converge, not discovered in it.
+    let flatpaks_to_add: Vec<&str> = to_add
+        .iter()
+        .filter(|(m, _)| *m == packages::Manager::Flatpak)
+        .map(|(_, n)| n.as_str())
+        .collect();
+    if !flatpaks_to_add.is_empty() && providers::over_ssh() && !crate::ui::json_mode() {
+        eprintln!(
+            "{} installing {} system-wide flatpak(s) over ssh: polkit authorizes that and \
+             may have no way to ask for a password here — `temper install` at the desktop, \
+             or `sudo flatpak install --system {}`, works where this does not",
+            crate::ui::yellow(crate::ui::g_warn()),
+            flatpaks_to_add.len(),
+            flatpaks_to_add.join(" ")
+        );
+    }
     let converged = providers::converge(&effective, dry_run, verbose)?;
     // The host package managers' lists count too, where they apply: a Debian
     // box whose packages are all `apt` ones declared zero packages otherwise,

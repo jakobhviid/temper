@@ -219,3 +219,43 @@ fn a_retired_flatpak_in_a_custom_installation_is_reported_not_planned() {
     assert!(extras(&v).is_empty(), "nothing here is removable: {v}");
     assert_eq!(unremovable(&v), vec!["org.elsewhere.Extra"], "{v}");
 }
+
+/// Over ssh, polkit has no way to ask for the password a system-wide removal may
+/// need: the preview says so before the confirm, and a removal that fails names
+/// the reason and the command that works from there.
+#[test]
+fn a_system_wide_removal_over_ssh_is_flagged_and_fails_loudly() {
+    let e = Env::new();
+    let bin = e.bin.path().join("flatpak");
+    fs::write(
+        &bin,
+        "#!/bin/sh\n\
+         case \" $* \" in\n\
+         \x20 *\"--columns=application,installation\"*) printf 'org.declared.App\\tsystem\\norg.sys.Extra\\tsystem\\n' ;;\n\
+         \x20 *\" list \"*) echo org.declared.App; echo org.sys.Extra ;;\n\
+         \x20 *\" uninstall \"*\"--system\"*) echo 'error: Not allowed' >&2; exit 1 ;;\n\
+         esac\nexit 0\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let ssh = |c: &mut Command| {
+        c.env("SSH_CONNECTION", "10.0.0.2 50000 10.0.0.1 22");
+    };
+
+    let mut preview = e.temper();
+    ssh(&mut preview);
+    let out = preview.args(["prune", "--dry-run"]).output().unwrap();
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("over ssh") && said.contains("org.sys.Extra"), "{said}");
+
+    let mut run = e.temper();
+    ssh(&mut run);
+    let out = run.args(["prune", "--yes"]).output().unwrap();
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("polkit"), "{said}");
+    assert!(said.contains("sudo flatpak uninstall --system org.sys.Extra"), "{said}");
+}

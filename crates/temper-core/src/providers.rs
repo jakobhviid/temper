@@ -757,6 +757,9 @@ pub fn converge(effective: &[Pkg], dry_run: bool, verbose: bool) -> Result<Conve
         // that had not happened.
         if !run_child(cmd, verbose, "flatpak install", "installing flatpaks") {
             failed.push("flatpak");
+            if let Some(hint) = flatpak_polkit_hint("install", &flatpaks) {
+                eprintln!("{} {hint}", crate::ui::yellow(crate::ui::g_warn()));
+            }
         }
     }
 
@@ -1309,6 +1312,11 @@ pub fn prune_apply(
                 crate::ui::yellow(crate::ui::g_warn()),
                 items.len()
             );
+            if *scope == "--system" {
+                if let Some(hint) = flatpak_polkit_hint("uninstall", items) {
+                    eprintln!("{} {hint}", crate::ui::yellow(crate::ui::g_warn()));
+                }
+            }
         }
     }
     Ok(())
@@ -2833,6 +2841,30 @@ pub fn flatpak_app_scopes() -> Option<Vec<(String, String)>> {
 /// batched over every item in its scope, is still one call per installation
 /// rather than one per item (Principle #4).
 pub const FLATPAK_SCOPES: [&str; 2] = ["--system", "--user"];
+
+/// Whether this run is in an ssh session. Installing or removing a system-wide
+/// flatpak is authorized by polkit, which lets an administrator at the desktop
+/// through without a password and, over ssh, wants one it has no way to ask for.
+/// A heuristic — a polkit rule can let remote administrators through too — so it
+/// warns, and never refuses.
+pub fn over_ssh() -> bool {
+    ["SSH_CONNECTION", "SSH_TTY"]
+        .iter()
+        .any(|v| std::env::var_os(v).is_some_and(|x| !x.is_empty()))
+}
+
+/// Said when a system-wide flatpak step failed where polkit cannot ask — over
+/// ssh, or with no terminal: the reason, and the command that works from here.
+pub fn flatpak_polkit_hint(verb: &str, ids: &[&str]) -> Option<String> {
+    let unasked = over_ssh() || !std::io::IsTerminal::is_terminal(&std::io::stdin());
+    (unasked && !ids.is_empty()).then(|| {
+        format!(
+            "system-wide flatpaks are authorized by polkit, which has no way to ask for a \
+             password over ssh or without a terminal. From here: sudo flatpak {verb} --system {}",
+            ids.join(" ")
+        )
+    })
+}
 
 /// The flag that removes from the installation flatpak calls `inst`, or `None`
 /// where temper has no way to name it.

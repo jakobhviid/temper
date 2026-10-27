@@ -348,15 +348,21 @@ of the drift. You pick a direction and run what it prints:
 > machine. Nothing it holds is ever proposed for removal; an unexamined manager
 > contributes no drops at all.
 
-> **And it says what it cannot remove.** `install` writes flatpaks to the
-> **system** installation; removing one is scoped to **your** installation,
-> because a system app belongs to the image or to root and needs polkit — which
-> over ssh prompts into a void. A system-installed extra is therefore reported
+> **And it says what it cannot remove.** An undeclared flatpak is removed from
+> whichever installation holds it — the system one `install` writes to, or
+> yours. One in a custom installation (`/etc/flatpak/installations.d/`) needs
+> `--installation=NAME`, which temper does not choose for you, so it is reported
 > and never counted: `unremovable` in `--json`, a yellow line on the terminal,
-> and absent from the "remove N item(s)?" total. On an image-based desktop that
-> is often *every* flatpak extra, so the plan is empty while `drift` still lists
-> them; the line is what connects the two. To act on one, either declare it, or
-> remove it yourself with `flatpak uninstall --system <id>`.
+> and absent from the "remove N item(s)?" total. To act on one, declare it, or
+> remove it yourself.
+
+> **System-wide flatpaks over ssh are not supported.** Installing or removing a
+> flatpak in the system installation is authorized by polkit, which lets an
+> administrator at the desktop through without a password, and over ssh or from
+> cron wants one it has no way to ask for. Run `install` and `prune` at the
+> desktop for those. In an ssh session temper says so before it starts, and a
+> step that fails there names the command that works from it —
+> `sudo flatpak install --system <ids>` or `sudo flatpak uninstall --system <ids>`.
 - **dnf / apt / pacman:** an extra is only what was installed by name since the
 machine's baseline — the image's own packages never are. `prune` removes it with
 the dependencies only it needed (all listed in the preview), and keeps one that

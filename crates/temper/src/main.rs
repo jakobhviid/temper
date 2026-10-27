@@ -1674,6 +1674,35 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
                 );
             }
         }
+        // Over ssh, a system-wide flatpak removal needs a polkit password with no
+        // way to ask for it — said before the confirm rather than after the failure.
+        if providers::over_ssh() {
+            let system: Vec<String> = providers::flatpak_app_scopes()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(app, inst)| {
+                    inst == "system"
+                        && prune_plan
+                            .packages
+                            .iter()
+                            .any(|(m, n)| *m == packages::Manager::Flatpak && n == app)
+                })
+                .map(|(app, _)| app)
+                .collect();
+            if !system.is_empty() {
+                eprintln!(
+                    "{}",
+                    ui::yellow(&format!(
+                        "  {} {} system-wide flatpak(s) over ssh: polkit authorizes their removal \
+                         and may have no way to ask for a password here — `sudo flatpak \
+                         uninstall --system {}` works where prune does not",
+                        ui::g_warn(),
+                        system.len(),
+                        system.join(" ")
+                    ))
+                );
+            }
+        }
         if prune_plan.is_empty() {
             println!("prune {}: nothing to remove.", m.name);
             // …but say whether that is an answer or a shrug. A manager that is

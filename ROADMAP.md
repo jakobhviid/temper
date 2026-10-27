@@ -54,16 +54,6 @@ here rather than done:
   installation** — that is the invariant the app-scope pairing test now holds for
   install-vs-uninstall, and remotes are outside it.
 
-**Root-owned removal is outside the one-password-per-run guarantee.** A
-system-scope `flatpak uninstall` authorizes through **polkit**, and
-`sudo::acquire` pre-authenticates **sudo**. flatpak's shipped rule
-(`/usr/share/polkit-1/rules.d/org.freedesktop.Flatpak.rules`) returns `YES` with
-no password for an active local session in `wheel` — which is why a storefront
-never prompts — but over ssh or from cron `subject.local` is false, it falls
-through to the action's implicit `auth_admin`, and there is nowhere to answer.
-`prune` should say so up front, naming what needs it, exactly as a run needing
-sudo already does; today it finds out when the removal fails.
-
 ## Scope-model gaps (known, ranked, each one a filled ⚠ or ❌ in the feature matrix)
 
 **The matrix's open cells**, so the summary and the table agree — this file rides
