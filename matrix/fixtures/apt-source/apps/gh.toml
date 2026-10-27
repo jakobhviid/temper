@@ -1,0 +1,5 @@
+os = "linux"
+apt = ["gh", "tree"]
+apt_sources = [
+    { source = "assets/apt/github-cli.sources", key = "assets/apt/githubcli-archive-keyring.gpg" },
+]

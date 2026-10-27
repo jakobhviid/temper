@@ -136,6 +136,45 @@ open tool and leaving the *data* in a folder anyone can bring. It's built in the
 same Rust-on-a-shared-tap style as its siblings [`grove`], [`amdl`], and
 [`dotsync`].
 
+## Where it runs, and how it is tested
+
+temper runs on macOS and Linux; release binaries are built for macOS (Apple
+silicon and Intel) and for Linux (x86_64 and aarch64, static, no dependencies).
+On Linux, packages come from Homebrew, Flatpak, rpm-ostree on an image-based
+Fedora, and the distribution's own dnf, apt or pacman.
+
+Every release must pass the test suite and `clippy` on Ubuntu in CI first. If
+either fails, nothing is published. That suite fakes the package managers. So
+the Linux package support is also checked on **a 12-distribution matrix of real
+systems**: as an ordinary user with `sudo`, against the real package managers,
+with every outcome verified through the distribution's own tools rather than
+temper's report.
+
+| package manager | distributions in the matrix |
+|---|---|
+| dnf 5 | Fedora 44 |
+| dnf 4 | AlmaLinux 8 and 9, Rocky Linux 10, CentOS Stream 9 |
+| apt | Debian 12 and 13, Ubuntu 22.04 and 24.04 |
+| pacman | Arch Linux |
+| zypper, apk | openSUSE Tumbleweed, Alpine 3.22 — negative controls: temper must install and write nothing there |
+
+Ubuntu 24.04, Fedora 44 and Debian 13 also run as full virtual machines. The
+matrix covers:
+- installing from the distribution's repositories and from a vendor's (an rpm
+  repo and an apt source);
+- drift in both directions;
+- `prune`, including the dependencies it frees and the ones it keeps;
+- `undo` and `reconcile`;
+- that an unrelated package the system no longer needs is never touched.
+
+The scripts and fixtures are in [`matrix/`](matrix/README.md), with what a
+container or VM runner has to provide.
+
+Not in the matrix: zypper and apk have no package list in temper, and image-based
+Fedora (Silverblue, Bazzite, CoreOS) — where packages are layered with
+rpm-ostree — is the author's daily environment rather than a matrix row. RHEL 7
+and its `yum` are not supported; on EL 8 and later, `yum` is dnf.
+
 ## Known Limitations
 
 - **`setkey(toml)`** preserves comments and formatting, *except* the changed

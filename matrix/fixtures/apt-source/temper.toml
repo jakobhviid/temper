@@ -1,0 +1,4 @@
+[[machine]]
+name = "m"
+os = "linux"
+apps = ["gh"]

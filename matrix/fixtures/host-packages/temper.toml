@@ -1,0 +1,7 @@
+# Fixture for the host-package-manager matrix: one bundle with a list per
+# family, plus the disabled vendor repo from the round-trip fixture.
+[[machine]]
+name = "m"
+os = "linux"
+apps = ["cli"]
+rpm_repos = [{ repo = "assets/rpm-repos/vendor.repo", key = "assets/rpm-repos/RPM-GPG-KEY-vendor" }]

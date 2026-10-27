@@ -1,0 +1,6 @@
+[vendor]
+name=Vendor (temper round-trip fixture)
+baseurl=https://example.invalid/rpm
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-vendor

@@ -185,6 +185,12 @@ worth telling apart before you go looking for a bug:
   Because the version is derived from commit history, nothing is lost by re-running —
   the same SHA yields the same version. Do **not** push an empty commit to "retry".
 
+**Changed the Linux package support** — `dnf` / `apt` / `pacman`, `rpm_repos`,
+`apt_sources`, or how prune, undo or drift treat them? The suite fakes the package
+managers, so also run [`matrix/`](matrix/README.md) on the 12 distributions the
+README's "Where it runs" names, before pushing. That section is a claim new users
+rely on; keep the matrix and the README listing the same distributions.
+
 Also worth knowing when tests touch the environment: run the suite once with an
 isolated git config before pushing, or a local setting can hide a CI failure —
 `GIT_CONFIG_GLOBAL=/dev/null cargo test --workspace`. A machine whose

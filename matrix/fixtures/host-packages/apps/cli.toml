@@ -1,0 +1,4 @@
+os     = "linux"
+dnf    = ["jq", "tree"]
+apt    = ["jq", "tree"]
+pacman = ["jq", "tree"]

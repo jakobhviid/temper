@@ -1,0 +1,3 @@
+os = "linux"
+dnf = ["gh", "tree"]
+rpm_repos = [{ repo = "assets/rpm-repos/gh-cli.repo" }]
