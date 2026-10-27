@@ -87,6 +87,32 @@ turns the children back on in full.
 
 ---
 
+## Homebrew's record of what was asked for
+
+temper never decides what a brew dependency is: it reads `installed_on_request`
+and keeps it true. Four Homebrew behaviours decide how, read from its source
+(7.0.11) and checked on real installs by `matrix/brew.sh`:
+
+- `brew bundle install` and `brew bundle cleanup --force` mark every formula
+  their file names as asked for (`Homebrew::Bundle.mark_as_installed_on_request!`).
+  A Brewfile line is therefore a request, and deleting it changes nothing in
+  Homebrew's record. `prune` writes the orphans it keeps into cleanup's file as
+  keepers, so after the cleanup it marks every formula that was a dependency
+  before, and is not declared, as one again.
+- `brew bundle cleanup` keeps everything a declared formula or cask needs:
+  runtime dependencies, and the build dependencies of a formula not poured from
+  a bottle. What it keeps never reaches its list, which is why the asked-for but
+  needed set (`asked_but_needed`) comes from `brew info --json=v2 --installed`.
+- `brew autoremove` takes a formula only when `installed_on_request` is `false`
+  and nothing installed names it: in an install record's runtime dependencies,
+  as a build dependency, or in a cask's `depends_on`. `asked_but_needed` reads
+  the same three, so marking a formula as a dependency never makes it an orphan.
+- `brew uninstall` runs a whole-system autoremove afterwards unless
+  `HOMEBREW_NO_AUTOREMOVE` is set. `prune` and `undo` set it and remove the
+  dependencies their own removals freed (`brew_uninstall`, `prune_apply`).
+
+---
+
 ## Adding a second settings backend
 
 ### Constraints

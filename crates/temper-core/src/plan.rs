@@ -1634,8 +1634,8 @@ pub fn run_drift(
                 ok: false,
                 status: "extra".into(),
                 detail: Some(format!(
-                    "{} needs it — `prune` keeps it as a dependency, `reconcile` declares it",
-                    needed_by.join(", ")
+                    "{} — `prune` keeps it as a dependency, `reconcile` declares it",
+                    needs_it(&needed_by)
                 )),
             });
         }
@@ -2996,6 +2996,34 @@ fn package_extras_observed(
     let brew = providers::brew_extras_split(&effective, ignore, false)?;
     out.extend(brew.extras.iter().cloned());
     Ok((out, unavailable, brew))
+}
+
+/// "amdl needs it", "amdl and gamdl need it", "amdl, cairo, curl and 25 more
+/// need it": a library like sqlite is needed by dozens, and the line is there to
+/// say why the formula stays, not to list them.
+fn needs_it(names: &[String]) -> String {
+    const SHOWN: usize = 3;
+    let (shown, rest) = names.split_at(names.len().min(SHOWN));
+    match (shown, rest.len()) {
+        ([], _) => "something declared needs it".into(),
+        ([one], 0) => format!("{one} needs it"),
+        ([init @ .., last], 0) => format!("{} and {last} need it", init.join(", ")),
+        (shown, more) => format!("{} and {more} more need it", shown.join(", ")),
+    }
+}
+
+#[cfg(test)]
+mod needs_it_tests {
+    use super::needs_it;
+
+    #[test]
+    fn says_who_needs_it_in_a_line() {
+        let n = |xs: &[&str]| needs_it(&xs.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(n(&["amdl"]), "amdl needs it");
+        assert_eq!(n(&["amdl", "gamdl"]), "amdl and gamdl need it");
+        assert_eq!(n(&["a", "b", "c"]), "a, b and c need it");
+        assert_eq!(n(&["a", "b", "c", "d", "e"]), "a, b, c and 2 more need it");
+    }
 }
 
 /// The `retire_packages` entries still installed: what drift reports and prune

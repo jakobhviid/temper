@@ -317,10 +317,11 @@ of the drift. You pick a direction and run what it prints:
     marks every formula a Brewfile names as asked for, so deleting a line —
     `brew "oniguruma"` from a Brewfile that also declares `jq` — leaves a formula
     Homebrew holds as asked for that nothing declares. drift lists it with what
-    needs it; `reconcile` declares it again; `prune` keeps it installed and marks
-    it as a dependency ("kept and marked as dependencies"), so it leaves with
-    `jq`. That is how to slim a Brewfile that lists dependencies: delete the
-    lines, then `temper prune`.
+    needs it (`jq needs it`); `reconcile` declares it again; `prune` keeps it
+    installed and marks it as a dependency (`mark brew oniguruma as a
+    dependency`, counted as "kept and marked as dependencies"), so it leaves
+    with `jq`. That is how to slim a Brewfile that lists dependencies: delete
+    the lines, then `temper prune`.
 
 > **An empty prune says why it is empty.** A manager that is installed and
 > failing cannot be asked what it holds, and its silence is not the same as
@@ -869,8 +870,8 @@ prune m: 3 item(s) removed
 ```
 
 `prune --json` lists the removals under `dnf`, `apt` and `pacman` as bare package
-names. `dependencies` (freed — brew's too) and `demote` (kept as dependencies)
-hold `"<manager> <name>"` strings, `autoremove` names the package managers
+names. `dependencies` (freed) and `demote` (kept as dependencies), brew's
+included, hold `"<manager> <name>"` strings, `autoremove` names the package managers
 whose own autoremove will run, `unremovable` holds `{manager, name, why}`
 objects, `unavailable` names package managers it could not ask, and `failed`
 names anything that did not go as planned.
