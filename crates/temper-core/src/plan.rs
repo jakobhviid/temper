@@ -3436,6 +3436,22 @@ pub fn run_prune(
     // `None` means the installations could not be read, and the executor removes
     // nothing in that case; the plan has to agree, or it over-promises.
     let mut unremovable: Vec<(&'static str, String, &'static str)> = Vec::new();
+    // A retired package is removed even though it is not an "extra": the spec
+    // says it must not be here, which is a stronger statement than not
+    // mentioning it. `[ignore]` deliberately does not silence this — ignoring is
+    // "do not tell me about it", and retiring is "get rid of it". Added before
+    // the flatpak split below, so a retired app meets the same installation
+    // check as an extra.
+    for p in retired_installed(home, machine)? {
+        if let Some(why) = brew_keeps(&p, brew.listed.as_ref()) {
+            unremovable.push((p.manager.as_str(), p.match_name(), why));
+            continue;
+        }
+        let entry = (p.manager, p.match_name());
+        if !packages.contains(&entry) {
+            packages.push(entry);
+        }
+    }
     if packages.iter().any(|(m, _)| *m == packages::Manager::Flatpak) {
         let live = providers::flatpak_app_scopes();
         packages.retain(|(m, n)| {
@@ -3474,20 +3490,6 @@ pub fn run_prune(
                 false
             }
         });
-    }
-    // A retired package is removed even though it is not an "extra": the spec
-    // says it must not be here, which is a stronger statement than not
-    // mentioning it. `[ignore]` deliberately does not silence this — ignoring is
-    // "do not tell me about it", and retiring is "get rid of it".
-    for p in retired_installed(home, machine)? {
-        if let Some(why) = brew_keeps(&p, brew.listed.as_ref()) {
-            unremovable.push((p.manager.as_str(), p.match_name(), why));
-            continue;
-        }
-        let entry = (p.manager, p.match_name());
-        if !packages.contains(&entry) {
-            packages.push(entry);
-        }
     }
     // Split residue by whether it is still what temper left: removable, or
     // reportable. A ledger is a record, not a licence to delete a user's edits.

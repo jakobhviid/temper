@@ -196,3 +196,26 @@ fn an_unreadable_installation_map_plans_no_removals() {
         "…and every extra must still be reported, with the reason: {v}"
     );
 }
+
+/// A retired flatpak goes through the same installation check as an extra. An
+/// ignored app is not an extra, so retiring it is the only way into the plan —
+/// and one in a custom installation must be reported, not promised.
+#[test]
+fn a_retired_flatpak_in_a_custom_installation_is_reported_not_planned() {
+    let e = Env::new();
+    fs::write(
+        e.home.path().join("temper.toml"),
+        "[[machine]]\nname = \"box\"\nos = \"linux\"\n\
+         packages = [\"flatpak \\\"org.declared.App\\\"\"]\n\
+         retire_packages = ['flatpak \"org.elsewhere.Extra\"']\n\
+         [ignore]\nflatpak = [\"org.sys.Extra\", \"org.usr.Extra\", \"org.elsewhere.Extra\"]\n",
+    )
+    .unwrap();
+    e.flatpak(
+        "printf 'org.declared.App\\tsystem\\norg.sys.Extra\\tsystem\\n\
+         org.usr.Extra\\tuser\\norg.elsewhere.Extra\\tmy-extra-install\\n'",
+    );
+    let v = e.plan();
+    assert!(extras(&v).is_empty(), "nothing here is removable: {v}");
+    assert_eq!(unremovable(&v), vec!["org.elsewhere.Extra"], "{v}");
+}
