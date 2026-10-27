@@ -277,3 +277,33 @@ fn an_undeclared_formula_something_needs_is_kept_as_a_dependency() {
     assert!(!e.asked("lib") && e.read("formulae").contains("lib false"));
     assert!(e.brew_extras().is_empty(), "drift agrees once it is a dependency");
 }
+
+/// A retired formula that is not installed is nothing to remove: drift does not
+/// report it and prune does not plan it. Installed, both name it.
+#[test]
+fn a_retired_formula_is_pruned_only_when_it_is_installed() {
+    let retire = "retire_packages = ['brew \"nvtop\"']\n";
+    let e = Env::with(true, MACHINE, CLEANUP, retire);
+    let names = |plan: &serde_json::Value| -> Vec<String> {
+        plan["extras"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let retired = |e: &Env| {
+        e.json(&["drift"])["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| f["kind"] == "retired-package")
+            .count()
+    };
+    assert_eq!(names(&e.json(&["prune", "--dry-run"])), vec!["jq"]);
+    assert_eq!(retired(&e), 0);
+
+    let e = Env::with(true, &format!("{MACHINE}nvtop true\n"), CLEANUP, retire);
+    assert_eq!(names(&e.json(&["prune", "--dry-run"])), vec!["jq", "nvtop"]);
+    assert_eq!(retired(&e), 1);
+}

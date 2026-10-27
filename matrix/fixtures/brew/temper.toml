@@ -1,5 +1,7 @@
-# Fixture for brew.sh: one declared formula, in the machine's own Brewfile.
+# Fixture for brew.sh: one declared formula, in the machine's own Brewfile, and
+# one retired formula that is never installed.
 [[machine]]
 name = "m"
 os = "linux"
 brewfile = "brewfiles/m"
+retire_packages = ['brew "nvtop"']

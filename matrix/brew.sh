@@ -31,7 +31,7 @@ mkdir -p ~/fresh; (cd ~/fresh && TEMPER_DIR=~/fresh temper init --yes --role ser
 seeded=$(cat ~/fresh/brewfiles/* 2>/dev/null | tr -d '"' | sed 's/^brew //' | sort | tr '\n' ,)
 
 # prune: the extra and the dependency only it needed; the orphan stays, still
-# nobody's request.
+# nobody's request; the retired formula that is not here is not planned.
 plan=$(temper --json prune --dry-run | j 'print(",".join(e["name"] for e in d["extras"])+"|"+",".join(d["dependencies"])+"|"+",".join(d["autoremove"]))')
 temper prune --yes >/tmp/p.out 2>&1; prune=$?
 { ! has jq && ! has oniguruma; } && pruned=yes || pruned=no

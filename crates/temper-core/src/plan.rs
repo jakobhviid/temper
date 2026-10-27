@@ -1732,26 +1732,15 @@ pub fn run_drift(
         });
     }
     // Packages declared unwanted that are nonetheless installed.
-    {
-        let unwanted: Vec<packages::Pkg> = crate::manifest::effective_retire_packages(home, machine)?
-            .iter()
-            .filter_map(|t| packages::parse(t).ok())
-            .collect();
-        if !unwanted.is_empty() {
-            let installed = providers::probe(&unwanted)?;
-            for p in &unwanted {
-                if installed.probed(p.manager) && installed.contains(p.manager, &p.match_name()) {
-                    findings.push(Finding {
-                        app: "retired".into(),
-                        kind: "retired-package",
-                        target: format!("{} {}", p.manager.as_str(), p.match_name()),
-                        ok: false,
-                        status: "still installed".into(),
-                        detail: Some("declared retired — `prune` removes it".into()),
-                    });
-                }
-            }
-        }
+    for p in retired_installed(home, machine)? {
+        findings.push(Finding {
+            app: "retired".into(),
+            kind: "retired-package",
+            target: format!("{} {}", p.manager.as_str(), p.match_name()),
+            ok: false,
+            status: "still installed".into(),
+            detail: Some("declared retired — `prune` removes it".into()),
+        });
     }
     // Explicitly retired paths that are still here.
     for path in crate::manifest::effective_retire(home, machine)? {
@@ -3009,6 +2998,24 @@ fn package_extras_observed(
     Ok((out, unavailable, brew))
 }
 
+/// The `retire_packages` entries still installed: what drift reports and prune
+/// removes, from one list so the two cannot disagree. A manager that could not
+/// be asked contributes none — it cannot say the package is there.
+fn retired_installed(home: &Path, machine: &Machine) -> Result<Vec<packages::Pkg>> {
+    let unwanted: Vec<packages::Pkg> = crate::manifest::effective_retire_packages(home, machine)?
+        .iter()
+        .filter_map(|t| packages::parse(t).ok())
+        .collect();
+    if unwanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let installed = providers::probe(&unwanted)?;
+    Ok(unwanted
+        .into_iter()
+        .filter(|p| installed.probed(p.manager) && installed.contains(p.manager, &p.match_name()))
+        .collect())
+}
+
 #[cfg(test)]
 mod revertibility_tests {
     use super::*;
@@ -3291,12 +3298,10 @@ pub fn run_prune(
     // says it must not be here, which is a stronger statement than not
     // mentioning it. `[ignore]` deliberately does not silence this — ignoring is
     // "do not tell me about it", and retiring is "get rid of it".
-    for token in crate::manifest::effective_retire_packages(home, machine)? {
-        if let Ok(p) = packages::parse(&token) {
-            let entry = (p.manager, p.match_name());
-            if !packages.contains(&entry) {
-                packages.push(entry);
-            }
+    for p in retired_installed(home, machine)? {
+        let entry = (p.manager, p.match_name());
+        if !packages.contains(&entry) {
+            packages.push(entry);
         }
     }
     // Split residue by whether it is still what temper left: removable, or
