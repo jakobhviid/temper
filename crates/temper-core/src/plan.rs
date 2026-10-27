@@ -373,6 +373,11 @@ fn syspkg_pending(home: &Path, machine: &Machine) -> Result<Vec<String>> {
                 out.push(format!("{} install: {}", pm.name(), missing.join(", ")));
             }
         }
+        if let Some(deps) = syspkg::held_as_dependency(pm, &effective) {
+            if !deps.is_empty() {
+                out.push(format!("{} mark as yours: {}", pm.name(), deps.join(", ")));
+            }
+        }
     }
     Ok(out)
 }
@@ -1950,8 +1955,9 @@ pub fn run_drift(
     Ok(findings)
 }
 
-/// Install what one host package manager is missing. Returns whether the
-/// manager reached the declared state — `false` names it in the run's failures.
+/// Install what one host package manager is missing, and mark as asked-for the
+/// declared packages it holds only as dependencies. Returns whether the manager
+/// reached the declared state — `false` names it in the run's failures.
 ///
 /// Repos converge before this (`run_install`), so a package from a declared
 /// `rpm_repos` entry resolves on the first run. The baseline is recorded before
@@ -2003,16 +2009,34 @@ fn syspkg_converge(
         );
     }
     let landed = syspkg::install(pm, &missing, verbose);
-    journal.record_packages(pm.name(), &landed.added);
-    let short = landed.requested.len() < missing.len();
+    journal.record_packages(pm.name(), &landed);
+    let short = landed.len() < missing.len();
     if short {
-        let absent: Vec<&String> = missing.iter().filter(|p| !landed.requested.contains(p)).collect();
+        let absent: Vec<&str> = missing
+            .iter()
+            .filter(|p| !landed.contains(p))
+            .map(String::as_str)
+            .collect();
         eprintln!(
-            "{} {} did not install: {} — a package name is needed, not a group or a provide",
+            "{} {} did not install: {} — not found, or not a package name (a group \
+             or a provide installs nothing of that name)",
             crate::ui::yellow(crate::ui::g_warn()),
             pm.name(),
-            absent.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+            absent.join(", ")
         );
+    }
+    // A declared package the manager holds as somebody else's dependency goes
+    // with that somebody at the manager's next autoremove. Marking it asked-for
+    // is what `apt install` of it would have done; dnf and pacman have to be told.
+    // No package changes, and undo marks it back.
+    let mut marked_ok = true;
+    if let Some(deps) = syspkg::held_as_dependency(pm, &effective) {
+        if !deps.is_empty() {
+            let marked = syspkg::mark(pm, &deps, true);
+            journal.record_marked(pm.name(), &machine.name, &marked);
+            let _ = syspkg::note_marked(&machine.name, pm, &marked);
+            marked_ok = marked.len() == deps.len();
+        }
     }
     if short && pm == syspkg::SysPm::Pacman {
         eprintln!(
@@ -2021,7 +2045,7 @@ fn syspkg_converge(
             crate::ui::dim(crate::ui::g_arrow())
         );
     }
-    Ok(!short)
+    Ok(!short && marked_ok)
 }
 
 /// Drift for one host package manager, both directions.
@@ -2115,6 +2139,22 @@ fn syspkg_findings(
                 });
             }
         }
+    }
+    // Installed, but held by the manager as another package's dependency: its
+    // autoremove takes it when that package goes, declaration or not.
+    for pkg in syspkg::held_as_dependency(pm, &effective).unwrap_or_default() {
+        out.push(Finding {
+            app: pm.name().into(),
+            kind: pm.kind(false),
+            target: pkg,
+            ok: false,
+            status: "installed as a dependency".into(),
+            detail: Some(
+                "the package manager holds it as another package's dependency and would \
+                 remove it with that package — `install` marks it as yours"
+                    .into(),
+            ),
+        });
     }
     match syspkg::extras(&machine.name, pm, &effective, ignore) {
         syspkg::Extras::Found(extras) => {
@@ -2625,6 +2665,11 @@ pub struct PrunePlan {
     /// own simulation removes without taking a dependant along; the rest are in
     /// `unremovable`.
     pub system: Vec<(syspkg::SysPm, String)>,
+    /// Host-package-manager extras to keep but mark as dependencies again:
+    /// something installed needs them, or temper only ever marked them as
+    /// asked-for. They stay installed, and the manager's own autoremove takes
+    /// them once nothing needs them.
+    pub demote: Vec<(syspkg::SysPm, String)>,
     /// Package managers that are installed and could not be asked what they
     /// hold. **Never removable**, and deliberately not in `items()`: nothing is
     /// planned for them, which is the point. They are here so an empty plan can
@@ -2673,6 +2718,9 @@ impl PrunePlan {
         // labels are `SysPm::name`, and a test holds them to `LISTS`.
         for (pm, n) in &self.system {
             out.push((pm.name(), n.clone()));
+        }
+        for (pm, n) in &self.demote {
+            out.push(("demote", format!("{} {n}", pm.name())));
         }
         for r in &self.flatpak_remotes {
             out.push(("flatpak_remotes", r.clone()));
@@ -2747,6 +2795,12 @@ impl PrunePlan {
                 out.push(format!("removes {count} {} package(s)", pm.name()));
             }
         }
+        if !self.demote.is_empty() {
+            out.push(format!(
+                "marks {} package(s) as dependencies (they stay installed)",
+                self.demote.len()
+            ));
+        }
         out
     }
 
@@ -2760,6 +2814,7 @@ impl PrunePlan {
         "dnf",
         "apt",
         "pacman",
+        "demote",
         "flatpak_remotes",
         "residue",
         "retired",
@@ -2775,6 +2830,9 @@ impl PrunePlan {
             "extensions" => format!("uninstall extension {item}"),
             "rpm_ostree" => format!("un-layer rpm {item}"),
             "dnf" | "apt" | "pacman" => format!("remove {list} package {item}"),
+            "demote" => format!(
+                "mark {item} as a dependency — it stays installed, for what needs it"
+            ),
             "flatpak_remotes" => format!("remove flatpak remote {item}"),
             "residue" => format!("remove {item} (deployed by a step the spec dropped)"),
             "retired" => format!("remove {item} (the spec retires this path)"),
@@ -3026,6 +3084,7 @@ mod prune_plan_tests {
                 (syspkg::SysPm::Dnf, "cowsay".into()),
                 (syspkg::SysPm::Apt, "cowsay".into()),
             ],
+            demote: vec![(syspkg::SysPm::Pacman, "oniguruma".into())],
             flatpak_remotes: vec!["vendor".into()],
             residue: vec!["~/.config/gone".into()],
             retired: vec!["~/.config/retired".into()],
@@ -3043,7 +3102,7 @@ mod prune_plan_tests {
             )],
         };
         assert!(!p.is_empty());
-        assert_eq!(p.len(), 9, "a list prune acts on is not being counted");
+        assert_eq!(p.len(), 10, "a list prune acts on is not being counted");
 
         // …and each list alone is both non-empty and counted, so no single
         // variant can be the one that is silently dropped.
@@ -3053,6 +3112,7 @@ mod prune_plan_tests {
             PrunePlan { extensions: p.extensions.clone(), ..Default::default() },
             PrunePlan { rpm_ostree: p.rpm_ostree.clone(), ..Default::default() },
             PrunePlan { system: vec![p.system[0].clone()], ..Default::default() },
+            PrunePlan { demote: p.demote.clone(), ..Default::default() },
             PrunePlan { flatpak_remotes: p.flatpak_remotes.clone(), ..Default::default() },
             PrunePlan { residue: p.residue.clone(), ..Default::default() },
         ] {
@@ -3208,7 +3268,7 @@ pub fn run_prune(
     // manager's own simulation says would take a dependant along. Decided here,
     // at plan time, so the preview and the confirm describe the run that will
     // happen rather than one the executor then declines.
-    let mut system = Vec::new();
+    let (mut system, mut demote) = (Vec::new(), Vec::new());
     for &pm in syspkg::SysPm::ALL {
         if !syspkg::caps(pm).converge {
             continue;
@@ -3216,9 +3276,14 @@ pub fn run_prune(
         let effective = syspkg::effective(home, machine, pm)?;
         match syspkg::extras(&machine.name, pm, &effective, ignore) {
             syspkg::Extras::Found(extras) => {
-                let (ok, held) = syspkg::removable(pm, &extras);
-                system.extend(ok.into_iter().map(|p| (pm, p)));
-                unremovable.extend(held.into_iter().map(|(p, why)| (pm.name(), p, why)));
+                let marked = syspkg::marked(&machine.name, pm);
+                let Some(plan) = syspkg::release_plan(pm, &extras, &marked) else {
+                    unavailable.push(pm.name());
+                    continue;
+                };
+                system.extend(plan.remove.into_iter().map(|p| (pm, p)));
+                demote.extend(plan.demote.into_iter().map(|p| (pm, p)));
+                unremovable.extend(plan.held.into_iter().map(|(p, why)| (pm.name(), p, why)));
             }
             syspkg::Extras::Unavailable => unavailable.push(pm.name()),
             // Nothing to tell apart from the image yet; drift says so.
@@ -3231,6 +3296,7 @@ pub fn run_prune(
         extensions,
         rpm_ostree: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
         system,
+        demote,
         flatpak_remotes: providers::remotes_extras(
             &providers::effective_remotes(home, machine)?,
             ignore,
@@ -3298,19 +3364,29 @@ pub fn commit_prune(
     // packages go before repos on the way out as they come after them on the way
     // in. What did not go is read back and named, not assumed.
     for &pm in syspkg::SysPm::ALL {
-        let pkgs: Vec<String> = plan
-            .system
-            .iter()
-            .filter(|(p, _)| *p == pm)
-            .map(|(_, n)| n.clone())
-            .collect();
-        if pkgs.is_empty() {
+        let of = |list: &[(syspkg::SysPm, String)]| -> Vec<String> {
+            list.iter()
+                .filter(|(p, _)| *p == pm)
+                .map(|(_, n)| n.clone())
+                .collect()
+        };
+        let release = syspkg::Release {
+            remove: of(&plan.system),
+            demote: of(&plan.demote),
+            ..Default::default()
+        };
+        if release.remove.is_empty() && release.demote.is_empty() {
             continue;
         }
-        let gone = syspkg::remove(pm, &pkgs, false);
+        let (removed, demoted) = syspkg::release(pm, &release, false);
+        let _ = syspkg::forget_marked(&machine.name, pm, &demoted);
+        let _ = syspkg::forget_marked(&machine.name, pm, &removed);
         failed.extend(
-            pkgs.iter()
-                .filter(|p| !gone.contains(p))
+            release
+                .remove
+                .iter()
+                .filter(|p| !removed.contains(p))
+                .chain(release.demote.iter().filter(|p| !demoted.contains(p)))
                 .map(|p| format!("{} {p}", pm.name())),
         );
     }

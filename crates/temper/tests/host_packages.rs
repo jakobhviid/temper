@@ -55,7 +55,13 @@ impl Env {
             "#!/bin/sh\nS={s}\nLOG={log}\n\
              add() {{ for p in \"$@\"; do \
                grep -qx -e \"$p\" \"$S/installed\" 2>/dev/null || echo \"$p\" >> \"$S/installed\"; \
-               grep -qx -e \"$p\" \"$S/explicit\" 2>/dev/null || echo \"$p\" >> \"$S/explicit\"; done; }}\n\
+               grep -qx -e \"$p\" \"$S/explicit\" 2>/dev/null || echo \"$p\" >> \"$S/explicit\"; \
+               for d in $(grep \"^$p \" \"$S/deps\" 2>/dev/null | cut -d' ' -f2-); do \
+                 grep -qx -e \"$d\" \"$S/installed\" || echo \"$d\" >> \"$S/installed\"; done; done; }}\n\
+             markx() {{ for p in \"$@\"; do grep -qx -e \"$p\" \"$S/installed\" || return 1; \
+               grep -qx -e \"$p\" \"$S/explicit\" || echo \"$p\" >> \"$S/explicit\"; done; }}\n\
+             markd() {{ for p in \"$@\"; do grep -vx -e \"$p\" \"$S/explicit\" > \"$S/t\"; \
+               mv \"$S/t\" \"$S/explicit\"; done; }}\n\
              del() {{ for p in \"$@\"; do case \"$p\" in -*) continue;; esac; for f in installed explicit; do \
                grep -vx -e \"$p\" \"$S/$f\" > \"$S/t\"; mv \"$S/t\" \"$S/$f\"; done; done; }}\n\
              needed() {{ grep -qx \"$1\" \"$S/needed\" 2>/dev/null; }}\n",
@@ -92,6 +98,22 @@ impl Env {
         }
     }
 
+    fn explicit(&self) -> Vec<String> {
+        fs::read_to_string(self.pm.path().join("explicit"))
+            .unwrap_or_default()
+            .lines()
+            .map(String::from)
+            .collect()
+    }
+
+    /// What installing `pkg` pulls in as dependencies.
+    fn deps(&self, pkg: &str, deps: &[&str]) {
+        let p = self.pm.path().join("deps");
+        let mut body = fs::read_to_string(&p).unwrap_or_default();
+        body.push_str(&format!("{pkg} {}\n", deps.join(" ")));
+        fs::write(p, body).unwrap();
+    }
+
     fn installed(&self) -> Vec<String> {
         fs::read_to_string(self.pm.path().join("installed"))
             .unwrap_or_default()
@@ -111,11 +133,14 @@ impl Env {
         );
         self.script(
             "dnf",
-            "case \"$*\" in *repoquery*) cat \"$S/explicit\"; exit 0;; esac\n\
+            "if [ \"$1\" = --version ]; then \
+               if [ -e \"$S/dnf4\" ]; then echo 4.14.0; else echo 'dnf5 version 5.4.6.0'; fi; exit 0; fi\n\
+             case \"$*\" in *repoquery*) cat \"$S/explicit\"; exit 0;; esac\n\
              echo \"dnf $*\" >> \"$LOG\"\n\
              case \"$1\" in\n\
                install) shift; shift; add \"$@\";;\n\
                remove) shift; shift; shift; del \"$@\";;\n\
+               -y) v=$3; shift; shift; shift; case $v in user|install) markx \"$@\";; dependency|remove) markd \"$@\";; esac;;\n\
              esac\nexit 0\n",
         );
     }
@@ -125,7 +150,14 @@ impl Env {
             "dpkg-query",
             "while read -r p; do printf '%s\\tii \\n' \"$p\"; done < \"$S/installed\"\n",
         );
-        self.script("apt-mark", "cat \"$S/explicit\"\n");
+        self.script(
+            "apt-mark",
+            "case \"$1\" in\n\
+               showmanual) cat \"$S/explicit\";;\n\
+               manual) echo \"apt-mark $*\" >> \"$LOG\"; shift; markx \"$@\";;\n\
+               auto) echo \"apt-mark $*\" >> \"$LOG\"; shift; markd \"$@\";;\n\
+             esac\n",
+        );
         self.script("dpkg", "echo amd64\n");
         self.script(
             "apt-get",
@@ -157,6 +189,7 @@ impl Env {
              case \"$1\" in\n\
                -S) shift; shift; shift; add $(expand \"$@\");;\n\
                -R) shift; shift; del \"$@\";;\n\
+               -D) w=$2; shift; shift; if [ \"$w\" = --asexplicit ]; then markx \"$@\"; else markd \"$@\"; fi;;\n\
              esac\nexit 0\n",
         );
     }
@@ -309,11 +342,12 @@ fn dnf_counts_extras_from_the_baseline_and_prunes_only_those() {
     }
 }
 
-/// A removal that would take a dependant with it is held back, named, and not
-/// counted — the preview is the effect.
+/// An extra something installed needs is not removed and not left reported:
+/// it goes back to being a dependency, kept for what needs it, and the
+/// manager's own autoremove takes it once nothing does.
 #[cfg(target_os = "linux")]
 #[test]
-fn apt_prune_holds_back_a_package_another_depends_on() {
+fn apt_prune_demotes_an_extra_another_package_needs() {
     let e = Env::new();
     e.apt();
     e.machine(&["apt", "bash"], &["apt", "bash"], &["libfoo"]);
@@ -326,16 +360,15 @@ fn apt_prune_holds_back_a_package_another_depends_on() {
     let out = e.temper().args(["--json", "prune", "--yes"]).output().unwrap();
     let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(doc["apt"], serde_json::json!(["cowsay"]), "{doc}");
-    let held = doc["unremovable"].as_array().unwrap();
-    assert!(
-        held.iter().any(|h| h["manager"] == "apt" && h["name"] == "libfoo"),
-        "libfoo is needed by another package and must be reported, not removed: {doc}"
-    );
-    assert!(e.installed().contains(&"libfoo".to_string()));
+    assert_eq!(doc["demote"], serde_json::json!(["apt libfoo"]), "{doc}");
+    assert_eq!(doc["unremovable"], serde_json::json!([]), "{doc}");
+    assert_eq!(doc["failed"], serde_json::json!([]), "{doc}");
+    assert!(e.installed().contains(&"libfoo".to_string()), "it stays installed");
+    assert!(!e.explicit().contains(&"libfoo".to_string()), "…as a dependency");
     assert!(!e.installed().contains(&"cowsay".to_string()));
     assert!(
         !e.log().lines().any(|l| l.starts_with("apt-get remove") && l.contains("libfoo")),
-        "a held-back package must never reach the removal:\n{}",
+        "a package something needs must never reach a removal:\n{}",
         e.log()
     );
 }
@@ -472,11 +505,11 @@ fn reconcile_absorbs_a_hand_install_into_the_machine() {
 }
 
 /// A name the manager accepts without installing a package of that name — a
-/// pacman group — is not journaled; only what the run actually added is, so
-/// `undo` cannot take a member that was there before.
+/// pacman group — is journaled as nothing, so `undo` removes nothing it
+/// expands to; and the run says the name did not install.
 #[cfg(target_os = "linux")]
 #[test]
-fn undo_takes_back_what_the_run_added_and_not_what_a_group_expands_to() {
+fn a_group_name_is_journaled_as_nothing() {
     let e = Env::new();
     e.pacman();
     // `old` is a group member installed long before temper.
@@ -486,15 +519,17 @@ fn undo_takes_back_what_the_run_added_and_not_what_a_group_expands_to() {
 
     let out = e.temper().args(["install", "--yes"]).output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(e.installed().contains(&"new".to_string()));
-    assert!(stderr.contains("fonts"), "a name that installed no package of that name is said:\n{stderr}");
-
-    e.temper().arg("undo").assert().success();
-    assert!(!e.installed().contains(&"new".to_string()), "the run added `new`; undo removes it");
-    assert!(e.installed().contains(&"old".to_string()), "`old` predates the run and must stay");
+    assert!(stderr.contains("did not install: fonts"), "{stderr}");
+    let undo = e.temper().arg("undo").output().unwrap();
     assert!(
-        !e.log().lines().any(|l| l.starts_with("pacman -R") && l.contains("fonts")),
-        "the group name must never reach a removal:\n{}",
+        !String::from_utf8_lossy(&undo.stdout).contains("pacman:"),
+        "nothing pacman installed by name, so nothing to revert"
+    );
+    assert!(e.installed().contains(&"old".to_string()));
+    assert!(e.installed().contains(&"new".to_string()));
+    assert!(
+        !e.log().lines().any(|l| l.starts_with("pacman -R")),
+        "no removal may run:\n{}",
         e.log()
     );
 }
@@ -622,4 +657,115 @@ fn a_source_whose_key_failed_is_not_written() {
         e.log()
     );
     assert!(stderr.contains("cites that key"), "{stderr}");
+}
+
+/// `undo` removes only the packages the run installed by name. What they pulled
+/// in stays, marked as dependencies, for the manager's own autoremove — temper
+/// never names a dependency.
+#[cfg(target_os = "linux")]
+#[test]
+fn undo_removes_only_what_was_named_and_leaves_dependencies_to_the_manager() {
+    let e = Env::new();
+    e.pacman();
+    e.machine(&["base"], &["base"], &[]);
+    e.deps("jq", &["oniguruma"]);
+    e.spec(&format!("{MACHINE}pacman = [\"jq\"]\n"));
+    e.temper().args(["install", "--yes"]).assert().success();
+    assert!(e.installed().contains(&"oniguruma".to_string()));
+    assert!(!e.explicit().contains(&"oniguruma".to_string()), "a dependency, not yours");
+
+    let out = e.temper().arg("undo").output().unwrap();
+    assert!(out.status.success());
+    assert!(e.log().contains("pacman -R --noconfirm jq"), "{}", e.log());
+    assert!(!e.installed().contains(&"jq".to_string()));
+    assert!(
+        e.installed().contains(&"oniguruma".to_string()),
+        "the dependency is the manager's to clean up, not temper's"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("pacman -Qdtq"),
+        "the run names the manager's own clean-up"
+    );
+}
+
+/// A declared package the manager holds as somebody else's dependency would go
+/// with that somebody at the next autoremove. drift says so, `install` marks it
+/// as yours — the command differs between dnf4 and dnf5 — and `undo` marks it
+/// back without removing anything.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_declared_dependency_is_marked_as_yours_and_undo_marks_it_back() {
+    for (dnf4, up, down) in [(false, "mark user", "mark dependency"), (true, "mark install", "mark remove")] {
+        let e = Env::new();
+        e.dnf();
+        if dnf4 {
+            fs::write(e.pm.path().join("dnf4"), "").unwrap();
+        }
+        e.machine(&["bash", "oniguruma"], &["bash"], &[]);
+        e.spec(&format!("{MACHINE}dnf = [\"oniguruma\"]\n"));
+
+        let doc = e.drift_json();
+        let f = findings(&doc, &["dnf"]);
+        assert!(
+            f.iter().any(|(_, t, ok)| t == "oniguruma" && !ok),
+            "a declared package held as a dependency is drift: {doc}"
+        );
+        assert!(doc.to_string().contains("installed as a dependency"), "{doc}");
+
+        e.temper().args(["install", "--yes"]).assert().success();
+        assert!(e.log().contains(&format!("dnf -y {up} oniguruma")), "{}", e.log());
+        assert!(e.explicit().contains(&"oniguruma".to_string()));
+        assert!(!e.log().contains("dnf install"), "nothing is installed: {}", e.log());
+        let doc = e.drift_json();
+        assert!(findings(&doc, &["dnf"]).iter().all(|(_, _, ok)| *ok), "{doc}");
+
+        e.temper().arg("undo").assert().success();
+        assert!(e.log().contains(&format!("dnf -y {down} oniguruma")), "{}", e.log());
+        assert!(!e.explicit().contains(&"oniguruma".to_string()));
+        assert!(e.installed().contains(&"oniguruma".to_string()), "undo of a mark removes nothing");
+        assert!(!e.log().contains("dnf remove"), "{}", e.log());
+    }
+}
+
+/// A package temper only marked, never installed, is only ever un-marked: once
+/// the spec drops it, `prune` makes it a dependency again — even though nothing
+/// needs it — and leaves removing it to the manager.
+#[cfg(target_os = "linux")]
+#[test]
+fn prune_un_marks_what_temper_only_marked() {
+    let e = Env::new();
+    e.apt();
+    e.machine(&["apt", "libfoo"], &["apt"], &[]);
+    e.spec(&format!("{MACHINE}apt = [\"libfoo\", \"jq\"]\n"));
+    e.temper().args(["install", "--yes"]).assert().success();
+    assert!(e.explicit().contains(&"libfoo".to_string()));
+
+    e.spec(&format!("{MACHINE}apt = [\"jq\"]\n"));
+    let out = e.temper().args(["--json", "prune", "--yes"]).output().unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["demote"], serde_json::json!(["apt libfoo"]), "{doc}");
+    assert_eq!(doc["apt"], serde_json::json!([]), "{doc}");
+    assert!(e.installed().contains(&"libfoo".to_string()));
+    assert!(!e.explicit().contains(&"libfoo".to_string()));
+}
+
+/// The summary counts a demotion as kept, not removed — "2 removed" on a run
+/// that removed one package and kept the other would misstate the machine.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_prune_summary_does_not_count_a_kept_package_as_removed() {
+    let e = Env::new();
+    e.apt();
+    e.machine(&["apt"], &["apt"], &["libfoo"]);
+    e.spec(&format!("{MACHINE}apt = [\"jq\"]\n"));
+    e.temper().args(["install", "--yes"]).assert().success();
+    e.hand_install("libfoo");
+    e.hand_install("cowsay");
+    let out = e.temper().args(["prune", "--yes"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("1 item(s) removed, 1 kept and marked as dependencies"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("mark apt libfoo as a dependency"), "{stdout}");
 }

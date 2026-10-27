@@ -132,6 +132,15 @@ enum Entry {
         provider: String,
         packages: Vec<String>,
     },
+    /// Declared packages this run marked as asked-for without installing them —
+    /// the host package manager held them as another package's dependency.
+    /// Undo marks them as dependencies again; it never removes them.
+    PackagesMarked {
+        provider: String,
+        /// The machine whose record of temper's marks this joins.
+        machine: String,
+        packages: Vec<String>,
+    },
     /// Something this run changed that `undo` cannot take back — an `exec`, a
     /// `sysfile`, a `setkey(defaults)`, a tap-trust.
     ///
@@ -161,11 +170,12 @@ fn uninstall_packages(provider: &str, packages: &[String]) -> usize {
     // formula that is now some other package's live dependency made Homebrew
     // refuse the whole invocation and the entire set reported
     // `could not un-install` (Principle #6: contain the damage and name it).
-    // The host package managers check, isolate and read back on their own: the
-    // simulation names what it holds back, so a per-item retry here would only
-    // report it twice, and a package already gone counts as reverted.
+    // The host package managers check, isolate and read back on their own: a
+    // package something now needs is kept as a dependency rather than removed,
+    // so a per-item retry here would only report it twice, and a package
+    // already gone counts as reverted.
     if let Some(pm) = crate::syspkg::SysPm::from_name(provider) {
-        return crate::syspkg::revert(pm, packages);
+        return crate::syspkg::revert(pm, packages, None);
     }
     if run_uninstall(provider, packages) {
         return packages.len();
@@ -375,6 +385,19 @@ impl Journal {
         });
     }
 
+    /// Record declared packages this run marked as asked-for without
+    /// installing them, so `undo` can mark them as dependencies again.
+    pub fn record_marked(&mut self, provider: &str, machine: &str, packages: &[String]) {
+        if packages.is_empty() {
+            return;
+        }
+        self.entries.push(Entry::PackagesMarked {
+            provider: provider.to_string(),
+            machine: machine.to_string(),
+            packages: packages.to_vec(),
+        });
+    }
+
     pub fn record_dconf(&mut self, key: &str, before: Option<String>, after: String) {
         self.entries.push(Entry::DconfKey {
             key: key.to_string(),
@@ -518,20 +541,20 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
                 // packages with it, so the forecast runs the same check the
                 // revert will — read-only — rather than promising the whole set.
                 if let Some(plan) = crate::syspkg::SysPm::from_name(provider)
-                    .and_then(|pm| crate::syspkg::revert_plan(pm, packages))
+                    .and_then(|pm| crate::syspkg::release_plan(pm, packages, &Default::default()))
                 {
-                    reverted += plan.remove.len() + plan.gone.len();
+                    reverted += plan.remove.len() + plan.demote.len() + plan.gone.len();
                     skipped += plan.held.len();
                     cl.noted(&format!(
                         "would un-install {provider}: {} package(s){}",
                         plan.remove.len(),
-                        if plan.held.is_empty() {
+                        if plan.demote.is_empty() {
                             String::new()
                         } else {
                             format!(
-                                ", keeping {} that other packages need: {}",
-                                plan.held.len(),
-                                plan.held.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>().join(", ")
+                                ", and keep {} that other packages need, as dependencies: {}",
+                                plan.demote.len(),
+                                plan.demote.join(", ")
                             )
                         }
                     ));
@@ -555,6 +578,26 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
                     "the rest could not be un-installed",
                 );
             }
+            continue;
+        }
+        // Marks revert to dependencies; nothing is removed.
+        if let Entry::PackagesMarked { provider, machine, packages } = entry {
+            let Some(pm) = crate::syspkg::SysPm::from_name(provider) else {
+                skipped += packages.len();
+                continue;
+            };
+            if dry_run {
+                reverted += packages.len();
+                cl.noted(&format!(
+                    "would mark {provider}: {} package(s) as dependencies again",
+                    packages.len()
+                ));
+                continue;
+            }
+            let back = crate::syspkg::revert(pm, packages, Some(machine));
+            reverted += back;
+            skipped += packages.len() - back.min(packages.len());
+            cl.done(&format!("{provider}: {back} package(s) marked as dependencies again"));
             continue;
         }
         // A recorded-but-unrevertible change: say what it was and move on. This

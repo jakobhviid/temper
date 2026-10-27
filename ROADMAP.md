@@ -187,22 +187,6 @@ so the headline matches what happened to the machine.
   rather than a file, which the repo-file shape does not cover. The AUR is not a
   repository at all: it builds from source through a helper, which is a
   different feature.
-- **A declared package that is already installed as a dependency stays marked as
-  one.** `install` installs what is missing and leaves what is present alone, so a
-  package that arrived as a dependency keeps the manager's "automatic" mark even
-  once the spec declares it. If whatever pulled it in is later removed, the
-  manager's own autoremove (`apt autoremove`, `dnf autoremove`, `pacman -Qdt`)
-  can take it — a declared package, gone, and drift reports it missing. Marking
-  declared packages as explicit (`apt-mark manual`, `dnf mark user`, `pacman -D
-  --asexplicit`) closes it; it is a write `undo` would then need to reverse.
-- **`prune` leaves a removed extra's dependencies behind.** It removes exactly the
-  named packages — dnf's `clean_requirements_on_remove` off, pacman without `-s`,
-  apt-get as it is — so what an extra pulled in stays, orphaned, for the
-  manager's autoremove. Each manager's own clean-up would also take packages that
-  were already unneeded, image ones included, which is more than the preview
-  named. The honest version computes the dependencies only the named packages
-  need, previews them, and removes them as part of the set. (`undo` does not have
-  the gap: it removes what its run added, dependencies included.)
 - **A repo or source written over one the image ships has no way back.** A
   declared `debian.sources` or `fedora.repo` replaces the image's file with no
   backup, and dropping the declaration makes it residue that `prune` deletes —

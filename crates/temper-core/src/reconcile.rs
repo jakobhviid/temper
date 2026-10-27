@@ -95,8 +95,8 @@ pub struct ReconcilePlan {
     /// baseline, that no scope declares — absorb into THIS machine's own
     /// `dnf` / `apt` / `pacman` list.
     pub system_adds: Vec<(crate::syspkg::SysPm, String)>,
-    /// Entries in THIS machine's own `dnf` / `apt` / `pacman` list that are not
-    /// installed.
+    /// Entries in THIS machine's own `dnf` / `apt` / `pacman` list the machine
+    /// does not hold as asked-for: not installed, or only as a dependency.
     pub system_drops: Vec<(crate::syspkg::SysPm, String)>,
     /// Extensions in THIS machine's own `extensions` list that aren't installed
     /// — candidates to drop. The other half of `gext_adds`, without which

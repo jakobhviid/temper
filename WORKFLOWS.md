@@ -692,9 +692,14 @@ Names differ between families, so each manager has its own list, and each list
 applies only on a host whose manager it names — a Debian box ignores the `dnf`
 and `pacman` lines entirely. `install` runs one batched call per manager, as root
 (one password for the whole run), after `rpm_repos` so a vendor package resolves
-on the first pass; apt refreshes its package lists first. `undo` removes what the
-run added — the packages and what they pulled in, read back from the machine.
-temper never upgrades through these managers. Declare package names: a group, a
+on the first pass; apt refreshes its package lists first. temper names only what
+the spec names: what a package pulls in belongs to the package manager, which
+records it as a dependency and clears it with its own autoremove. So `undo`
+removes the packages the run installed by name, and leaves what they pulled in to
+`apt autoremove`, `dnf autoremove` or `pacman -Rns $(pacman -Qdtq)`. A declared
+package that is already installed as another package's dependency is marked as
+yours instead — drift shows it first — so that autoremove cannot take it; `undo`
+marks it back. temper never upgrades through these managers. Declare package names: a group, a
 pattern or a provide (`vim` for `vim-enhanced`) installs nothing of that name, so
 it stays missing and `install` says so.
 
@@ -709,11 +714,11 @@ base system. The baseline lives in temper's state directory
 manager to have the next `install` record a fresh one.
 
 **`prune` removes exactly what it shows.** Each removal is simulated by the
-manager first, and a package another installed package depends on is reported
-as unremovable instead of removed along with its dependant — remove the
-dependant first, or declare the package. The dependencies a removed extra pulled
-in stay installed, because taking them would be more than the preview named;
-`apt autoremove`, `dnf autoremove` or `pacman -Rns $(pacman -Qdtq)` clears them.
+manager first. An extra nothing needs is removed, and only it. An extra that
+something installed needs is not removed: it is marked as a dependency again, so
+it stays for what needs it and the manager clears it later. A package temper only
+ever marked as yours is only ever marked back. What a removed extra pulled in
+stays, marked as dependencies, for the manager's autoremove.
 
 Two hosts need a word. On an **image-based** Fedora (Silverblue, Bazzite,
 CoreOS) dnf is present but cannot install, so a bundle's `dnf` list is inert

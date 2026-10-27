@@ -350,19 +350,21 @@ fn extras_from(
         .collect()
 }
 
-/// Entries in THIS machine's own list that are not installed — the undeclare
-/// cell, machine scope only. Empty when the manager cannot be read: "declared
-/// but absent" and "cannot tell" look the same, and only one may be acted on.
+/// Entries in THIS machine's own list that the machine does not hold as
+/// asked-for: not installed, or installed only as another package's dependency
+/// — the undeclare cell, machine scope only. Empty when the manager cannot be
+/// read: "declared but absent" and "cannot tell" look the same, and only one
+/// may be acted on.
 pub fn machine_absent(pm: SysPm, machine_own: &[String]) -> Vec<String> {
     if machine_own.is_empty() {
         return Vec::new();
     }
-    let Some(have) = installed(pm) else {
+    let (Some(have), Some(asked)) = (installed(pm), explicit(pm)) else {
         return Vec::new();
     };
     let mut out: Vec<String> = machine_own
         .iter()
-        .filter(|p| !have.contains(*p))
+        .filter(|p| !have.contains(*p) || !asked.contains(*p))
         .cloned()
         .collect();
     out.sort();
@@ -413,6 +415,62 @@ pub fn record_baseline(machine: &str, pm: SysPm) -> Result<bool> {
     std::fs::write(&p, serde_json::to_string_pretty(&all)?)
         .with_context(|| format!("writing {}", p.display()))?;
     Ok(true)
+}
+
+/// Packages temper marked as asked-for without installing them — declared ones
+/// the manager held as dependencies. Letting go of one undoes the mark and
+/// nothing more, so they are remembered apart from what temper installed.
+fn marked_path(machine: &str) -> PathBuf {
+    crate::journal::state_root()
+        .join("marked")
+        .join(format!("{machine}.json"))
+}
+
+fn load_marked(machine: &str) -> BTreeMap<String, BTreeSet<String>> {
+    std::fs::read_to_string(marked_path(machine))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_marked(machine: &str, all: &BTreeMap<String, BTreeSet<String>>) -> Result<()> {
+    let p = marked_path(machine);
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).with_context(|| format!("creating {}", d.display()))?;
+    }
+    std::fs::write(&p, serde_json::to_string_pretty(all)?)
+        .with_context(|| format!("writing {}", p.display()))
+}
+
+/// The packages temper only marked, for this manager on this machine.
+pub fn marked(machine: &str, pm: SysPm) -> BTreeSet<String> {
+    load_marked(machine).remove(pm.name()).unwrap_or_default()
+}
+
+/// Remember packages temper marked as asked-for.
+pub fn note_marked(machine: &str, pm: SysPm, pkgs: &[String]) -> Result<()> {
+    if pkgs.is_empty() {
+        return Ok(());
+    }
+    let mut all = load_marked(machine);
+    all.entry(pm.name().to_string())
+        .or_default()
+        .extend(pkgs.iter().cloned());
+    save_marked(machine, &all)
+}
+
+/// Forget packages that are no longer temper's mark — demoted, or gone.
+pub fn forget_marked(machine: &str, pm: SysPm, pkgs: &[String]) -> Result<()> {
+    if pkgs.is_empty() {
+        return Ok(());
+    }
+    let mut all = load_marked(machine);
+    if let Some(set) = all.get_mut(pm.name()) {
+        for p in pkgs {
+            set.remove(p);
+        }
+    }
+    save_marked(machine, &all)
 }
 
 // --- changing ----------------------------------------------------------------
@@ -469,29 +527,22 @@ fn ensure_root(work: &str) {
 /// its unattended upgrade at exactly the moment a first converge does.
 const APT_LOCK_WAIT: &str = "DPkg::Lock::Timeout=300";
 
-/// What an install did, read back from the machine rather than taken from the
-/// manager's exit status.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Landed {
-    /// The requested packages that are installed now.
-    pub requested: Vec<String>,
-    /// Every package that is installed now and was not before — the requested
-    /// ones and what they pulled in. This is what a run journals, so `undo`
-    /// removes what the run added and nothing it did not.
-    pub added: Vec<String>,
-}
-
-/// Install `pkgs`.
+/// Install `pkgs` by name. Returns the ones that are installed now — read back,
+/// not taken from the exit status — which is what a run journals.
 ///
-/// What landed is read back, not inferred from the exit status: a name the
-/// manager accepts without installing a package of that name — a pacman group,
-/// a dnf provide — exits 0, and journaling it would have `undo` remove whatever
-/// it expands to. Read back, it lands nowhere and is journaled as nothing.
-pub fn install(pm: SysPm, pkgs: &[String], verbose: bool) -> Landed {
+/// Only the names: what they pull in belongs to them, and the manager records
+/// it as a dependency so its own autoremove can clear it once nothing needs it.
+/// Journaling every package that appeared during the run instead would claim
+/// whatever else changed the machine meanwhile — an unattended upgrade waiting
+/// on the same lock installs a kernel — and `undo` would then remove it.
+///
+/// A name the manager accepts without installing a package of that name (a
+/// pacman group, a dnf provide) exits 0; read back, it is not installed, so it
+/// is journaled as nothing.
+pub fn install(pm: SysPm, pkgs: &[String], verbose: bool) -> Vec<String> {
     if pkgs.is_empty() {
-        return Landed::default();
+        return Vec::new();
     }
-    let before = installed(pm);
     let label = format!("{} install", pm.name());
     ensure_root(&format!("{label}: {}", pkgs.join(", ")));
     if pm == SysPm::Apt {
@@ -516,16 +567,96 @@ pub fn install(pm: SysPm, pkgs: &[String], verbose: bool) -> Landed {
         args.extend(items.iter().map(String::as_str));
         privileged(pm, &args)
     });
-    match (before, installed(pm)) {
-        (Some(before), Some(after)) => Landed {
-            requested: pkgs.iter().filter(|p| after.contains(*p)).cloned().collect(),
-            added: after.difference(&before).cloned().collect(),
-        },
-        // Unreadable either side: nothing is provably this run's, so nothing is
-        // journaled — an undo entry for a package that may not be there is worse
-        // than none.
-        _ => Landed::default(),
+    // Unreadable afterwards: nothing is provably installed, so nothing is
+    // journaled — an undo entry for a package that may not be there is worse
+    // than none.
+    installed(pm)
+        .map(|after| pkgs.iter().filter(|p| after.contains(*p)).cloned().collect())
+        .unwrap_or_default()
+}
+
+// --- why a package is installed --------------------------------------------------
+
+/// Each manager records whether a package was asked for by name or pulled in as
+/// a dependency, and its autoremove trusts that record. temper keeps it true to
+/// the spec: a declared package is held as asked-for, and one temper no longer
+/// wants goes back to being a dependency — never anything about a package the
+/// spec does not name.
+///
+/// apt re-marks a package when it is installed by name; dnf and pacman leave an
+/// already-installed dependency marked as one (measured on Debian 13, Ubuntu
+/// 22.04, Fedora 44, Alma 8/9, Rocky 10 and Arch), so the mark is set directly.
+fn mark_args(pm: SysPm, as_asked: bool) -> Vec<&'static str> {
+    match (pm, as_asked) {
+        (SysPm::Apt, true) => vec!["apt-mark", "manual"],
+        (SysPm::Apt, false) => vec!["apt-mark", "auto"],
+        (SysPm::Dnf, true) if dnf5() => vec!["dnf", "-y", "mark", "user"],
+        (SysPm::Dnf, false) if dnf5() => vec!["dnf", "-y", "mark", "dependency"],
+        (SysPm::Dnf, true) => vec!["dnf", "-y", "mark", "install"],
+        (SysPm::Dnf, false) => vec!["dnf", "-y", "mark", "remove"],
+        (SysPm::Pacman, true) => vec!["pacman", "-D", "--asexplicit"],
+        (SysPm::Pacman, false) => vec!["pacman", "-D", "--asdeps"],
     }
+}
+
+/// dnf5 renamed `mark install`/`mark remove` to `mark user`/`mark dependency`.
+fn dnf5() -> bool {
+    lines("dnf", &["--version"])
+        .and_then(|l| l.into_iter().next())
+        .is_some_and(|v| v.contains("dnf5"))
+}
+
+/// Mark `pkgs` as asked-for (`true`) or as dependencies (`false`). No package is
+/// installed or removed. Returns the ones that carry the mark afterwards, read
+/// back.
+pub fn mark(pm: SysPm, pkgs: &[String], as_asked: bool) -> Vec<String> {
+    if pkgs.is_empty() {
+        return Vec::new();
+    }
+    let label = format!(
+        "{} mark {}",
+        pm.name(),
+        if as_asked { "as yours" } else { "as a dependency" }
+    );
+    ensure_root(&format!("{label}: {}", pkgs.join(", ")));
+    let base = mark_args(pm, as_asked);
+    crate::providers::batch_then_isolate(pkgs, &label, false, |items| {
+        let mut argv: Vec<&str> = Vec::new();
+        if !is_root() {
+            argv.push("sudo");
+        }
+        argv.extend(base.iter().copied());
+        argv.extend(items.iter().map(String::as_str));
+        let mut c = Command::new(argv[0]);
+        c.args(&argv[1..]);
+        c
+    });
+    match explicit(pm) {
+        Some(asked) => pkgs
+            .iter()
+            .filter(|p| asked.contains(*p) == as_asked)
+            .cloned()
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Declared packages that are installed, but held by the manager as somebody
+/// else's dependency — so its autoremove takes them when whatever pulled them in
+/// goes, declaration or not. `None` when the manager cannot be read.
+pub fn held_as_dependency(pm: SysPm, effective: &[String]) -> Option<Vec<String>> {
+    if effective.is_empty() {
+        return Some(Vec::new());
+    }
+    let have = installed(pm)?;
+    let asked = explicit(pm)?;
+    Some(
+        effective
+            .iter()
+            .filter(|p| have.contains(*p) && !asked.contains(*p))
+            .cloned()
+            .collect(),
+    )
 }
 
 /// What a removal would do, as the manager itself simulates it.
@@ -609,47 +740,104 @@ fn remv_lines(stdout: &str) -> Vec<String> {
 }
 
 /// Why a package was held back from a removal.
-pub const HELD_DEPENDED_ON: &str = "removing it would take other installed packages with it";
 pub const HELD_UNSIMULATED: &str = "the package manager could not simulate removing it";
 
-/// Split `pkgs` into those that can be removed without taking anything else
-/// along, and those held back with the reason.
-///
-/// Whole set first, so a package needed only by another one in the same set is
-/// not held back for it. Where the set cascades, each is tried alone, which
-/// names the culprits — and the survivors are tried together again, because two
-/// packages that are each fine alone can still be needed by a third.
-pub fn removable(pm: SysPm, pkgs: &[String]) -> (Vec<String>, Vec<(String, &'static str)>) {
-    if pkgs.is_empty() {
-        return (Vec::new(), Vec::new());
-    }
-    if simulate(pm, pkgs) == Sim::Clean {
-        return (pkgs.to_vec(), Vec::new());
-    }
-    let (mut ok, mut held) = (Vec::new(), Vec::new());
-    for p in pkgs {
-        match simulate(pm, std::slice::from_ref(p)) {
-            Sim::Clean => ok.push(p.clone()),
-            Sim::Cascades => held.push((p.clone(), HELD_DEPENDED_ON)),
-            Sim::Failed => held.push((p.clone(), HELD_UNSIMULATED)),
-        }
-    }
-    if !ok.is_empty() && simulate(pm, &ok) != Sim::Clean {
-        held.extend(ok.drain(..).map(|p| (p, HELD_DEPENDED_ON)));
-    }
-    (ok, held)
+/// What letting go of named packages does — `prune` for extras, `undo` for what
+/// a run installed or marked.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Release {
+    /// Removed by name: nothing else goes with them.
+    pub remove: Vec<String>,
+    /// Kept, and marked as dependencies: something installed needs them, or
+    /// temper only ever marked them. The manager's autoremove clears them once
+    /// nothing needs them.
+    pub demote: Vec<String>,
+    /// Left alone, with the reason.
+    pub held: Vec<(String, &'static str)>,
+    /// Already gone — nothing to do.
+    pub gone: Vec<String>,
 }
 
-/// Remove `pkgs`, which the caller has already passed through `removable`.
-/// Returns what is actually gone afterwards — read back, not assumed.
+/// Plan letting go of `pkgs`. `only_marked` are packages temper never installed,
+/// only marked as asked-for; letting go of one undoes the mark and nothing more.
+/// `None` when the manager cannot be read — "cannot tell", never "all gone".
+///
+/// The whole set is simulated first, so a package needed only by another one in
+/// the same set is removed with it. Where the set would take something else
+/// along, each is tried alone, which names the ones another package needs; those
+/// are demoted rather than removed, and the rest are tried together again,
+/// because two packages fine alone can still be needed by a third.
+pub fn release_plan(
+    pm: SysPm,
+    pkgs: &[String],
+    only_marked: &BTreeSet<String>,
+) -> Option<Release> {
+    let have = installed(pm)?;
+    let mut plan = Release::default();
+    let mut candidates = Vec::new();
+    for p in pkgs {
+        if !have.contains(p) {
+            plan.gone.push(p.clone());
+        } else if only_marked.contains(p) {
+            plan.demote.push(p.clone());
+        } else {
+            candidates.push(p.clone());
+        }
+    }
+    if candidates.is_empty() {
+        return Some(plan);
+    }
+    if simulate(pm, &candidates) == Sim::Clean {
+        plan.remove = candidates;
+        return Some(plan);
+    }
+    for p in candidates {
+        match simulate(pm, std::slice::from_ref(&p)) {
+            Sim::Clean => plan.remove.push(p),
+            Sim::Cascades => plan.demote.push(p),
+            Sim::Failed => plan.held.push((p, HELD_UNSIMULATED)),
+        }
+    }
+    if !plan.remove.is_empty() && simulate(pm, &plan.remove) != Sim::Clean {
+        plan.demote.append(&mut plan.remove);
+    }
+    Some(plan)
+}
+
+/// Carry out a `release_plan`. Returns `(removed, demoted)`, each read back.
+pub fn release(pm: SysPm, plan: &Release, verbose: bool) -> (Vec<String>, Vec<String>) {
+    let removed = remove(pm, &plan.remove, verbose);
+    let demoted = mark(pm, &plan.demote, false);
+    if !removed.is_empty() {
+        eprintln!(
+            "  {} anything {} pulled in stays, marked as dependencies — `{}` removes it once nothing needs it",
+            crate::ui::dim(crate::ui::g_arrow()),
+            removed.join(", "),
+            autoremove_hint(pm)
+        );
+    }
+    (removed, demoted)
+}
+
+/// The manager's own clean-up, named for the user to run. temper never runs it:
+/// it is whole-system — apt's took an unrelated orphan in the same breath — and
+/// that is the manager's call, not a spec's.
+pub fn autoremove_hint(pm: SysPm) -> &'static str {
+    match pm {
+        SysPm::Dnf => "sudo dnf autoremove",
+        SysPm::Apt => "sudo apt autoremove",
+        SysPm::Pacman => "sudo pacman -Rns $(pacman -Qdtq)",
+    }
+}
+
+/// Remove `pkgs` by name. Returns what is actually gone afterwards — read back,
+/// not assumed.
 ///
 /// Exactly the named packages: dnf's `clean_requirements_on_remove` is turned
-/// off and pacman runs without `-s`, as apt-get does by default. Each manager's
-/// own dependency clean-up would remove packages the simulation never named —
-/// including image packages that were already unneeded — and the preview has to
-/// be the effect. What the named packages pulled in stays, as dependencies the
-/// manager's own autoremove clears.
-pub fn remove(pm: SysPm, pkgs: &[String], verbose: bool) -> Vec<String> {
+/// off and pacman runs without `-s`, as apt-get does by default. What the named
+/// packages pulled in stays, still marked as dependencies, for the manager's
+/// own autoremove — which sees it on all three.
+fn remove(pm: SysPm, pkgs: &[String], verbose: bool) -> Vec<String> {
     if pkgs.is_empty() {
         return Vec::new();
     }
@@ -670,33 +858,18 @@ pub fn remove(pm: SysPm, pkgs: &[String], verbose: bool) -> Vec<String> {
     }
 }
 
-/// What undoing an install of `pkgs` would do.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Revert {
-    /// Still installed, and removable without taking anything else along.
-    pub remove: Vec<String>,
-    /// Still installed, and held back, with the reason.
-    pub held: Vec<(String, &'static str)>,
-    /// Already gone — reverted by someone else, nothing to do.
-    pub gone: Vec<String>,
-}
-
-/// Plan the undo of an install. `None` when the manager cannot be read, which
-/// is "cannot tell", never "all gone".
-pub fn revert_plan(pm: SysPm, pkgs: &[String]) -> Option<Revert> {
-    let have = installed(pm)?;
-    let (still, gone): (Vec<String>, Vec<String>) =
-        pkgs.iter().cloned().partition(|p| have.contains(p));
-    let (remove, held) = removable(pm, &still);
-    Some(Revert { remove, held, gone })
-}
-
-/// Undo an install of `pkgs` through the same guard `prune` uses. Returns how
-/// many of them are absent afterwards, read back.
-pub fn revert(pm: SysPm, pkgs: &[String]) -> usize {
-    let Some(plan) = revert_plan(pm, pkgs) else {
+/// Undo an install of `pkgs` (`marked_on` is `None`), or the marks a run set on
+/// `marked_on`'s packages, which are only ever un-marked. Returns how many are
+/// reverted: gone, or held as a dependency again.
+pub fn revert(pm: SysPm, pkgs: &[String], marked_on: Option<&str>) -> usize {
+    let only: BTreeSet<String> = if marked_on.is_some() {
+        pkgs.iter().cloned().collect()
+    } else {
+        BTreeSet::new()
+    };
+    let Some(plan) = release_plan(pm, pkgs, &only) else {
         eprintln!(
-            "{} {} could not list what is installed — nothing was un-installed",
+            "{} {} could not list what is installed — nothing was reverted",
             crate::ui::yellow(crate::ui::g_warn()),
             pm.name()
         );
@@ -709,10 +882,11 @@ pub fn revert(pm: SysPm, pkgs: &[String]) -> usize {
             pm.name()
         );
     }
-    remove(pm, &plan.remove, false);
-    installed(pm)
-        .map(|still| pkgs.iter().filter(|p| !still.contains(*p)).count())
-        .unwrap_or(0)
+    let (removed, demoted) = release(pm, &plan, false);
+    if let Some(machine) = marked_on {
+        let _ = forget_marked(machine, pm, &demoted);
+    }
+    plan.gone.len() + removed.len() + demoted.len()
 }
 
 #[cfg(test)]

@@ -1691,11 +1691,21 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
         // The count is what happened, not what was planned. A permission error
         // or a directory where a file was expected used to warn and still be
         // reported as removed (Principle #6b: report the effect).
-        println!(
-            "prune {}: {} item(s) removed",
-            m.name,
-            prune_plan.len() - outcome.failed.len()
-        );
+        // A demotion keeps the package, so it is not counted as removed.
+        let demoted = prune_plan
+            .demote
+            .iter()
+            .filter(|(pm, n)| !outcome.failed.contains(&format!("{} {n}", pm.name())))
+            .count();
+        let removed = prune_plan.len() - outcome.failed.len() - demoted;
+        if demoted == 0 {
+            println!("prune {}: {removed} item(s) removed", m.name);
+        } else {
+            println!(
+                "prune {}: {removed} item(s) removed, {demoted} kept and marked as dependencies",
+                m.name
+            );
+        }
         if !outcome.failed.is_empty() {
             println!(
                 "  {} {} item(s) could NOT be removed and are still here:",
@@ -2360,7 +2370,10 @@ fn cmd_reconcile(
         if !plan.system_drops.is_empty() {
             println!(
                 "\n{}",
-                ui::bold("Declared in this machine's own package lists but not installed:")
+                ui::bold(
+                    "Declared in this machine's own package lists, but not installed — \
+                     or installed only as another package's dependency:"
+                )
             );
             for (pm, pkg) in &plan.system_drops {
                 if !prompt_yes(&format!("  keep `{pkg}` in [[machine]].{}?", pm.name())) {

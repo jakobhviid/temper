@@ -439,11 +439,21 @@ pacman = ["fd", "tmux"]              # Arch
 #     where the package is `vim-enhanced`). The manager may accept one and
 #     install something, but nothing of that name is installed, so it stays
 #     `missing` and `install` says so.
+#   temper names only what the spec names. It never installs, marks or removes
+#     a dependency: what a package pulls in is the manager's, recorded by it as a
+#     dependency, so the manager's own autoremove can clear it once nothing
+#     needs it. temper keeps that record true for the packages it does name.
 #   install: one batched call per manager, as root (through sudo, unless temper
 #     already runs as root), AFTER `rpm_repos`, so a package from a declared repo
-#     resolves in the same run. apt refreshes its package lists first. What the
-#     run added is read back and journaled — the packages and what they pulled
-#     in — so `undo` removes exactly that, through the guard below.
+#     resolves in the same run. apt refreshes its package lists first. The names
+#     that installed are read back and journaled — those, not what they pulled
+#     in — so `undo` removes them through the rule under `prune`.
+#     A declared package that is installed, but held by the manager as another
+#     package's dependency, would go with that package at the next autoremove.
+#     drift reports it, and `install` marks it as yours (`apt-mark manual`, dnf's
+#     `mark user` / `mark install`, `pacman -D --asexplicit`) — what `apt
+#     install` of it does by itself, and dnf and pacman do not. No package
+#     changes; it is journaled, and `undo` marks it back.
 #   extras: packages installed BY NAME since the machine's baseline that no scope
 #     declares. Dependencies are never extras. The baseline is what the manager
 #     had already been asked for when temper first managed it here — recorded by
@@ -452,14 +462,19 @@ pacman = ["fd", "tmux"]              # Arch
 #     200 packages on Ubuntu, `apt` and `bash` among them). So the image's own
 #     packages are never extras and never reach `prune`. Until a baseline exists,
 #     drift reports the extras direction as unavailable rather than guessing.
-#   prune: removes exactly the named extras, and only if the manager's own
-#     simulation removes nothing else with them. A package another installed
-#     package depends on is reported as unremovable, never taken down with its
-#     dependant. The dependencies an extra pulled in stay behind (dnf's
-#     clean_requirements_on_remove is off and pacman runs without `-s`, as
-#     apt-get does by default), because removing them would be more than the
-#     preview named; the manager's own autoremove clears them. `undo` removes
-#     through the same guard.
+#   prune (and `undo`) let go of a package by name, one of two ways, decided by
+#     the manager's own simulation before anything is confirmed:
+#       - nothing else would go with it → it is removed, and only it (dnf's
+#         clean_requirements_on_remove is off and pacman runs without `-s`, as
+#         apt-get does by default);
+#       - something installed needs it → it is NOT removed: it is marked as a
+#         dependency again, stays for what needs it, and the manager's
+#         autoremove takes it once nothing does.
+#     A package temper only marked as yours (above) is only ever marked back.
+#     What a removed package pulled in stays, marked as dependencies, for
+#     `apt autoremove`, `dnf autoremove` or `pacman -Rns $(pacman -Qdtq)` — temper
+#     never runs those: they are whole-system, and apt's takes unrelated orphans
+#     in the same breath.
 #   temper never upgrades through these managers: the OS owns versions.
 #   dnf on an image-based host (Silverblue, Bazzite, CoreOS) cannot install, so
 #     there a bundle's `dnf` list is inert, like another family's; the machine's

@@ -269,15 +269,28 @@ declaring it), it records what was already asked for, and only what is asked for
 after that is an extra. It is the line the ledger draws for files — temper-era or
 not — one step wider: it also catches what a person installed by hand since.
 
-**Removal (5, and `undo`) is exactly what the preview names.** All three remove
-what depends on the package they are told to remove, so a removal is first
-simulated by the manager itself (`rpm -e --test`, `apt-get -s remove`,
-`pacman -Rp`) and one that would take anything else along is held back and
-reported. Each manager's own dependency clean-up is off for the same reason, so
-what an extra pulled in stays behind. Decided at plan time, so the preview is the
-effect. `install` reads back what it added, deps included, and journals that, so
-`undo` removes what the run added and a name that installed nothing of its own —
-a group, a provide — is journaled as nothing.
+**temper names only what the spec names; dependencies are the manager's.** Each
+manager records whether a package was asked for or pulled in, and its autoremove
+trusts that record. temper keeps it true for the packages it names and touches
+nothing else, so a run does four things at most: install a named package, mark one
+as asked-for, remove one nothing else would go with, or mark one as a dependency
+again. It never names a dependency and never runs autoremove — that is
+whole-system, and apt's takes unrelated orphans with it.
+
+- `install` journals the names it installed, read back, not every package that
+  appeared during the run: an unattended upgrade waiting on the same lock would
+  otherwise be journaled, and undone. A group or a provide installs nothing of
+  its own name, so it is journaled as nothing.
+- A declared package the manager holds as a dependency is marked as asked-for, as
+  `apt install` of it would do (dnf and pacman do not, measured on all three), or
+  autoremove takes it with whatever pulled it in.
+- Removal (5, and `undo`) is simulated by the manager itself (`rpm -e --test`,
+  `apt-get -s remove`, `pacman -Rp`) at plan time, so the preview is the effect.
+  Where nothing else would go, the package alone is removed; each manager's own
+  dependency clean-up is off. Where something needs it, it is marked as a
+  dependency again rather than removed, and a package temper only marked is only
+  marked back. What a removed package pulled in stays, still marked as a
+  dependency, for the manager's autoremove.
 
 A list for a manager the host cannot install with is **inert**, not
 unavailable — one bundle carries a `dnf`, an `apt` and a `pacman` list for a

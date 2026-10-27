@@ -292,7 +292,8 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         observe: Col::Yes,
         install: Col::Yes,
         // Extras are counted from the baseline recorded at the first converge,
-        // and a removal that would take a dependant along is held back.
+        // and a package something still needs is marked as a dependency
+        // again rather than removed.
         prune: Col::Yes,
         reconcile: Col::Yes,
         ignore: Col::Yes,
