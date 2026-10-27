@@ -746,8 +746,11 @@ pub const HELD_UNSIMULATED: &str = "the package manager could not simulate remov
 /// a run installed or marked.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Release {
-    /// Removed by name: nothing else goes with them.
+    /// Removed by name: nothing else installed needs them.
     pub remove: Vec<String>,
+    /// Dependencies that only `remove` needed — the manager's own answer to
+    /// "what does removing these free", removed with them.
+    pub deps: Vec<String>,
     /// Kept, and marked as dependencies: something installed needs them, or
     /// temper only ever marked them. The manager's autoremove clears them once
     /// nothing needs them.
@@ -789,32 +792,187 @@ pub fn release_plan(
     }
     if simulate(pm, &candidates) == Sim::Clean {
         plan.remove = candidates;
-        return Some(plan);
-    }
-    for p in candidates {
-        match simulate(pm, std::slice::from_ref(&p)) {
-            Sim::Clean => plan.remove.push(p),
-            Sim::Cascades => plan.demote.push(p),
-            Sim::Failed => plan.held.push((p, HELD_UNSIMULATED)),
+    } else {
+        for p in candidates {
+            match simulate(pm, std::slice::from_ref(&p)) {
+                Sim::Clean => plan.remove.push(p),
+                Sim::Cascades => plan.demote.push(p),
+                Sim::Failed => plan.held.push((p, HELD_UNSIMULATED)),
+            }
+        }
+        if !plan.remove.is_empty() && simulate(pm, &plan.remove) != Sim::Clean {
+            plan.demote.append(&mut plan.remove);
         }
     }
-    if !plan.remove.is_empty() && simulate(pm, &plan.remove) != Sim::Clean {
-        plan.demote.append(&mut plan.remove);
+    if !plan.remove.is_empty() {
+        match freed_dependencies(pm, &plan.remove, true) {
+            Some(deps) => plan.deps = deps,
+            // Not knowing is not "none": say what stays, and why.
+            None => eprintln!(
+                "{} {} could not say which dependencies removing {} frees{} — they stay, \
+                 for `{}`",
+                crate::ui::yellow(crate::ui::g_warn()),
+                pm.name(),
+                plan.remove.join(", "),
+                if pm == SysPm::Dnf { " (dnf 4 needs root to answer)" } else { "" },
+                autoremove_hint(pm)
+            ),
+        }
     }
     Some(plan)
 }
 
-/// Carry out a `release_plan`. Returns `(removed, demoted)`, each read back.
+/// The dependencies removing `named` would leave unneeded, as the manager
+/// itself works them out — not the named packages, and nothing that was
+/// unneeded already. `None` when the manager could not answer.
+///
+/// A plain autoremove is whole-system: with one unrelated orphan on the box, it
+/// took that orphan on every family measured. Each manager can scope the
+/// question to these packages instead:
+/// - dnf's own remove lists "Removing unused dependencies" (clean_requirements_on_remove);
+/// - pacman's `-Rs` takes targets' dependencies nothing else needs and nobody asked for;
+/// - apt has no scoped form, so its simulation answers it as a difference —
+///   unneeded after removing them, less unneeded now.
+///
+/// `may_ask` lets dnf 4, which refuses to simulate a removal without root, ask
+/// for the run's password rather than give up — the plan asks once, and the
+/// removal, which needs root anyway, reuses it.
+fn freed_dependencies(pm: SysPm, named: &[String], may_ask: bool) -> Option<Vec<String>> {
+    // `with_named` appends the packages; the whole-system question must not get
+    // them, because `apt-get autoremove <pkgs>` removes those packages too.
+    let ask = |argv: &[&str], with_named: bool| -> Option<std::process::Output> {
+        let mut c = Command::new(argv[0]);
+        c.args(&argv[1..]);
+        if with_named {
+            c.args(named);
+        }
+        c.env("LC_ALL", "C").stdin(Stdio::null()).output().ok()
+    };
+    let run = |argv: &[&str]| ask(argv, true);
+    let freed: BTreeSet<String> = match pm {
+        SysPm::Apt => {
+            let now = ask(&["apt-get", "-s", "autoremove"], false).filter(|o| o.status.success())?;
+            let now = remv_lines(&String::from_utf8_lossy(&now.stdout));
+            let after = run(&["apt-get", "-s", "remove", "--auto-remove"])
+                .filter(|o| o.status.success())?;
+            remv_lines(&String::from_utf8_lossy(&after.stdout))
+                .into_iter()
+                .filter(|p| !now.contains(p))
+                .collect()
+        }
+        SysPm::Pacman => {
+            let o = run(&["pacman", "-Rsp", "--print-format", "%n"]).filter(|o| o.status.success())?;
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect()
+        }
+        SysPm::Dnf => {
+            let sim = ["dnf", "remove", "--assumeno", "--setopt=clean_requirements_on_remove=True"];
+            let mut o = run(&sim)?;
+            let text = |o: &std::process::Output| {
+                format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr)
+                )
+            };
+            if text(&o).contains("superuser") {
+                if !may_ask || is_root() {
+                    return None;
+                }
+                ensure_root(&format!(
+                    "dnf: working out which dependencies removing {} frees",
+                    named.join(", ")
+                ));
+                let mut argv = vec!["sudo", "-n"];
+                argv.extend(sim);
+                o = run(&argv)?;
+            }
+            let have = installed(pm)?;
+            // `--assumeno` always exits non-zero; the table is the answer. Only
+            // names that are installed packages count, which also drops the
+            // arch/version half of a row dnf 4 wrapped onto a second line.
+            unused_dependencies(&text(&o))
+                .into_iter()
+                .filter(|p| have.contains(p))
+                .collect()
+        }
+    };
+    Some(
+        freed
+            .into_iter()
+            .filter(|p| !named.contains(p))
+            .collect(),
+    )
+}
+
+/// Package names under dnf's "Removing unused dependencies:" heading (dnf 4
+/// and 5 both print it), up to the next heading.
+fn unused_dependencies(table: &str) -> Vec<String> {
+    let mut on = false;
+    let mut out = Vec::new();
+    for line in table.lines() {
+        if !line.starts_with(' ') {
+            on = line.starts_with("Removing unused dependencies");
+            continue;
+        }
+        if on {
+            if let Some(name) = line.split_whitespace().next() {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// How many packages the manager lists as no longer needed — the whole-system
+/// view temper does not act on. `None` where it cannot be asked cheaply.
+fn unneeded_count(pm: SysPm) -> Option<usize> {
+    match pm {
+        SysPm::Apt => lines("apt-get", &["-s", "autoremove"])
+            .map(|l| l.iter().filter(|l| l.starts_with("Remv ")).count()),
+        SysPm::Pacman => lines("pacman", &["-Qdtq"]).or(Some(Vec::new())).map(|l| l.len()),
+        SysPm::Dnf => lines(
+            "dnf",
+            &["-q", "repoquery", "--unneeded", "--disablerepo=*", "--qf", "%{name}\n"],
+        )
+        .map(|l| l.len()),
+    }
+}
+
+/// Carry out a `release_plan`. Returns `(removed, demoted)`, each read back;
+/// `removed` includes the dependencies that went with the named packages.
+///
+/// The dependencies are worked out again here and only those that are in both
+/// answers go: the plan's, which the user confirmed, and the manager's now. So a
+/// run never removes more than it previewed — a dependency something installed
+/// since has come to need is kept — and the removal itself is the exact set by
+/// name, simulated once more before it runs.
 pub fn release(pm: SysPm, plan: &Release, verbose: bool) -> (Vec<String>, Vec<String>) {
-    let removed = remove(pm, &plan.remove, verbose);
+    let mut set = plan.remove.clone();
+    if !plan.remove.is_empty() && !plan.deps.is_empty() {
+        let now = freed_dependencies(pm, &plan.remove, true).unwrap_or_default();
+        set.extend(plan.deps.iter().filter(|d| now.contains(d)).cloned());
+        if simulate(pm, &set) != Sim::Clean {
+            set = plan.remove.clone();
+        }
+    }
+    let removed = remove(pm, &set, verbose);
     let demoted = mark(pm, &plan.demote, false);
+    // Unneeded packages that are not this run's: told, never touched. A plain
+    // autoremove would take them, and whether to is the user's call.
     if !removed.is_empty() {
-        eprintln!(
-            "  {} anything {} pulled in stays, marked as dependencies — `{}` removes it once nothing needs it",
-            crate::ui::dim(crate::ui::g_arrow()),
-            removed.join(", "),
-            autoremove_hint(pm)
-        );
+        if let Some(n) = unneeded_count(pm).filter(|n| *n > 0) {
+            eprintln!(
+                "  {} the package manager lists {n} other package(s) as no longer needed — \
+                 not from this run; `{}` removes them",
+                crate::ui::dim(crate::ui::g_arrow()),
+                autoremove_hint(pm)
+            );
+        }
     }
     (removed, demoted)
 }
@@ -833,10 +991,10 @@ pub fn autoremove_hint(pm: SysPm) -> &'static str {
 /// Remove `pkgs` by name. Returns what is actually gone afterwards — read back,
 /// not assumed.
 ///
-/// Exactly the named packages: dnf's `clean_requirements_on_remove` is turned
-/// off and pacman runs without `-s`, as apt-get does by default. What the named
-/// packages pulled in stays, still marked as dependencies, for the manager's
-/// own autoremove — which sees it on all three.
+/// Exactly the given packages: dnf's `clean_requirements_on_remove` is turned
+/// off and pacman runs without `-s`, as apt-get does by default. The
+/// dependencies that should go are already in `pkgs` (see `release`), so the
+/// manager is never left to widen the set on its own.
 fn remove(pm: SysPm, pkgs: &[String], verbose: bool) -> Vec<String> {
     if pkgs.is_empty() {
         return Vec::new();
@@ -886,7 +1044,8 @@ pub fn revert(pm: SysPm, pkgs: &[String], marked_on: Option<&str>) -> usize {
     if let Some(machine) = marked_on {
         let _ = forget_marked(machine, pm, &demoted);
     }
-    plan.gone.len() + removed.len() + demoted.len()
+    let named_removed = removed.iter().filter(|p| pkgs.contains(p)).count();
+    plan.gone.len() + named_removed + demoted.len()
 }
 
 #[cfg(test)]
@@ -952,6 +1111,23 @@ mod tests {
             parse_dpkg_status(&rows, "amd64"),
             set(&["jq", "libc6:i386", "libssl3", "tzdata", "held", "pending"])
         );
+    }
+
+    /// dnf 4 and dnf 5 both head the freed dependencies "Removing unused
+    /// dependencies:"; only that section counts, and a row dnf 4 wrapped puts
+    /// its arch on a line of its own, which the installed-name filter drops.
+    #[test]
+    fn dnf_names_the_dependencies_a_removal_frees() {
+        let dnf5 = "Package    Arch   Version         Repository      Size\n\
+                    Removing:\n jq        x86_64 0:1.8.1-3.fc44  updates    465.4 KiB\n\
+                    Removing unused dependencies:\n oniguruma x86_64 0:6.9.10-4.fc44 fedora     770.9 KiB\n\
+                    \nTransaction Summary:\n Removing:           2 packages\n";
+        assert_eq!(unused_dependencies(dnf5), vec!["oniguruma"]);
+        let dnf4 = "Dependencies resolved.\n====\n Package Architecture Version Repository Size\n====\n\
+                    Removing:\n jq x86_64 1.6-19.el9_8.2 @baseos 412 k\n\
+                    Removing unused dependencies:\n oniguruma x86_64 6.9.6-1.el9.6 @baseos 746 k\n\
+                    \nTransaction Summary\n====\nRemove  2 Packages\n";
+        assert_eq!(unused_dependencies(dnf4), vec!["oniguruma"]);
     }
 
     /// The apt simulation is read off its `Remv` lines — captured from Debian 13

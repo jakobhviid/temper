@@ -229,8 +229,8 @@ pacman = []                 #   bundles' lists. Machine scope, so `reconcile`
                             #   that is not installed. A machine list for a
                             #   manager this host does not have is reported as
                             #   unavailable: unlike a bundle's, nothing else can
-                            #   be meant by it. Install, extras and prune are
-                            #   described under the bundle below.
+                            #   be meant by it. Install, extras, prune, undo and
+                            #   reconcile for these lists: WORKFLOWS §9c.
 rpm_repos = [{ repo = "assets/rpm-repos/terra.repo" }]
                             # optional; RPM repos THIS machine supplies, unioned
                             #   with its bundles'. Installed BEFORE any package
@@ -429,63 +429,30 @@ rpm_ostree     = ["proton-vpn-gnome-desktop"]  # rpm-ostree layered (Linux) — 
 # The host's own package manager — one list per manager, os/role-gated like the
 # rest. Names are not portable between families (`fd-find` on Fedora and Debian,
 # `fd` on Arch), so there is no shared list: a bundle serving a mixed fleet
-# carries one per family, and each applies only on a host whose manager it names.
-# On any other host the list is inert — not missing, not unavailable.
+# carries one per family, and each applies only on a host that installs with the
+# manager it names. On any other host the list is inert — not missing, not
+# unavailable. (`[[machine]]` takes the same three lists; see above.)
 dnf    = ["fd-find", "tmux"]         # Fedora, RHEL, Alma, Rocky, CentOS Stream
                                      #   (`yum` on EL8 and later is dnf)
 apt    = ["fd-find", "tmux"]         # Debian, Ubuntu — driven through apt-get
 pacman = ["fd", "tmux"]              # Arch
-#   Each entry is a PACKAGE NAME — not a group, a pattern or a provide (`vim`
-#     where the package is `vim-enhanced`). The manager may accept one and
-#     install something, but nothing of that name is installed, so it stays
-#     `missing` and `install` says so.
-#   temper names only what the spec names. It never installs, marks or removes
-#     a dependency: what a package pulls in is the manager's, recorded by it as a
-#     dependency, so the manager's own autoremove can clear it once nothing
-#     needs it. temper keeps that record true for the packages it does name.
-#   install: one batched call per manager, as root (through sudo, unless temper
-#     already runs as root), AFTER `rpm_repos`, so a package from a declared repo
-#     resolves in the same run. apt refreshes its package lists first. The names
-#     that installed are read back and journaled — those, not what they pulled
-#     in — so `undo` removes them through the rule under `prune`.
-#     A declared package that is installed, but held by the manager as another
-#     package's dependency, would go with that package at the next autoremove.
-#     drift reports it, and `install` marks it as yours (`apt-mark manual`, dnf's
-#     `mark user` / `mark install`, `pacman -D --asexplicit`) — what `apt
-#     install` of it does by itself, and dnf and pacman do not. No package
-#     changes; it is journaled, and `undo` marks it back.
-#   extras: packages installed BY NAME since the machine's baseline that no scope
-#     declares. Dependencies are never extras. The baseline is what the manager
-#     had already been asked for when temper first managed it here — recorded by
-#     `init`, or by the first `install` that declares the manager — because every
-#     one of these managers counts a stock image's base system as asked-for (over
-#     200 packages on Ubuntu, `apt` and `bash` among them). So the image's own
-#     packages are never extras and never reach `prune`. Until a baseline exists,
-#     drift reports the extras direction as unavailable rather than guessing.
-#   prune (and `undo`) let go of a package by name, one of two ways, decided by
-#     the manager's own simulation before anything is confirmed:
-#       - nothing else would go with it → it is removed, and only it (dnf's
-#         clean_requirements_on_remove is off and pacman runs without `-s`, as
-#         apt-get does by default);
-#       - something installed needs it → it is NOT removed: it is marked as a
-#         dependency again, stays for what needs it, and the manager's
-#         autoremove takes it once nothing does.
-#     A package temper only marked as yours (above) is only ever marked back.
-#     What a removed package pulled in stays, marked as dependencies, for
-#     `apt autoremove`, `dnf autoremove` or `pacman -Rns $(pacman -Qdtq)` — temper
-#     never runs those: they are whole-system, and apt's takes unrelated orphans
-#     in the same breath.
-#   temper never upgrades through these managers: the OS owns versions.
+#   Each entry is a PACKAGE NAME, as the manager lists installed packages — not
+#     a group, a pattern or a provide (`vim` where the package is
+#     `vim-enhanced`). Such a name installs nothing of its own name, so it stays
+#     `missing` and `install` says so. A foreign-architecture apt package is
+#     `name:arch` (`libc6:i386`).
+#   What temper does with these lists — install, the baseline that extras are
+#     counted from, how prune and undo let go of a package and the dependencies
+#     only it needed — is WORKFLOWS §9c. In one line: temper installs, marks and
+#     removes only the packages the spec names, plus the dependencies the
+#     package manager itself says only those packages needed; it never upgrades
+#     and never runs a whole-system autoremove.
 #   dnf on an image-based host (Silverblue, Bazzite, CoreOS) cannot install, so
-#     there a bundle's `dnf` list is inert, like another family's; the machine's
-#     own `dnf` list reports unavailable and names `rpm_ostree`, which can.
-#   pacman installs against the sync database as it stands (`-S --needed`, never
-#     `-Sy`, which is a partial upgrade Arch does not support). A package it
-#     cannot find or fetch usually means a stale database; `pacman -Syu` is yours
-#     to run.
+#     there a bundle's `dnf` list is inert, like another family's, and the
+#     machine's own `dnf` list reports unavailable naming `rpm_ostree`.
 # RPM repos this bundle's packages come from — GROUP scope, gated with the bundle.
 rpm_repos = [
-    { repo = "assets/rpm-repos/brave-browser.repo", key = "assets/rpm-repos/RPM-GPG-KEY-brave" },
+    { repo = "assets/rpm-repos/vendor.repo", key = "assets/rpm-repos/RPM-GPG-KEY-vendor" },
     { repo = "assets/rpm-repos/ghostty-copr.repo" },
 ]
 # `repo` is the `.repo` file, relative to the temper-home; it is installed

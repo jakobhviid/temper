@@ -62,6 +62,15 @@ impl Env {
                grep -qx -e \"$p\" \"$S/explicit\" || echo \"$p\" >> \"$S/explicit\"; done; }}\n\
              markd() {{ for p in \"$@\"; do grep -vx -e \"$p\" \"$S/explicit\" > \"$S/t\"; \
                mv \"$S/t\" \"$S/explicit\"; done; }}\n\
+             touch \"$S/deps\" \"$S/installed\" \"$S/explicit\"\n\
+             wanted() {{ while read -r q rest; do case \" $SKIP \" in *\" $q \"*) continue;; esac; \
+               grep -qx -e \"$q\" \"$S/installed\" || continue; case \" $rest \" in *\" $1 \"*) return 0;; esac; \
+               done < \"$S/deps\"; return 1; }}\n\
+             orphans() {{ SKIP=; while read -r d; do grep -qx -e \"$d\" \"$S/explicit\" && continue; \
+               wanted \"$d\" || echo \"$d\"; done < \"$S/installed\"; }}\n\
+             freed() {{ SKIP=\"$*\"; for p in \"$@\"; do for d in $(grep \"^$p \" \"$S/deps\" | cut -d' ' -f2-); do \
+               grep -qx -e \"$d\" \"$S/installed\" || continue; grep -qx -e \"$d\" \"$S/explicit\" && continue; \
+               wanted \"$d\" || echo \"$d\"; done; done | sort -u; }}\n\
              del() {{ for p in \"$@\"; do case \"$p\" in -*) continue;; esac; for f in installed explicit; do \
                grep -vx -e \"$p\" \"$S/$f\" > \"$S/t\"; mv \"$S/t\" \"$S/$f\"; done; done; }}\n\
              needed() {{ grep -qx \"$1\" \"$S/needed\" 2>/dev/null; }}\n",
@@ -135,7 +144,11 @@ impl Env {
             "dnf",
             "if [ \"$1\" = --version ]; then \
                if [ -e \"$S/dnf4\" ]; then echo 4.14.0; else echo 'dnf5 version 5.4.6.0'; fi; exit 0; fi\n\
-             case \"$*\" in *repoquery*) cat \"$S/explicit\"; exit 0;; esac\n\
+             case \"$*\" in *--unneeded*) orphans; exit 0;; *repoquery*) cat \"$S/explicit\"; exit 0;; esac\n\
+             case \"$*\" in *--assumeno*) shift; shift; shift; echo 'Removing:'; \
+               for p in \"$@\"; do echo \" $p x86_64 1.0-1 @repo 1 k\"; done; \
+               echo 'Removing unused dependencies:'; for d in $(freed \"$@\"); do echo \" $d x86_64 1.0-1 @repo 1 k\"; done; \
+               echo; echo 'Transaction Summary'; exit 1;; esac\n\
              echo \"dnf $*\" >> \"$LOG\"\n\
              case \"$1\" in\n\
                install) shift; shift; add \"$@\";;\n\
@@ -161,7 +174,13 @@ impl Env {
         self.script("dpkg", "echo amd64\n");
         self.script(
             "apt-get",
-            "if [ \"$1\" = -s ]; then shift; shift; for p in \"$@\"; do echo \"Remv $p [1.0]\"; \
+            "if [ \"$1\" = -s ] && [ \"$2\" = autoremove ]; then shift; shift; \
+               for p in \"$@\"; do echo \"Remv $p [1.0]\"; done; for d in $(freed \"$@\"); do echo \"Remv $d [1.0]\"; done; \
+               for o in $(orphans); do echo \"Remv $o [1.0]\"; done; exit 0; fi\n\
+             if [ \"$1\" = -s ] && [ \"$3\" = --auto-remove ]; then shift; shift; shift; \
+               for p in \"$@\"; do echo \"Remv $p [1.0]\"; done; for d in $(freed \"$@\"); do echo \"Remv $d [1.0]\"; done; \
+               for o in $(orphans); do echo \"Remv $o [1.0]\"; done; exit 0; fi\n\
+             if [ \"$1\" = -s ]; then shift; shift; for p in \"$@\"; do echo \"Remv $p [1.0]\"; \
                if needed \"$p\"; then echo \"Remv needs-$p [1.0]\"; fi; done; exit 0; fi\n\
              echo \"apt-get $*\" >> \"$LOG\"\n\
              case \"$1\" in\n\
@@ -181,6 +200,10 @@ impl Env {
              case \"$1\" in\n\
                -Qq) cat \"$S/installed\"; exit 0;;\n\
                -Qqe) cat \"$S/explicit\"; exit 0;;\n\
+               -Qdtq) orphans; exit 0;;\n\
+               -Rsp) shift; shift; shift; for p in \"$@\"; do if needed \"$p\"; then \
+                 echo 'error: failed to prepare transaction (could not satisfy dependencies)' >&2; \
+                 exit 1; fi; done; for t in $(expand \"$@\"); do echo \"$t\"; done; freed \"$@\"; exit 0;;\n\
                -Rp) shift; shift; shift; for p in \"$@\"; do if needed \"$p\"; then \
                  echo 'error: failed to prepare transaction (could not satisfy dependencies)' >&2; \
                  exit 1; fi; done; for t in $(expand \"$@\"); do echo \"$t\"; done; exit 0;;\n\
@@ -659,15 +682,16 @@ fn a_source_whose_key_failed_is_not_written() {
     assert!(stderr.contains("cites that key"), "{stderr}");
 }
 
-/// `undo` removes only the packages the run installed by name. What they pulled
-/// in stays, marked as dependencies, for the manager's own autoremove — temper
-/// never names a dependency.
+/// `undo` removes the packages the run installed by name and the dependencies
+/// only they needed — as the manager works them out — and nothing else: an
+/// unneeded package that was there before is not this run's, and stays.
 #[cfg(target_os = "linux")]
 #[test]
-fn undo_removes_only_what_was_named_and_leaves_dependencies_to_the_manager() {
+fn undo_takes_the_dependencies_only_its_packages_needed_and_no_other_orphan() {
     let e = Env::new();
     e.pacman();
-    e.machine(&["base"], &["base"], &[]);
+    // `stale` was unneeded before temper ran — a plain autoremove would take it.
+    e.machine(&["base", "stale"], &["base"], &[]);
     e.deps("jq", &["oniguruma"]);
     e.spec(&format!("{MACHINE}pacman = [\"jq\"]\n"));
     e.temper().args(["install", "--yes"]).assert().success();
@@ -676,16 +700,12 @@ fn undo_removes_only_what_was_named_and_leaves_dependencies_to_the_manager() {
 
     let out = e.temper().arg("undo").output().unwrap();
     assert!(out.status.success());
-    assert!(e.log().contains("pacman -R --noconfirm jq"), "{}", e.log());
+    assert!(e.log().contains("pacman -R --noconfirm jq oniguruma"), "{}", e.log());
     assert!(!e.installed().contains(&"jq".to_string()));
-    assert!(
-        e.installed().contains(&"oniguruma".to_string()),
-        "the dependency is the manager's to clean up, not temper's"
-    );
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("pacman -Qdtq"),
-        "the run names the manager's own clean-up"
-    );
+    assert!(!e.installed().contains(&"oniguruma".to_string()), "only jq needed it");
+    assert!(e.installed().contains(&"stale".to_string()), "an orphan from before is not this run's");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("1 other package(s) as no longer needed"), "{stderr}");
 }
 
 /// A declared package the manager holds as somebody else's dependency would go
@@ -768,4 +788,41 @@ fn the_prune_summary_does_not_count_a_kept_package_as_removed() {
         "{stdout}"
     );
     assert!(stdout.contains("mark apt libfoo as a dependency"), "{stdout}");
+}
+
+/// `prune` previews the dependencies it frees — only those its removals leave
+/// unneeded — and removes exactly what it showed. Shown for apt, whose manager
+/// has no scoped form and answers it as a difference, and for dnf, which lists
+/// them under "Removing unused dependencies".
+#[cfg(target_os = "linux")]
+#[test]
+fn prune_previews_and_removes_the_dependencies_only_its_extras_needed() {
+    for apt in [true, false] {
+        let e = Env::new();
+        let pm = if apt { "apt" } else { "dnf" };
+        if apt { e.apt() } else { e.dnf() }
+        // `stale` is an orphan from before; `shared` is needed by `keeper` too.
+        e.machine(&["base", "keeper", "stale", "shared"], &["base", "keeper"], &[]);
+        e.deps("keeper", &["shared"]);
+        e.deps("cowsay", &["libcow", "shared"]);
+        e.spec(&format!("{MACHINE}{pm} = [\"keeper\"]\n"));
+        e.temper().args(["install", "--yes"]).assert().success();
+        e.hand_install("cowsay");
+        // what `cowsay` pulled in, as the manager would have
+        fs::write(
+            e.pm.path().join("installed"),
+            format!("{}libcow\n", fs::read_to_string(e.pm.path().join("installed")).unwrap()),
+        )
+        .unwrap();
+
+        let out = e.temper().args(["--json", "prune", "--yes"]).output().unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(doc[pm], serde_json::json!(["cowsay"]), "{doc}");
+        assert_eq!(doc["dependencies"], serde_json::json!([format!("{pm} libcow")]), "{doc}");
+        assert_eq!(doc["failed"], serde_json::json!([]), "{doc}");
+        let have = e.installed();
+        assert!(!have.contains(&"cowsay".to_string()) && !have.contains(&"libcow".to_string()));
+        assert!(have.contains(&"shared".to_string()), "keeper still needs it");
+        assert!(have.contains(&"stale".to_string()), "not this prune's orphan");
+    }
 }

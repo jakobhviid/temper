@@ -246,6 +246,11 @@ guaranteed to fail, which is worse than none. The run names them at plan time
 instead (Principle #7, AGENTS.md question 7), so the limit is known before it is
 accepted. Teaching `undo` to escalate is the follow-on and is in `ROADMAP.md`.
 
+An `n/a` in column 1 for `flatpak-remote`, `rpm-repo` and `apt-source` means there
+is no fleet-wide list in `temper.toml`. Each is declared in a bundle (group scope,
+gated with it) or on the machine, because a remote or repo belongs to the
+packages that need it, and an ungated fleet list would write one onto every box.
+
 `rpm-repo` carries four `n/a` columns, which is unusual enough to say why in
 prose. A repo is *declared* like a package and *deployed* like a file, so its
 removal direction belongs to the ledger rather than to extras: only repos temper
@@ -270,12 +275,22 @@ after that is an extra. It is the line the ledger draws for files — temper-era
 not — one step wider: it also catches what a person installed by hand since.
 
 **temper names only what the spec names; dependencies are the manager's.** Each
-manager records whether a package was asked for or pulled in, and its autoremove
-trusts that record. temper keeps it true for the packages it names and touches
-nothing else, so a run does four things at most: install a named package, mark one
-as asked-for, remove one nothing else would go with, or mark one as a dependency
-again. It never names a dependency and never runs autoremove — that is
-whole-system, and apt's takes unrelated orphans with it.
+manager records whether a package was asked for or pulled in, and its clean-up
+trusts that record. temper keeps it true for the packages it names, so a run does
+four things at most: install a named package, mark one as asked-for, remove one
+nothing else would go with, or mark one as a dependency again. What counts as a
+dependency is always the manager's answer, never temper's.
+
+A removal does take the dependencies it frees — the ones the manager says only
+the removed packages needed — because a removal that leaves its libraries behind
+is not finished. It never runs the manager's plain autoremove, because that is
+whole-system: with one unrelated orphan on the box it took that orphan too, on
+every family measured, and on a long-lived machine it would take old kernels and
+earlier leftovers that nothing in the spec is about. Each manager scopes the
+question itself — dnf's own remove lists "unused dependencies", pacman's `-Rs`
+takes only its targets' — and apt, which has no scoped form, answers it as the
+difference between its autoremove before and after. Unneeded packages that are
+not the run's are counted and named, never touched.
 
 - `install` journals the names it installed, read back, not every package that
   appeared during the run: an unattended upgrade waiting on the same lock would
@@ -285,12 +300,12 @@ whole-system, and apt's takes unrelated orphans with it.
   `apt install` of it would do (dnf and pacman do not, measured on all three), or
   autoremove takes it with whatever pulled it in.
 - Removal (5, and `undo`) is simulated by the manager itself (`rpm -e --test`,
-  `apt-get -s remove`, `pacman -Rp`) at plan time, so the preview is the effect.
-  Where nothing else would go, the package alone is removed; each manager's own
-  dependency clean-up is off. Where something needs it, it is marked as a
-  dependency again rather than removed, and a package temper only marked is only
-  marked back. What a removed package pulled in stays, still marked as a
-  dependency, for the manager's autoremove.
+  `apt-get -s remove`, `pacman -Rp`) at plan time, and the dependencies it frees
+  are listed then, so the preview is the effect. At removal they are worked out
+  again and only those in both answers go, by name, with each manager's own
+  clean-up switched off — a run cannot remove more than it showed. Where
+  something needs a package, it is marked as a dependency again rather than
+  removed, and a package temper only marked is only marked back.
 
 A list for a manager the host cannot install with is **inert**, not
 unavailable — one bundle carries a `dnf`, an `apt` and a `pacman` list for a
@@ -567,7 +582,8 @@ about how drift is *computed* at each.
 Things that must be computed *whole* to be correct, or that represent a
 machine-wide state:
 
-- **The effective package set** (brew / flatpak / mas / gext / rpm-ostree).
+- **The effective package set** (brew / flatpak / mas / gext / rpm-ostree / dnf /
+  apt / pacman).
   Package drift is a dependency-closure computation, not a set subtraction (see
   below), so it can only be evaluated against the *complete* declared set for a
   machine. The declared set = union of composed apps' packages **+ a per-machine
@@ -628,7 +644,7 @@ list without touching tier 1.
 | `mas` | machine | converge Mac App Store apps in a separate, **forgiving** `mas install` loop — skips apps already installed (per `mas list`), mutes Spotlight-reindex noise (`MAS_NO_AUTO_INDEX`), and a MAS failure is warned + skipped, never fatal (see below) |
 | `gext` | machine | converge GNOME extensions (install from EGO + `gext update`); distinct from *enabling* them (a dconf key) |
 | `rpm-ostree` | machine | layer an rpm that can't be image-baked (proton-vpn); emits a **reboot-required** signal temper reports but never automates |
-| `dnf` / `apt` / `pacman` | machine | install packages with the host's own manager, one batched call each; extras counted from a per-machine baseline; removal held back where it would take a dependant along |
+| `dnf` / `apt` / `pacman` | machine | install packages with the host's own manager, one batched call each; extras counted from a per-machine baseline; a removal takes the dependencies only it needed, and a package something still needs is kept, as a dependency |
 | `profile` | app/machine | install a macOS `.mobileconfig` — **weaker contract** on the *apply* side only (a GUI `open` the user approves; not undoable). Drift is real: the file's `PayloadIdentifier` is matched against `system_profiler`'s installed profiles (user **and** device scope, no root, no MDM), giving `missing` / `drifted` (installed but the source moved, per a content stamp) / `in sync`. A **signed** profile is CMS-wrapped, so its identifier can't be read → `unavailable` |
 | `sysfile` | app | write one **root-owned** system file (`/etc/…`) with mode/owner/group, escalating internally (`sudo install`) for just that write. Drift compares content + mode + owner; not journaled (system-side) |
 | `exec` | app | run a user-supplied script — the escape hatch (see "exec's contract") |

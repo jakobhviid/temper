@@ -2665,6 +2665,11 @@ pub struct PrunePlan {
     /// own simulation removes without taking a dependant along; the rest are in
     /// `unremovable`.
     pub system: Vec<(syspkg::SysPm, String)>,
+    /// Dependencies that only the `system` removals needed, as the manager works
+    /// them out — removed with them, so a prune leaves no orphans of its own.
+    /// Never an orphan that was there already: a plain autoremove would take
+    /// those, and temper does not.
+    pub dependencies: Vec<(syspkg::SysPm, String)>,
     /// Host-package-manager extras to keep but mark as dependencies again:
     /// something installed needs them, or temper only ever marked them as
     /// asked-for. They stay installed, and the manager's own autoremove takes
@@ -2718,6 +2723,9 @@ impl PrunePlan {
         // labels are `SysPm::name`, and a test holds them to `LISTS`.
         for (pm, n) in &self.system {
             out.push((pm.name(), n.clone()));
+        }
+        for (pm, n) in &self.dependencies {
+            out.push(("dependencies", format!("{} {n}", pm.name())));
         }
         for (pm, n) in &self.demote {
             out.push(("demote", format!("{} {n}", pm.name())));
@@ -2795,6 +2803,12 @@ impl PrunePlan {
                 out.push(format!("removes {count} {} package(s)", pm.name()));
             }
         }
+        if !self.dependencies.is_empty() {
+            out.push(format!(
+                "removes {} dependenc(ies) only those packages needed",
+                self.dependencies.len()
+            ));
+        }
         if !self.demote.is_empty() {
             out.push(format!(
                 "marks {} package(s) as dependencies (they stay installed)",
@@ -2814,6 +2828,7 @@ impl PrunePlan {
         "dnf",
         "apt",
         "pacman",
+        "dependencies",
         "demote",
         "flatpak_remotes",
         "residue",
@@ -2830,6 +2845,9 @@ impl PrunePlan {
             "extensions" => format!("uninstall extension {item}"),
             "rpm_ostree" => format!("un-layer rpm {item}"),
             "dnf" | "apt" | "pacman" => format!("remove {list} package {item}"),
+            "dependencies" => format!(
+                "remove {item} — a dependency only the packages above needed"
+            ),
             "demote" => format!(
                 "mark {item} as a dependency — it stays installed, for what needs it"
             ),
@@ -3084,6 +3102,7 @@ mod prune_plan_tests {
                 (syspkg::SysPm::Dnf, "cowsay".into()),
                 (syspkg::SysPm::Apt, "cowsay".into()),
             ],
+            dependencies: vec![(syspkg::SysPm::Dnf, "oniguruma".into())],
             demote: vec![(syspkg::SysPm::Pacman, "oniguruma".into())],
             flatpak_remotes: vec!["vendor".into()],
             residue: vec!["~/.config/gone".into()],
@@ -3102,7 +3121,7 @@ mod prune_plan_tests {
             )],
         };
         assert!(!p.is_empty());
-        assert_eq!(p.len(), 10, "a list prune acts on is not being counted");
+        assert_eq!(p.len(), 11, "a list prune acts on is not being counted");
 
         // …and each list alone is both non-empty and counted, so no single
         // variant can be the one that is silently dropped.
@@ -3113,6 +3132,7 @@ mod prune_plan_tests {
             PrunePlan { rpm_ostree: p.rpm_ostree.clone(), ..Default::default() },
             PrunePlan { system: vec![p.system[0].clone()], ..Default::default() },
             PrunePlan { demote: p.demote.clone(), ..Default::default() },
+            PrunePlan { dependencies: p.dependencies.clone(), ..Default::default() },
             PrunePlan { flatpak_remotes: p.flatpak_remotes.clone(), ..Default::default() },
             PrunePlan { residue: p.residue.clone(), ..Default::default() },
         ] {
@@ -3268,7 +3288,7 @@ pub fn run_prune(
     // manager's own simulation says would take a dependant along. Decided here,
     // at plan time, so the preview and the confirm describe the run that will
     // happen rather than one the executor then declines.
-    let (mut system, mut demote) = (Vec::new(), Vec::new());
+    let (mut system, mut dependencies, mut demote) = (Vec::new(), Vec::new(), Vec::new());
     for &pm in syspkg::SysPm::ALL {
         if !syspkg::caps(pm).converge {
             continue;
@@ -3282,6 +3302,7 @@ pub fn run_prune(
                     continue;
                 };
                 system.extend(plan.remove.into_iter().map(|p| (pm, p)));
+                dependencies.extend(plan.deps.into_iter().map(|p| (pm, p)));
                 demote.extend(plan.demote.into_iter().map(|p| (pm, p)));
                 unremovable.extend(plan.held.into_iter().map(|(p, why)| (pm.name(), p, why)));
             }
@@ -3296,6 +3317,7 @@ pub fn run_prune(
         extensions,
         rpm_ostree: providers::rpm_ostree_extras(&providers::effective_rpm(home, machine)?, ignore),
         system,
+        dependencies,
         demote,
         flatpak_remotes: providers::remotes_extras(
             &providers::effective_remotes(home, machine)?,
@@ -3372,6 +3394,7 @@ pub fn commit_prune(
         };
         let release = syspkg::Release {
             remove: of(&plan.system),
+            deps: of(&plan.dependencies),
             demote: of(&plan.demote),
             ..Default::default()
         };
@@ -3381,10 +3404,14 @@ pub fn commit_prune(
         let (removed, demoted) = syspkg::release(pm, &release, false);
         let _ = syspkg::forget_marked(&machine.name, pm, &demoted);
         let _ = syspkg::forget_marked(&machine.name, pm, &removed);
+        // A previewed dependency still here was kept on purpose — something
+        // needs it now — or failed to go; either way it is not removed, and the
+        // count must not say it was.
         failed.extend(
             release
                 .remove
                 .iter()
+                .chain(release.deps.iter())
                 .filter(|p| !removed.contains(p))
                 .chain(release.demote.iter().filter(|p| !demoted.contains(p)))
                 .map(|p| format!("{} {p}", pm.name())),

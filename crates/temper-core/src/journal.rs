@@ -546,8 +546,17 @@ pub fn undo(run: Option<&str>, dry_run: bool) -> Result<(usize, usize)> {
                     reverted += plan.remove.len() + plan.demote.len() + plan.gone.len();
                     skipped += plan.held.len();
                     cl.noted(&format!(
-                        "would un-install {provider}: {} package(s){}",
+                        "would un-install {provider}: {} package(s){}{}",
                         plan.remove.len(),
+                        if plan.deps.is_empty() {
+                            String::new()
+                        } else {
+                            format!(
+                                ", with {} dependenc(ies) only they needed: {}",
+                                plan.deps.len(),
+                                plan.deps.join(", ")
+                            )
+                        },
                         if plan.demote.is_empty() {
                             String::new()
                         } else {

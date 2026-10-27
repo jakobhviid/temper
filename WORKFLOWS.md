@@ -67,8 +67,11 @@ is installed by name after `init` is an extra — see §9c.
 
 ## 1. Bring up a machine (fresh install / reinstall)
 
-**When:** a new box, or a reinstalled one, that already has brew + temper
-(bootstrap is out of scope — a separate script).
+**When:** a new box, or a reinstalled one, that already has temper — from
+Homebrew, or on a box without it from the install script in the README — and
+brew, if the spec declares brew packages (bootstrap is out of scope — a separate
+script). A Debian, Fedora or Arch box whose packages are all `apt`, `dnf` or
+`pacman` lists needs no Homebrew at all.
 
 ```sh
 temper setup ~/my-spec # once: record where your folder is (optional)
@@ -235,7 +238,9 @@ temper update
 
 Upgrades the declared package set (`brew upgrade` + `flatpak update`), re-applies
 `always` config steps (so hand-drift is corrected), and backfills `ensure` steps
-that are missing. It does **not** add newly-declared apps wholesale (that's an
+that are missing. It never upgrades through rpm-ostree, dnf, apt or pacman: the
+OS owns those versions, so keep using `rpm-ostree upgrade`, `dnf upgrade`, `apt
+upgrade` or `pacman -Syu` (or the OS's own updater) for them. It does **not** add newly-declared apps wholesale (that's an
 `install`), and it never runs `restore-dconf` (reloading a snapshot would clobber live
 tweaks). *(RIS: `just update`, which deliberately excludes gnome-restore.)*
 
@@ -259,7 +264,9 @@ verdict ("Nothing to update.", about *its* remotes) is never shown as temper's.
 > folder came from a newer temper) from a genuine typo. On a skew it says so —
 > and, on a Homebrew install (macOS or Linuxbrew), offers to run
 > `brew upgrade temper` and re-run your command, instead of dumping a cryptic
-> `unknown field` error. Tune this with
+> `unknown field` error. Without Homebrew, re-run the install script (`curl
+> -fsSL https://raw.githubusercontent.com/jakobhviid/temper/main/install.sh |
+> sh`), which puts the latest release over the old binary. Tune this with
 > `temper configure set update.mode <off|warn|prompt|auto>` (default `prompt`).
 > `auto` upgrades unattended — **only temper**, never your other packages.
 > (`temper upgrade` is an alias for `temper update`.)
@@ -315,6 +322,12 @@ of the drift. You pick a direction and run what it prints:
 > is often *every* flatpak extra, so the plan is empty while `drift` still lists
 > them; the line is what connects the two. To act on one, either declare it, or
 > remove it yourself with `flatpak uninstall --system <id>`.
+- **dnf / apt / pacman:** an extra is only what was installed by name since the
+machine's baseline — the image's own packages never are. `prune` removes it with
+the dependencies only it needed (all listed in the preview), and keeps one that
+something installed still needs, marked as a dependency. drift also flags a
+declared package the package manager holds only as a dependency, which `install`
+marks as yours. §9c has the whole loop.
 - **GNOME extensions installed but not declared:** three answers, like packages —
 `temper reconcile` declares it for **this machine** (its own `gnome_extensions`
 list), `temper prune` uninstalls it (asks first), or
@@ -423,16 +436,21 @@ temper reconcile --csw                  #   (same thing, shorter)
 ```
 
 `reconcile` prompts per item (missing entries default to keep, extras default to
-skip; flatpak extras also offer "ignore") and edits only the machine's **own**
-Brewfile, never a shared bundle — so it's safe to run often. Absorbed entries are
+skip, and any extra can be ignored instead) and edits only what belongs to **this
+machine** — its Brewfile and the lists in its own `[[machine]]` block
+(`gnome_extensions`, `flatpak_remotes`, `rpm_ostree`, `dnf`, `apt`, `pacman`,
+`brew_trust`, `[machine.ignore]`) — never a shared bundle, so it's safe to run
+often. For dnf, apt and pacman the extras are what was installed by name since
+the baseline, and a machine entry the machine holds only as a dependency is
+offered for dropping (§9c). Absorbed entries are
 written back in canonical order (taps → brews → casks → mas, alphabetical within
 each group) so the Brewfile stays sorted instead of growing an unsorted tail.
 
-`reconcile` also reconciles **tap-trust** (`[brew].trust`, fleet-level in
-temper.toml) the same way: a tap trusted on the machine but not declared can be
-absorbed into `[brew].trust` (or routed to `[ignore].tap`), and a declared tap
-that isn't currently trusted can be dropped (default keep — `install`/`update`
-would re-trust it). `adopt` is the read-only preview.
+`reconcile` also reconciles **tap-trust** the same way: a tap trusted on the
+machine but not declared can be absorbed into this machine's `brew_trust` (or
+routed to its `[machine.ignore].tap`), and one of its own declared taps that isn't
+currently trusted can be dropped (default keep — `install`/`update` would
+re-trust it). The fleet `[brew].trust` is written only with `--include-trust`. `adopt` is the read-only preview.
 
 ### `--current-state-wins` (`--csw`) — absorb everything, no prompts
 
@@ -456,11 +474,12 @@ absorbed (and sorted to the top), one declared but absent is dropped.
 > --packages-only`) before absorbing, or you'll adopt an incomplete machine as the
 > spec. The preview and `temper undo` are your backstop either way.
 
-> **`--csw` writes machine-scoped files only.** `[brew].trust` and `[ignore]`
-> live in `temper.toml` at **fleet** scope — absorbing them from one machine
-> would silently change every other machine. So `--csw` reports tap-trust drift
-> and leaves it alone. An extra is therefore always *added*, never routed to
-> `[ignore]` (ignoring is a judgement, not a state — that stays interactive).
+> **`--csw` writes machine-scoped files only.** The fleet `[brew].trust` and
+> `[ignore]` live in `temper.toml` at **fleet** scope — absorbing into them from
+> one machine would silently change every other machine. So `--csw` records a
+> trusted tap in this machine's `brew_trust`, and touches the fleet list only with
+> `--include-trust`. An extra is always *added*, never routed to an ignore list
+> (ignoring is a judgement, not a state — that stays interactive).
 >
 > **`--include-trust` adds, and only adds.** It records taps *this* machine
 > trusts that the fleet doesn't declare — real knowledge. It will **never remove**
@@ -565,6 +584,15 @@ You find that out **before** the run rather than after: `temper install
 reason (`assets/setup.sh — an \`exec\` runs arbitrary code; temper cannot know
 what to undo`), so "can I take this back?" is answered while the run is still a
 forecast.
+Package installs are reverted too: what the run installed is un-installed — brew
+formulae and casks, flatpaks, App Store apps, GNOME extensions, and layered rpms
+(which stages a deployment, as layering did). For dnf, apt and pacman that is the
+packages the run installed by name, with the dependencies only they needed; one
+that something installed since has come to need is kept, marked as a dependency,
+and a package the run only marked as yours is marked back (§9c). An *upgrade* by
+`update` is not revertible, and neither is a repo, source, tap-trust or remote
+the run wrote — the run says so before it starts.
+
 Every revert is guarded: if the target changed since, it's skipped, not
 clobbered. For a subtree the guard is the **strip-filtered** dump, so ordinary
 desktop churn in stripped keys doesn't quietly disqualify the undo.
@@ -588,7 +616,9 @@ and lists any change `undo` would not be able to revert.
 **`prune` reports what it did, not what it planned.** A removal that fails — a
 root-owned file it could not escalate for, a flatpak installed system-wide — is
 listed as still present rather than counted as done, and `--json` carries the
-same list under `failed`. So "3 item(s) removed" means three fewer things exist.
+same list under `failed`. So "3 item(s) removed" means three fewer things exist,
+and a package kept as a dependency is counted apart ("1 kept and marked as
+dependencies").
 
 ## 8. Retire something across the fleet
 
@@ -642,25 +672,34 @@ tap-trust runs before brew. Remotes are read from **both** installations — one
 the image provides already satisfies a declaration — and written to, and removed
 from, your **user** one, which is the only one temper may touch.
 
-## 9b. Declare where layered rpms come from
+## 9b. Declare where rpm packages come from
 
 **When:** an `rpm_ostree` or `dnf` package needs a repo the machine does not have.
 
 ```toml
 [[machine]]
-rpm_repos = [
-    { repo = "assets/rpm-repos/brave-browser.repo", key = "assets/rpm-repos/RPM-GPG-KEY-brave" },
-]
+dnf       = ["gh"]
+rpm_repos = [{ repo = "assets/rpm-repos/gh-cli.repo" }]
 ```
 
-The rpm-side sibling of `flatpak_remotes`, at the same two scopes: put a repo in
-the bundle whose packages resolve from it (gated with that bundle), or in
-`[[machine]]` for one box only. Ship the `.repo` file the vendor publishes —
-the declaration points at an asset, not at dnf fields, because a repo file often
-has to be byte-faithful. A disabled repo is one whose bytes say `enabled=0`.
+The rpm-side sibling of `flatpak_remotes`, at the same two scopes. For one box,
+declare it in `[[machine]]`. For every machine that composes an app, declare it
+in that app's bundle, which gates it with the bundle; a bundle's entry is edited by
+hand, never by `reconcile`. Ship the `.repo` file the vendor publishes — the
+declaration points at an asset, not at dnf fields, because a repo file often has
+to be byte-faithful. A disabled repo is one whose bytes say `enabled=0`.
+
+**`key` is only for a repo that names its key as a file.** If the `.repo` says
+`gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-vendor`, ship that key beside it as
+`key = "assets/rpm-repos/RPM-GPG-KEY-vendor"`. If it says `gpgkey=https://…`
+(GitHub CLI, Brave and most vendors), dnf fetches the key itself and there is
+nothing to ship. SPEC's `rpm_repos` entry covers the `repo_gpgcheck=1` case.
 
 Repos are installed **before** any package converge, so a clean machine
-resolves its layered packages on the **first** run. The key lands before the
+resolves its packages on the **first** run: dnf fetches a new repo's metadata
+the first time it reads it (measured with GitHub CLI's repo on Fedora 44, Alma 8
+and 9, and Rocky 10), and rpm-ostree re-reads the directory on every
+transaction. The key lands before the
 repo that cites it. Both go to fixed destinations
 (`/etc/yum.repos.d/`, `/etc/pki/rpm-gpg/`) and take no `to`.
 
@@ -678,7 +717,8 @@ never touched, and never reported, so there is no ignore list to maintain.
 ## 9c. Install with the distro's own package manager (dnf, apt, pacman)
 
 **When:** a box runs Fedora or an EL rebuild (dnf), Debian or Ubuntu (apt), or
-Arch (pacman), and you want packages from its own repositories.
+Arch (pacman), and you want packages from its own repositories. (Vendor
+repositories: `rpm_repos`, §9b, and `apt_sources`, §9d.)
 
 ```toml
 # apps/cli.toml — one bundle, a list per family
@@ -688,45 +728,144 @@ apt    = ["fd-find", "ripgrep", "tmux"]
 pacman = ["fd", "ripgrep", "tmux"]
 ```
 
-Names differ between families, so each manager has its own list, and each list
-applies only on a host whose manager it names — a Debian box ignores the `dnf`
-and `pacman` lines entirely. `install` runs one batched call per manager, as root
-(one password for the whole run), after `rpm_repos` so a vendor package resolves
-on the first pass; apt refreshes its package lists first. temper names only what
-the spec names: what a package pulls in belongs to the package manager, which
-records it as a dependency and clears it with its own autoremove. So `undo`
-removes the packages the run installed by name, and leaves what they pulled in to
-`apt autoremove`, `dnf autoremove` or `pacman -Rns $(pacman -Qdtq)`. A declared
-package that is already installed as another package's dependency is marked as
-yours instead — drift shows it first — so that autoremove cannot take it; `undo`
-marks it back. temper never upgrades through these managers. Declare package names: a group, a
-pattern or a provide (`vim` for `vim-enhanced`) installs nothing of that name, so
-it stays missing and `install` says so.
+```toml
+# temper.toml — one machine's own additions, which reconcile also writes
+[[machine]]
+name = "atlas"
+os   = "linux"
+apps = ["cli"]
+apt  = ["htop"]
+```
 
-**Extras start at the baseline.** The first time temper manages a manager on a
-machine — `init`, or the first `install` that declares it — it records what had
-already been installed by name. Only what is installed by name after that is an
-extra: `drift` reports it, `prune` removes it, `reconcile` absorbs it into the
-machine's own list. Dependencies are never extras. Until a baseline exists,
-`drift` reports the extras direction as unavailable rather than listing the
-base system. The baseline lives in temper's state directory
-(`~/.local/state/temper/baseline/<machine>.json`); delete the entry for a
-manager to have the next `install` record a fresh one.
+**Which list applies where.** Package names differ between families, so each
+manager has its own list, and a list applies only on a host that installs with
+its manager. Elsewhere it is inert: a Debian box ignores the `dnf` and `pacman`
+lines, so one bundle serves a mixed fleet. A machine's *own* list for a manager
+its host does not have is a mistake and is reported `unavailable`. On an
+image-based Fedora (Silverblue, Bazzite, CoreOS) dnf is present but cannot
+install, so a bundle's `dnf` list is inert there too, and a `[[machine]].dnf`
+list reports `unavailable`, naming `rpm_ostree` — layer it there instead.
 
-**`prune` removes exactly what it shows.** Each removal is simulated by the
-manager first. An extra nothing needs is removed, and only it. An extra that
-something installed needs is not removed: it is marked as a dependency again, so
-it stays for what needs it and the manager clears it later. A package temper only
-ever marked as yours is only ever marked back. What a removed extra pulled in
-stays, marked as dependencies, for the manager's autoremove.
+**What temper touches, and what it leaves to the package manager.** Every
+package manager records whether a package was asked for by name or pulled in as a
+dependency, and its own clean-up trusts that record. temper only ever does four
+things through it: install a package the spec names, mark a named package as
+yours, remove a named package nothing else needs — together with the
+dependencies the package manager says only that package needed — or mark a named
+package as a dependency again. It never decides what a dependency is, never
+upgrades (the OS owns versions), and never runs a whole-system autoremove, which
+would also take unneeded packages that have nothing to do with the spec.
 
-Two hosts need a word. On an **image-based** Fedora (Silverblue, Bazzite,
-CoreOS) dnf is present but cannot install, so a bundle's `dnf` list is inert
-there — as another family's is — and a `[[machine]].dnf` list reports unavailable
-and points at `rpm_ostree`. On **Arch**, temper installs against the
-sync database as it stands and never runs `-Sy`, which would be a partial
-upgrade; a package pacman cannot find or download usually means the database is
-stale, and `sudo pacman -Syu` is yours to run.
+**`install`.** Repos and sources are written first, then one batched install per
+manager, as root (one password for the whole run). apt refreshes its package
+lists first. pacman installs against its sync database as it stands and never
+runs `-Sy`, which would be a partial upgrade; a package it cannot find or
+download usually means a stale database, and `sudo pacman -Syu` is yours to run.
+Entries are package names: a group, a pattern or a provide (`vim` for
+`vim-enhanced`) installs nothing of its own name, so it stays missing and the run
+says so. A declared package that is already installed, but only as another
+package's dependency, is marked as yours — no package changes — because
+otherwise the package manager's autoremove takes it along with whatever pulled
+it in. What the run installed and marked is journaled for `undo`.
+
+**Extras start at the baseline.** The first time temper manages a package
+manager on a machine — `init`, or the first `install` that declares it — it
+records what had already been installed by name. Only what is installed by name
+after that is an extra: `drift` reports it, `prune` removes it, `reconcile`
+absorbs it. The image's own packages are never extras, and dependencies never
+are. Until a baseline exists, the extras direction reports `unavailable` rather
+than listing the base system. Nothing re-takes it — not `undo`, `prune` or a
+later `install` — because re-taking it would fold every hand install since into
+"was already here". After a distribution upgrade (Debian 13 to 14, Fedora 44 to
+45), review `drift`: a package the upgrade installed by name shows up as an
+extra, and you can ignore it, absorb it, or delete the baseline entry so the
+next `install` records a fresh one. There is no way yet to declare that a
+distro package must *not* be installed; `retire_packages` takes Brewfile tokens
+only (ROADMAP).
+
+**What drift reports.** Findings are grouped under `dnf`, `apt` or `pacman`:
+
+```
+$ temper drift
+drift · m
+
+  apt
+    ✗ bc        extra  [apt-extra]
+    ✗ libonig5  extra  [apt-extra]
+    … 1 more in sync
+```
+
+| kind | status | meaning | answer |
+|---|---|---|---|
+| `apt` | `missing` | declared, not installed | `install`; or drop it from the machine's list (`reconcile`), or from the bundle by hand |
+| `apt` | `installed as a dependency` | declared, but held as another package's dependency | `install` marks it as yours; or `reconcile` drops a machine entry |
+| `apt` | `installed` | all N declared packages are present (one in-sync check) | — |
+| `apt` | `unavailable — …` | the machine's own list on a host that cannot install with it, or the package manager failed to answer | status-only; the reason is in the line |
+| `apt-extra` | `extra` | installed by name since the baseline, declared nowhere | `prune` removes it; `reconcile` absorbs it into `[[machine]].apt`, or `[machine.ignore].apt` silences it |
+| `apt-extra` | `unavailable — …` | no baseline yet, or the package manager could not say what was installed by name | the next `install` records a baseline; otherwise the reason is in the line |
+
+The same for `dnf` / `dnf-extra` and `pacman` / `pacman-extra`.
+
+**`prune`.** The package manager simulates each removal before anything is
+confirmed, and the preview shows exactly what will happen:
+
+- `remove apt package cowsay`: an extra nothing installed needs. It goes, and so
+  do the dependencies only it needed, each listed as `remove apt libcow — a
+  dependency only the packages above needed`. That list is the package manager's
+  own answer: dnf's "unused dependencies", pacman's `-Rs`, apt's autoremove
+  computed before and after. At removal time it is worked out again, and only
+  what is in both answers goes, so a run never removes more than it showed.
+- `mark apt libfoo as a dependency`: an extra something installed still needs.
+  It is not removed. It stays as a dependency, and the package manager removes it
+  once nothing needs it. A package temper only ever marked as yours is only ever
+  marked back like this.
+- unremovable: the package manager could not simulate removing it, so it is left
+  alone, with the reason.
+
+Unneeded packages that are *not* from this prune — a kernel the OS replaced, a
+leftover from your own removals — are only counted ("the package manager lists
+N other package(s) as no longer needed") with the command that removes them.
+Whether to run it is yours. On dnf 4 (EL 8, 9 and 10), working out the freed
+dependencies needs root, so `prune` asks for the password before its preview,
+`--dry-run` included. If they cannot be worked out, the run says so and removes
+only the named packages.
+
+What it looks like, on a Debian box where `bc` was installed by hand and an
+old orphan was already there:
+
+```
+$ temper prune
+  - remove apt package bc
+  - remove apt libreadline8t64 — a dependency only the packages above needed
+  - remove apt readline-common — a dependency only the packages above needed
+  → the package manager lists 1 other package(s) as no longer needed — not from this run; `sudo apt autoremove` removes them
+prune m: 3 item(s) removed
+```
+
+`prune --json` lists the removals under `dnf`, `apt` and `pacman` as bare package
+names. `dependencies` (freed) and `demote` (kept as dependencies) hold
+`"<manager> <name>"` strings, `unremovable` holds `{manager, name, why}`
+objects, `unavailable` names package managers it could not ask, and `failed`
+names anything that did not go as planned.
+
+**`undo`.** It reverts an install the same way: it removes what the run
+installed by name, with the dependencies only those packages needed. It marks
+back what the run marked as yours. If something installed since needs one of
+them, it is kept as a dependency instead. `undo --dry-run` shows all of it,
+dependencies included.
+
+**`reconcile`.** It offers each extra for `[[machine]].<manager>` (or `i` for
+`[machine.ignore].<manager>`), and offers to drop a machine entry that is not
+installed, or is installed only as a dependency. A bundle's list is never edited
+from one machine. `reconcile --current-state-wins` takes the machine's side for
+all of these.
+
+**Where temper keeps this.** In its state directory — `$TEMPER_STATE_DIR` if set,
+else `$XDG_STATE_HOME/temper`, normally `~/.local/state/temper/`: `baseline/<machine>.json`
+holds each package manager's baseline, and `marked/<machine>.json` the packages
+temper marked as yours without installing them. Delete a package manager's
+baseline entry to have the next `install` record a fresh one. Run temper as the
+same user each time: `sudo temper …` keeps its state under root's home instead.
 
 ## 9d. Declare where apt packages come from
 
@@ -741,17 +880,41 @@ apt_sources = [
 ]
 ```
 
+```
+# assets/apt/github-cli.sources — GitHub's apt source, in deb822 form
+Types: deb
+URIs: https://cli.github.com/packages
+Suites: stable
+Components: main
+Signed-By: /etc/apt/keyrings/githubcli-archive-keyring.gpg
+```
+
 `rpm_repos`' sibling, at the same two scopes and converged at the same point:
 the key lands in `/etc/apt/keyrings/`, then the source in
 `/etc/apt/sources.list.d/`, then apt refreshes its lists and installs — one run
-on a clean machine. Ship the vendor's own files, with the source's `Signed-By:`
-pointing at `/etc/apt/keyrings/<the key's file name>`. A source naming a
-release codename (`Suites: noble`) belongs in a bundle or machine gated to that
-release.
+on a clean machine. Ship the vendor's own files in the folder: the source, with
+its `Signed-By:` pointing at `/etc/apt/keyrings/<the key's file name>`, and the
+key as the vendor publishes it (an armored `.asc` works on apt 2.4 and later —
+Debian 12, Ubuntu 22.04 — a dearmored `.gpg` everywhere). A source whose
+`Suites:` names a release codename (`noble`, `trixie`) is per-release, and
+bundles cannot be gated by release: put it on the machine (`[[machine]]
+apt_sources`), or in a bundle only machines on that release list in `apps`.
+On a host without apt, a bundle's sources are inert and a machine's own report
+`unavailable`.
+
+Vendors publish either a deb822 `.sources` file or a one-line `.list`
+(`deb [signed-by=/etc/apt/keyrings/…] https://… stable main`). apt reads both
+from `sources.list.d`, so ship whichever the vendor publishes, unchanged. temper
+does not pin: when Debian or Ubuntu carries the same package, apt installs the
+highest version across all sources. For one machine only, declare the source in
+`[[machine]]`, as for `rpm_repos`.
 
 Removal mirrors `rpm_repos`: drop the declaration and the files temper wrote
-are residue that `prune` removes after the packages, if you have not edited
-them. The image's own sources are never touched.
+are residue — `deployed-file-extra` in `drift`, `residue` in `prune --json` —
+that `prune` removes after the packages, if you have not edited them. Never name a source after one the image ships (`debian.sources`,
+`ubuntu.sources`): temper would overwrite it, and dropping the declaration
+later would delete it. To add a component or a mirror, ship a file of your own
+name.
 
 ## 10. Per-machine versions of the fleet lists
 

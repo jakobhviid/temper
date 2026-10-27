@@ -94,6 +94,8 @@ enum Cmd {
     ///
     /// Re-apply the `always` config steps and upgrade declared packages
     /// (`brew upgrade` + `flatpak update`). Does not add newly-declared apps.
+    /// Never upgrades through rpm-ostree, dnf, apt or pacman: the OS owns
+    /// those versions.
     #[command(alias = "upgrade")]
     Update,
     /// Show what's out of sync (read-only), with the commands to fix it.
@@ -107,9 +109,15 @@ enum Cmd {
     /// Remove installed-but-undeclared packages + untrust undeclared taps.
     ///
     /// Dependency-aware (a kept package's transitive deps are not flagged) and
-    /// honors the machine's `[ignore]` baseline. Also `brew untrust`s any tap
+    /// honors `[ignore]` and `[machine.ignore]`. Also `brew untrust`s any tap
     /// trusted on the machine but not in `[brew].trust` — the machine→spec
     /// mirror of `reconcile` absorbing a trusted tap. Confirms first.
+    ///
+    /// For dnf, apt and pacman an extra is a package installed by name since
+    /// the machine's baseline: it is removed with the dependencies only it
+    /// needed, or — if something installed still needs it — kept and marked as
+    /// a dependency. Unneeded packages that are not from this prune are counted,
+    /// never removed. Everything is in the preview before you confirm.
     Prune {
         /// List what would be removed without removing anything.
         #[arg(long)]
@@ -124,6 +132,10 @@ enum Cmd {
     /// none), wires up `brewfiles/<name>`, and absorbs the machine's current
     /// package + desktop state into it — `reconcile --current-state-wins
     /// --include-trust` under the hood. Previews and confirms once; journaled.
+    ///
+    /// dnf, apt and pacman are not absorbed: what they already have installed
+    /// by name — the base system, on a stock image — is recorded as this
+    /// machine's baseline, and only what is installed after it counts as extra.
     ///
     /// This is "put this machine in the folder". To point temper at *which*
     /// folder to use, see `setup`.
@@ -177,20 +189,22 @@ enum Cmd {
     Retired,
     /// Interactively absorb extras / drop missing entries (spec←machine).
     ///
-    /// Reconcile the machine's Brewfile with reality: add installed-but-
-    /// undeclared extras, drop declared-but-absent entries, or route a flatpak
-    /// extra to `[ignore]`. Edits only the machine's own Brewfile; `--json`
-    /// previews the plan without prompting.
+    /// Reconcile this machine's own declarations with reality: add
+    /// installed-but-undeclared extras, drop declared-but-absent entries, or
+    /// route an extra to the machine's `[machine.ignore]`. Edits only what
+    /// belongs to this machine — its Brewfile and its `[[machine]]` lists
+    /// (packages, extensions, flatpak remotes, rpm-ostree, dnf, apt, pacman) —
+    /// never a shared bundle; `--json` previews the plan without prompting.
     Reconcile {
         /// Machine name (default: resolved from hostname).
         machine: Option<String>,
         /// Take the machine's current state for every item, without prompting.
         ///
         /// Adds every extra (taps included), drops every declared-but-absent
-        /// entry, and absorbs every changed desktop key. Machine-scope only:
-        /// tap-trust lives in temper.toml at FLEET scope, so it is reported but
-        /// not touched unless you pass --include-trust. Still previews and
-        /// confirms once.
+        /// entry, and absorbs every changed desktop key. Machine-scope only: a
+        /// trusted tap goes into this machine's `brew_trust`, and the fleet
+        /// `[brew].trust` is written only with --include-trust. Still previews
+        /// and confirms once.
         ///
         /// Converge before you absorb: on a machine that hasn't run `install`
         /// yet, "declared but not installed" and "not wanted" look identical, so
