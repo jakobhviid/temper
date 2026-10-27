@@ -403,20 +403,12 @@ fn run(cli: Cli) -> Result<()> {
     // Before any output: the core's live renderers (progress regions, per-item
     // lines) must know to stay off stdout so `--json` is one document.
     ui::set_json(json);
-    // Before any verb runs: `sudo temper …` journals into root's state directory,
-    // so the unprivileged `temper undo` that follows reads a different one and
-    // finds nothing to revert. Say it up front, while the run can still be
-    // re-invoked without `sudo` — afterwards the record is already in the wrong
-    // place. stderr, so `--json` keeps one parseable document on stdout.
-    if let Some(root) = journal::sudo_split_state_root() {
-        eprintln!(
-            "{} running under sudo: this run's undo record goes to {}, not your own state directory — `temper undo` as yourself will not see it.",
-            ui::yellow(ui::g_warn()),
-            root.display()
-        );
-        eprintln!(
-            "  Re-run without `sudo` (temper escalates per-command where it needs root), or set TEMPER_STATE_DIR so both accounts resolve the same path."
-        );
+    // Before any verb runs: root reached through sudo changes root's account, not
+    // the user's — explained, and run only when the user agrees.
+    if !matches!(cli.cmd, None | Some(Cmd::Completions { .. })) {
+        if let Some(user) = temper_core::sudo::elevated_from() {
+            sudo_guard(&user, json)?;
+        }
     }
     let _ = PULL_OVERRIDE.set(match (cli.pull, cli.no_pull) {
         (true, _) => Some(true),
@@ -3065,6 +3057,51 @@ fn prompt_yes(msg: &str) -> bool {
 }
 
 /// `[y/N]` — default no.
+/// temper started as root through `sudo` (or `doas`): say what that changes, and
+/// run only if the user agrees.
+///
+/// temper works on the account it runs as — the files in its home, its Homebrew,
+/// its undo record and package baseline — and asks for root by itself, one command
+/// at a time, where a step needs it. As root it works on root's account instead,
+/// or writes root-owned files into the user's home where sudo keeps HOME, and files
+/// its record where the user's own `undo` and `drift` cannot see it. A real root
+/// login is a different thing: nothing was elevated, so it is not stopped, and the
+/// message says how to get one. Without a terminal there is no one to ask, so it
+/// refuses unless `TEMPER_ALLOW_SUDO` is set — `--yes` is not an answer to this.
+fn sudo_guard(user: &str, json: bool) -> Result<()> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let roots_home = home == "/root" || home.starts_with("/root/") || home.starts_with("/var/root");
+    let account = if roots_home {
+        format!("it configures root's account ({home}), not {user}'s")
+    } else {
+        format!("the files it writes into {home} belong to root, and {user} cannot edit them")
+    };
+    eprintln!("{} temper is running as root through sudo.", ui::yellow(ui::g_warn()));
+    eprintln!(
+        "  temper works on the account it runs as, and asks for root by itself, one command at a time, where a step needs it. Run as root:"
+    );
+    eprintln!("    · {account};");
+    eprintln!(
+        "    · its undo record and package baseline go to {}, where `temper undo` and `temper drift` run as {user} do not look;",
+        journal::state_root().display()
+    );
+    eprintln!("    · Homebrew refuses to run as root, so its package steps fail.");
+    eprintln!("  Run it as {user}, without sudo. To work on root's own account, log in as root (`su -`) and run it there.");
+    if std::env::var_os("TEMPER_ALLOW_SUDO").is_some() {
+        eprintln!("  TEMPER_ALLOW_SUDO is set: running as root.");
+        return Ok(());
+    }
+    if json || !io::stdin().is_terminal() {
+        anyhow::bail!("not run: temper refuses to run as root through sudo without a terminal to ask on — set TEMPER_ALLOW_SUDO=1 to run anyway");
+    }
+    eprint!("Run as root anyway? [y/N] ");
+    if read_reply().starts_with('y') {
+        Ok(())
+    } else {
+        anyhow::bail!("not run — run it as {user}, without sudo")
+    }
+}
+
 fn prompt_no(msg: &str) -> bool {
     print!("{msg} [y/N] ");
     read_reply().starts_with('y')

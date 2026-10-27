@@ -206,10 +206,6 @@ so the headline matches what happened to the machine.
 - **`retire_packages` takes Brewfile-grammar tokens only.** There is no way to say
   "this dnf, apt or pacman package must not be installed"; such a package can
   only be an extra, which the baseline hides if it predates temper.
-- **The baseline lives in the invoking user's state directory.** `sudo temper
-  install` records it under root's, and the unprivileged `drift` after it finds
-  none and reports extras as unavailable — the same split `journal::
-  sudo_split_state_root` warns about for runs.
 - **Two declared repos may define the same repo id, and nothing says so.**
   `rpm_repos` deduplicates by destination *filename*, so two bundles shipping
   `brave.repo` and `brave-browser.repo` that both contain `[brave-browser]`
@@ -421,14 +417,6 @@ in the feature matrix.
   content stamp and returns `Changed` as soon as `open` returns — which is when
   the window appears, not when the user approves. Declining a profile therefore
   reports an applied change and an unrevertible one.
-- **`sudo temper …` splits the state root.** The journal, ledger and profile
-  stamps land under `/var/root/Library/Application Support/temper`, so a later
-  unprivileged `undo` sees nothing to undo. temper reports it at startup —
-  `journal::sudo_split_state_root` — naming the path the record went to and the
-  two ways out. What a Mac still has to settle is the *path*: the warning tests
-  for `/var/root`, which is root's home on macOS by convention, and no Linux box
-  can confirm that a Mac under `sudo` actually resolves `HOME` there. (Not
-  mac-specific in principle, but that is where the path differs most.)
 
 Fixed blind, and portably, rather than left for the hardware: `sudo install -D`
 (GNU-only, so every `sysfile` step failed on macOS — and the error propagated

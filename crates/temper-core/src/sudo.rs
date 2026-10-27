@@ -234,6 +234,33 @@ impl Drop for KeepAlive {
     }
 }
 
+/// The account that started temper through `sudo` or `doas`, when temper is
+/// therefore running as root. `None` for an ordinary user, for `sudo -u` into
+/// another ordinary account, and for a real root login — `su -` clears both
+/// variables, so nothing was elevated there.
+pub fn elevated_from() -> Option<String> {
+    let invoker = ["SUDO_USER", "DOAS_USER"]
+        .iter()
+        .find_map(|v| std::env::var(v).ok())?;
+    elevated(&invoker, euid_is_root())
+}
+
+/// The decision, over its inputs rather than the environment, so it is testable.
+fn elevated(invoker: &str, euid_root: bool) -> Option<String> {
+    (euid_root && !invoker.is_empty() && invoker != "root").then(|| invoker.to_string())
+}
+
+/// `id -u`, because `/proc` is Linux-only and std has no `geteuid`. Asked only
+/// when a sudo variable is set, so an ordinary run never spawns it.
+fn euid_is_root() -> bool {
+    Command::new("id")
+        .arg("-u")
+        .stdin(Stdio::null())
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +290,15 @@ mod tests {
         let k = keep_alive();
         drop(k);
         std::env::remove_var("TEMPER_NO_SUDO_KEEPALIVE");
+    }
+
+    /// Root through sudo or doas is guarded; a real root login, an ordinary user
+    /// and `sudo -u` into another ordinary account are not.
+    #[test]
+    fn only_root_reached_through_sudo_is_elevated() {
+        assert_eq!(super::elevated("jakob", true), Some("jakob".into()));
+        assert_eq!(super::elevated("root", true), None);
+        assert_eq!(super::elevated("", true), None);
+        assert_eq!(super::elevated("jakob", false), None);
     }
 }

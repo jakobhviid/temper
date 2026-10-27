@@ -153,6 +153,16 @@ every tool's — and every `exec`'s — full output instead of the spinner when
 debugging. (An idempotent `exec` that re-runs each `update` should carry a `check`
 hook so it's skipped, not just hushed, when already in sync.)
 
+**Run temper as yourself, never under `sudo`.** temper works on the account it
+runs as — the files in your home, your Homebrew, its undo record and package
+baseline — and asks for root by itself, one command at a time, where a step needs
+it. Started through `sudo` (or `doas`) it would work on root's account instead,
+file its record where your own `undo` and `drift` do not look, and find Homebrew
+refusing to run as root. So it says that, and asks before running anyway; without
+a terminal to ask on it refuses, unless `TEMPER_ALLOW_SUDO=1` is set (`--yes` does
+not answer it). A real root login is not elevated and runs as it is: to work on
+root's own account, log in as root (`su -`) and run temper there.
+
 **One password per run.** Two things in a run can need root: some casks install
 through a system installer (`mactex`, `zoom`, `dotnet-sdk`, …), and your own steps —
 a `sysfile` (temper places it with `sudo install`) or an `exec` script that declares
@@ -892,8 +902,7 @@ all of these.
 else `$XDG_STATE_HOME/temper`, normally `~/.local/state/temper/`: `baseline/<machine>.json`
 holds each package manager's baseline, and `marked/<machine>.json` the packages
 temper marked as yours without installing them. Delete a package manager's
-baseline entry to have the next `install` record a fresh one. Run temper as the
-same user each time: `sudo temper …` keeps its state under root's home instead.
+baseline entry to have the next `install` record a fresh one.
 
 ## 9d. Declare where apt packages come from
 
