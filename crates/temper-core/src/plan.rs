@@ -1613,7 +1613,8 @@ pub fn run_drift(
                 detail: None,
             });
         }
-        for (m, name) in providers::brew_extras(&effective, ignore)? {
+        let brew = providers::brew_extras_split(&effective, ignore, false)?;
+        for (m, name) in brew.extras {
             findings.push(Finding {
                 app: "packages".into(),
                 kind: package_kind(m, true),
@@ -1621,6 +1622,21 @@ pub fn run_drift(
                 ok: false,
                 status: "extra".into(),
                 detail: None,
+            });
+        }
+        // Asked for and not declared, like any extra — but something declared
+        // needs it, so the answer that changes the machine keeps it installed.
+        for (name, needed_by) in brew.demote {
+            findings.push(Finding {
+                app: "packages".into(),
+                kind: package_kind(packages::Manager::Brew, true),
+                target: format!("brew {name}"),
+                ok: false,
+                status: "extra".into(),
+                detail: Some(format!(
+                    "{} needs it — `prune` keeps it as a dependency, `reconcile` declares it",
+                    needed_by.join(", ")
+                )),
             });
         }
     }
@@ -2675,11 +2691,11 @@ pub struct PrunePlan {
     /// own, so the manager's whole-system clean-up takes them — together with
     /// anything else it holds as no longer needed. Said in the preview.
     pub autoremove: Vec<&'static str>,
-    /// Host-package-manager extras to keep but mark as dependencies again:
+    /// Extras to keep but mark as dependencies, labelled by package manager:
     /// something installed needs them, or temper only ever marked them as
     /// asked-for. They stay installed, and the manager's own autoremove takes
     /// them once nothing needs them.
-    pub demote: Vec<(syspkg::SysPm, String)>,
+    pub demote: Vec<(&'static str, String)>,
     /// Package managers that are installed and could not be asked what they
     /// hold. **Never removable**, and deliberately not in `items()`: nothing is
     /// planned for them, which is the point. They are here so an empty plan can
@@ -2736,7 +2752,7 @@ impl PrunePlan {
             out.push(("autoremove", pm.to_string()));
         }
         for (pm, n) in &self.demote {
-            out.push(("demote", format!("{} {n}", pm.name())));
+            out.push(("demote", format!("{pm} {n}")));
         }
         for r in &self.flatpak_remotes {
             out.push(("flatpak_remotes", r.clone()));
@@ -3131,7 +3147,7 @@ mod prune_plan_tests {
             ],
             dependencies: vec![("dnf", "oniguruma".into())],
             autoremove: vec!["apt"],
-            demote: vec![(syspkg::SysPm::Pacman, "oniguruma".into())],
+            demote: vec![("pacman", "oniguruma".into())],
             flatpak_remotes: vec!["vendor".into()],
             residue: vec!["~/.config/gone".into()],
             retired: vec!["~/.config/retired".into()],
@@ -3319,13 +3335,15 @@ pub fn run_prune(
     // happen rather than one the executor then declines.
     let (mut system, mut dependencies, mut demote) = (Vec::new(), Vec::new(), Vec::new());
     let mut autoremove: Vec<&'static str> = Vec::new();
-    // brew's: what removing its extras frees, from Homebrew's own records.
+    // brew's: what removing its extras frees, from Homebrew's own records, and
+    // what was asked for that something declared still needs.
     if !brew.extras.is_empty() {
         dependencies.extend(brew.dependencies.iter().map(|d| ("brew", d.clone())));
         if brew.autoremove {
             autoremove.push("brew");
         }
     }
+    demote.extend(brew.demote.iter().map(|(n, _)| ("brew", n.clone())));
     for &pm in syspkg::SysPm::ALL {
         if !syspkg::caps(pm).converge {
             continue;
@@ -3343,7 +3361,7 @@ pub fn run_prune(
                 if plan.autoremove {
                     autoremove.push(pm.name());
                 }
-                demote.extend(plan.demote.into_iter().map(|p| (pm, p)));
+                demote.extend(plan.demote.into_iter().map(|p| (pm.name(), p)));
                 unremovable.extend(plan.held.into_iter().map(|(p, why)| (pm.name(), p, why)));
             }
             syspkg::Extras::Unavailable => unavailable.push(pm.name()),
@@ -3407,9 +3425,17 @@ pub fn commit_prune(
                 .map(|(_, n)| n.clone())
                 .collect(),
             autoremove: plan.autoremove.contains(&"brew"),
+            ..Default::default()
         };
         providers::prune_apply(&effective, &plan.packages, &brew_deps, ignore, brew_trust)?;
     }
+    let brew_demote: Vec<String> = plan
+        .demote
+        .iter()
+        .filter(|(m, _)| *m == "brew")
+        .map(|(_, n)| n.clone())
+        .collect();
+    let brew_demoted = providers::brew_mark_dependencies(&brew_demote);
     if !plan.untrust.is_empty() {
         providers::untrust_taps(&plan.untrust)?;
     }
@@ -3432,7 +3458,11 @@ pub fn commit_prune(
     let unlayered = providers::rpm_ostree_uninstall(&plan.rpm_ostree, false)?;
     let unlayer_failed = !plan.rpm_ostree.is_empty() && !unlayered;
     let reboot = unlayered;
-    let mut failed: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = brew_demote
+        .iter()
+        .filter(|n| !brew_demoted.contains(n))
+        .map(|n| format!("brew {n}"))
+        .collect();
     // Host packages before any file, too: a repo is one of those files, and
     // packages go before repos on the way out as they come after them on the way
     // in. What did not go is read back and named, not assumed.
@@ -3451,7 +3481,12 @@ pub fn commit_prune(
                 .filter(|(m, _)| *m == pm.name())
                 .map(|(_, n)| n.clone())
                 .collect(),
-            demote: of(&plan.demote),
+            demote: plan
+                .demote
+                .iter()
+                .filter(|(m, _)| *m == pm.name())
+                .map(|(_, n)| n.clone())
+                .collect(),
             autoremove: plan.autoremove.contains(&pm.name()),
             ..Default::default()
         };

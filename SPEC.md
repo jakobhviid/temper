@@ -361,7 +361,9 @@ it as `[brew].trust` (see `[brew].trust` above).
 > extra is a package someone asked for: a formula Homebrew installed only as a
 > dependency (`installed_on_request` false) is never reported, offered by
 > `reconcile` or seeded by `init`. `prune` removes it only as a dependency an
-> extra freed, and leaves one that was unneeded already.
+> extra freed, and leaves one that was unneeded already. A formula asked for that
+> a declared formula or cask needs is an extra too, and `prune` marks it as a
+> dependency rather than removing it.
 >
 > **A manager that is present and *fails* reports `package-unavailable`**, and
 > both directions are skipped for it. A non-zero `brew list`, a `mas list` on a

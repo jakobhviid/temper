@@ -11,7 +11,7 @@
 //! bottom — they don't use Brewfile grammar, so they have their own bundle
 //! fields (`extensions`, `rpm`). Both are Linux/VM-only and guarded on their CLI.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -1143,8 +1143,11 @@ pub fn prune_apply(
             .map(|(_, n)| n.as_str())
             .chain(brew_deps.dependencies.iter().map(String::as_str))
             .collect();
+        // Read before cleanup runs: `cleanup --force` marks every formula in its
+        // file as asked for, keepers included, and this is what puts them back.
+        let before = brew_record();
         let unneeded = if brew_deps.autoremove {
-            brew_dependency_formulae().unwrap_or_default()
+            before.as_ref().map(|r| r.dependencies.clone()).unwrap_or_default()
         } else {
             HashSet::new()
         };
@@ -1152,7 +1155,7 @@ pub fn prune_apply(
             .unwrap_or_default()
             .into_iter()
             .collect();
-        for (m, n) in brew_extras_inner(effective, ignore, false).unwrap_or_default() {
+        for (m, n) in brew_cleanup_list(effective, ignore, false).ok().flatten().unwrap_or_default() {
             if planned.contains(n.as_str()) || unneeded.contains(&n) {
                 continue;
             }
@@ -1211,6 +1214,22 @@ pub fn prune_apply(
             .status()
             .context("running brew bundle cleanup")?;
         let _ = fs::remove_file(&tmp);
+        // `cleanup --force` marks every formula its file names as asked for — the
+        // keepers above and the `[ignore]`d ones too. Left like that, the orphan
+        // this prune kept reads as asked for at the next drift, and the next
+        // prune removes it. What was a dependency before is one again; a
+        // declared formula stays marked, as `brew bundle install` marks it.
+        if let (Some(before), Some(after)) = (before, brew_record()) {
+            let declared = declared_formulae(effective);
+            let promoted: Vec<String> = after
+                .asked
+                .iter()
+                .filter(|f| before.dependencies.contains(&f.name))
+                .filter(|f| !std::iter::once(&f.name).chain(&f.names).any(|n| declared.contains(n)))
+                .map(|f| f.name.clone())
+                .collect();
+            brew_mark_dependencies(&promoted);
+        }
         if !status.success() {
             bail!("brew bundle cleanup failed");
         }
@@ -2631,19 +2650,74 @@ mod brew_dependency_tests {
 
     /// Homebrew's record, as `brew info --json=v2 --installed` prints it (the
     /// shape measured on Homebrew 7.0.11): `installed_on_request` false is a
-    /// dependency, by short and full name.
+    /// dependency, by short and full name; true is asked for, with every name a
+    /// Brewfile may use; and what needs each formula comes from the install
+    /// records (runtime) and the formula (build), and from a cask's
+    /// `depends_on`.
     #[test]
-    fn a_formula_not_installed_on_request_is_a_dependency() {
+    fn homebrews_record_says_what_was_asked_for_and_what_needs_it() {
         let json = br#"{"formulae":[
-            {"name":"jq","full_name":"jq","installed":[{"installed_on_request":true}]},
+            {"name":"jq","full_name":"jq","aliases":["jq@1"],"oldnames":["jqold"],
+             "build_dependencies":["autoconf"],
+             "installed":[{"installed_on_request":true,
+               "runtime_dependencies":[{"full_name":"oniguruma"}]}]},
             {"name":"oniguruma","full_name":"oniguruma","installed":[{"installed_on_request":false}]},
-            {"name":"sesh","full_name":"joshmedeski/sesh/sesh","installed":[{"installed_on_request":false}]}
-        ],"casks":[]}"#;
+            {"name":"sesh","full_name":"joshmedeski/sesh/sesh","installed":[{"installed_on_request":false}]},
+            {"name":"amdl","full_name":"me/tap/amdl","installed":[{"installed_on_request":true,
+               "runtime_dependencies":[{"full_name":"me/tap/gamdl"}]}]}
+        ],"casks":[{"token":"app","depends_on":{"formula":["libfoo"]}}]}"#;
+        let r = parse_brew_record(json).unwrap();
+        assert_eq!(r.dependencies, set(&["oniguruma", "sesh", "joshmedeski/sesh/sesh"]));
+        let jq = r.asked.iter().find(|f| f.name == "jq").unwrap();
+        assert_eq!(jq.names, vec!["jq@1", "jqold", "jq"]);
+        let by = |n: &str| r.needed_by[n].iter().cloned().collect::<Vec<_>>();
+        assert_eq!(by("oniguruma"), vec!["jq"]);
+        assert_eq!(by("autoconf"), vec!["jq"]);
+        assert_eq!(by("gamdl"), vec!["amdl"]);
+        assert_eq!(by("libfoo"), vec!["app"]);
+        assert!(parse_brew_record(b"not json").is_none());
+    }
+
+    /// What `prune` marks as a dependency: asked for, declared by no name, not
+    /// ignored, not going in this prune — and needed by something that stays.
+    /// One needed only by a formula this prune removes goes with it instead, and
+    /// one nothing needs is left alone: marking it would hand it to autoremove.
+    #[test]
+    fn a_formula_asked_for_and_needed_is_marked_as_a_dependency() {
+        let asked = |name: &str, names: &[&str]| BrewFormula {
+            name: name.into(),
+            names: names.iter().map(|s| s.to_string()).collect(),
+        };
+        let mut r = BrewRecord {
+            asked: vec![
+                asked("ffmpeg", &["ffmpeg"]),
+                asked("python@3.14", &["python3", "python@3.14"]),
+                asked("lib", &["lib"]),
+                asked("quiet", &["quiet"]),
+                asked("lonely", &["lonely"]),
+                asked("onlyjq", &["onlyjq"]),
+            ],
+            ..Default::default()
+        };
+        for (dep, by) in [
+            ("ffmpeg", "amdl"),
+            ("python@3.14", "amdl"),
+            ("lib", "amdl"),
+            ("quiet", "amdl"),
+            ("onlyjq", "jq"),
+        ] {
+            r.needed_by.entry(dep.into()).or_default().insert(by.into());
+        }
+        let raw = vec![(Manager::Brew, "jq".to_string())];
+        let declared = set(&["amdl", "python3"]);
+        let ignored: HashSet<&str> = ["quiet"].into_iter().collect();
         assert_eq!(
-            parse_brew_dependency_formulae(json).unwrap(),
-            set(&["oniguruma", "sesh", "joshmedeski/sesh/sesh"])
+            asked_but_needed(&r, &raw, &declared, &ignored),
+            vec![
+                ("ffmpeg".to_string(), vec!["amdl".to_string()]),
+                ("lib".to_string(), vec!["amdl".to_string()]),
+            ]
         );
-        assert!(parse_brew_dependency_formulae(b"not json").is_none());
     }
 
     #[test]
@@ -3374,8 +3448,14 @@ pub fn rpm_converge(effective: &[String], dry_run: bool, verbose: bool) -> Resul
 /// extra is tagged with its manager: a `tap` orphan keeps its full `user/repo`
 /// name (it round-trips as a `tap` line); a formula/cask keeps brew's short name
 /// and is tagged `Brew` for the caller to reclassify/qualify. `[ignore]` applied.
+///
+/// A formula asked for and still needed by a declared one comes last: it is an
+/// extra too, and `reconcile` declares it like any other.
 pub fn brew_extras(effective: &[Pkg], ignore: &manifest::Ignore) -> Result<Vec<(Manager, String)>> {
-    Ok(brew_extras_split(effective, ignore, false)?.extras)
+    let split = brew_extras_split(effective, ignore, false)?;
+    let mut out = split.extras;
+    out.extend(split.demote.into_iter().map(|(n, _)| (Manager::Brew, n)));
+    Ok(out)
 }
 
 /// What `brew bundle cleanup` would remove, split the way Homebrew's own
@@ -3400,27 +3480,86 @@ pub struct BrewExtras {
     /// then takes every unneeded formula — brew's own autoremove, said so in
     /// the preview.
     pub autoremove: bool,
+    /// Formulae installed on request that the Brewfile does not declare, and
+    /// that a formula or cask staying here needs — each with what needs it.
+    /// `brew bundle cleanup` keeps them, so they are not in `extras`; Homebrew
+    /// still holds them as asked for, so its autoremove never takes them. `prune`
+    /// marks them as dependencies: they stay, and leave with what needs them.
+    pub demote: Vec<(String, Vec<String>)>,
 }
 
-/// `brew_extras`, with the dependencies `prune` removes alongside.
+/// `brew_extras`, with the dependencies `prune` removes alongside and the
+/// formulae it marks as dependencies.
 pub fn brew_extras_split(
     effective: &[Pkg],
     ignore: &manifest::Ignore,
     seed: bool,
 ) -> Result<BrewExtras> {
-    let raw = brew_extras_inner(effective, ignore, seed)?;
-    if raw.is_empty() {
+    let Some(raw) = brew_cleanup_list(effective, ignore, seed)? else {
         return Ok(BrewExtras::default());
-    }
+    };
     // Without Homebrew's record, a dependency cannot be told from a formula
     // someone asked for, and every one reads as an extra, as it always has.
-    let Some(deps) = brew_dependency_formulae() else {
+    let Some(record) = brew_record() else {
         return Ok(BrewExtras {
             extras: raw,
             ..Default::default()
         });
     };
-    Ok(split_brew_extras(raw, &deps, brew_orphans().as_ref()))
+    let mut split = if raw.is_empty() {
+        BrewExtras::default()
+    } else {
+        split_brew_extras(raw.clone(), &record.dependencies, brew_orphans().as_ref())
+    };
+    let ignored: HashSet<&str> = ignore.brew.iter().map(String::as_str).collect();
+    split.demote = asked_but_needed(&record, &raw, &declared_formulae(effective), &ignored);
+    Ok(split)
+}
+
+/// Every name the effective set declares a formula by: as written, and short.
+fn declared_formulae(effective: &[Pkg]) -> HashSet<String> {
+    effective
+        .iter()
+        .filter(|p| p.manager == Manager::Brew)
+        .flat_map(|p| [p.name.clone(), p.match_name()])
+        .collect()
+}
+
+/// Formulae Homebrew holds as asked for that nothing declares, and that
+/// something staying needs: not in the cleanup list (`raw`), so a declared
+/// formula or cask accounts for them, and named as a dependency in Homebrew's
+/// own records — the same records its autoremove reads, so marking one as a
+/// dependency never makes it an orphan. Pure, so it is testable.
+fn asked_but_needed(
+    record: &BrewRecord,
+    raw: &[(Manager, String)],
+    declared: &HashSet<String>,
+    ignored: &HashSet<&str>,
+) -> Vec<(String, Vec<String>)> {
+    // Cleanup names a tap's formula in full; the records name what needs it short.
+    let going: HashSet<&str> = raw
+        .iter()
+        .flat_map(|(_, n)| [n.as_str(), n.rsplit('/').next().unwrap_or(n)])
+        .collect();
+    let mut out = Vec::new();
+    for f in &record.asked {
+        let names = || std::iter::once(&f.name).chain(&f.names);
+        if names().any(|n| going.contains(n.as_str()) || declared.contains(n) || ignored.contains(n.as_str())) {
+            continue;
+        }
+        let needed_by: Vec<String> = record
+            .needed_by
+            .get(&f.name)
+            .into_iter()
+            .flatten()
+            .filter(|d| !going.contains(d.as_str()))
+            .cloned()
+            .collect();
+        if !needed_by.is_empty() {
+            out.push((f.name.clone(), needed_by));
+        }
+    }
+    out
 }
 
 /// The split itself, apart from brew, so it is testable.
@@ -3437,19 +3576,40 @@ fn split_brew_extras(
         Some(o) => BrewExtras {
             extras,
             dependencies: candidates.into_iter().filter(|n| !o.contains(n)).collect(),
-            autoremove: false,
+            ..Default::default()
         },
         None => BrewExtras {
             extras,
-            dependencies: Vec::new(),
             autoremove: true,
+            ..Default::default()
         },
     }
 }
 
-/// Installed formulae Homebrew holds as somebody's dependency — not installed
-/// on request — by name and full name. `None` when it cannot be read.
-fn brew_dependency_formulae() -> Option<HashSet<String>> {
+/// What Homebrew records about the formulae it has installed: whether each was
+/// asked for, and what needs it.
+#[derive(Debug, Default)]
+struct BrewRecord {
+    /// Held as somebody's dependency — not installed on request — by name and
+    /// full name.
+    dependencies: HashSet<String>,
+    /// Installed on request.
+    asked: Vec<BrewFormula>,
+    /// Formula (short name) → the installed formulae and casks that need it, to
+    /// run or to build. Read from the install records, as `brew autoremove`
+    /// reads them.
+    needed_by: HashMap<String, BTreeSet<String>>,
+}
+
+#[derive(Debug)]
+struct BrewFormula {
+    name: String,
+    /// Its full name, aliases and old names — whatever a Brewfile line may call it.
+    names: Vec<String>,
+}
+
+/// `None` when Homebrew cannot be asked.
+fn brew_record() -> Option<BrewRecord> {
     let out = Command::new("brew")
         .args(["info", "--json=v2", "--installed"])
         .stdin(Stdio::null())
@@ -3458,28 +3618,80 @@ fn brew_dependency_formulae() -> Option<HashSet<String>> {
     if !out.status.success() {
         return None;
     }
-    parse_brew_dependency_formulae(&out.stdout)
+    parse_brew_record(&out.stdout)
 }
 
-fn parse_brew_dependency_formulae(json: &[u8]) -> Option<HashSet<String>> {
+fn parse_brew_record(json: &[u8]) -> Option<BrewRecord> {
     let v: serde_json::Value = serde_json::from_slice(json).ok()?;
-    let mut out = HashSet::new();
+    let short = |n: &str| n.rsplit('/').next().unwrap_or(n).to_string();
+    let strings = |v: Option<&serde_json::Value>| -> Vec<String> {
+        v.and_then(|a| a.as_array())
+            .map(|a| a.iter().filter_map(|s| s.as_str()).map(str::to_string).collect())
+            .unwrap_or_default()
+    };
+    let mut record = BrewRecord::default();
     for f in v.get("formulae")?.as_array()? {
-        let on_request = f
+        let Some(name) = f.get("name").and_then(|n| n.as_str()) else {
+            continue;
+        };
+        let install = f
             .get("installed")
             .and_then(|i| i.as_array())
-            .and_then(|i| i.first())
+            .and_then(|i| i.first());
+        let mut needs: Vec<String> = install
+            .and_then(|r| r.get("runtime_dependencies"))
+            .and_then(|d| d.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|d| d.get("full_name").and_then(|n| n.as_str()))
+            .map(short)
+            .collect();
+        needs.extend(strings(f.get("build_dependencies")).iter().map(|n| short(n)));
+        for dep in needs {
+            record.needed_by.entry(dep).or_default().insert(name.to_string());
+        }
+        let mut names = strings(f.get("aliases"));
+        names.extend(strings(f.get("oldnames")));
+        if let Some(full) = f.get("full_name").and_then(|n| n.as_str()) {
+            names.push(full.to_string());
+        }
+        match install
             .and_then(|r| r.get("installed_on_request"))
-            .and_then(|b| b.as_bool());
-        if on_request == Some(false) {
-            for key in ["name", "full_name"] {
-                if let Some(n) = f.get(key).and_then(|n| n.as_str()) {
-                    out.insert(n.to_string());
-                }
+            .and_then(|b| b.as_bool())
+        {
+            Some(false) => {
+                record.dependencies.insert(name.to_string());
+                record.dependencies.extend(f.get("full_name").and_then(|n| n.as_str()).map(str::to_string));
             }
+            Some(true) => record.asked.push(BrewFormula { name: name.to_string(), names }),
+            None => {}
         }
     }
-    Some(out)
+    for c in v.get("casks").and_then(|c| c.as_array()).into_iter().flatten() {
+        let Some(token) = c.get("token").and_then(|t| t.as_str()) else {
+            continue;
+        };
+        for dep in strings(c.get("depends_on").and_then(|d| d.get("formula"))) {
+            record.needed_by.entry(short(&dep)).or_default().insert(token.to_string());
+        }
+    }
+    Some(record)
+}
+
+/// Mark formulae as dependencies (`brew tab --no-installed-on-request`): they
+/// stay installed, and Homebrew's autoremove takes them once nothing needs
+/// them. Returns the ones its records then hold as dependencies.
+pub fn brew_mark_dependencies(names: &[String]) -> Vec<String> {
+    if names.is_empty() {
+        return Vec::new();
+    }
+    let _ = Command::new("brew")
+        .args(["tab", "--no-installed-on-request", "--formula"])
+        .args(names)
+        .stdin(Stdio::null())
+        .output();
+    let held = brew_record().map(|r| r.dependencies).unwrap_or_default();
+    names.iter().filter(|n| held.contains(*n)).cloned().collect()
 }
 
 /// The formulae `brew autoremove` would remove now: held as dependencies, and
@@ -3578,13 +3790,16 @@ pub fn brew_extras_seeding(ignore: &manifest::Ignore) -> Result<Vec<(Manager, St
     Ok(brew_extras_split(&[], ignore, true)?.extras)
 }
 
-fn brew_extras_inner(
+/// What `brew bundle cleanup` lists for the declared set: `None` when it was
+/// not asked — no brew, nothing brew-managed declared — or could not answer,
+/// which is not the same as an empty list.
+fn brew_cleanup_list(
     effective: &[Pkg],
     ignore: &manifest::Ignore,
     seed: bool,
-) -> Result<Vec<(Manager, String)>> {
+) -> Result<Option<Vec<(Manager, String)>>> {
     if !have("brew") {
-        return Ok(Vec::new());
+        return Ok(None);
     }
     let body: String = effective
         .iter()
@@ -3597,7 +3812,7 @@ fn brew_extras_inner(
         .map(|p| format!("{}\n", p.raw))
         .collect();
     if body.is_empty() && !seed {
-        return Ok(Vec::new());
+        return Ok(None);
     }
     let tmp = std::env::temp_dir().join(format!("temper-Brewfile-drift-{}", std::process::id()));
     fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
@@ -3635,7 +3850,7 @@ fn brew_extras_inner(
              this run",
             crate::ui::yellow(crate::ui::g_warn())
         );
-        return Ok(Vec::new());
+        return Ok(None);
     }
     let ignored: HashSet<&str> = ignore
         .brew
@@ -3644,7 +3859,7 @@ fn brew_extras_inner(
         .chain(&ignore.tap)
         .map(String::as_str)
         .collect();
-    Ok(parse_cleanup_extras(&text, &ignored))
+    Ok(Some(parse_cleanup_extras(&text, &ignored)))
 }
 
 /// Parse `brew bundle cleanup`'s "Would uninstall …" (formulae/casks) and

@@ -113,10 +113,11 @@ enum Cmd {
     /// trusted on the machine but not in `[brew].trust` — the machine→spec
     /// mirror of `reconcile` absorbing a trusted tap. Confirms first.
     ///
-    /// For dnf, apt and pacman an extra is a package installed by name since
-    /// the machine's baseline: it is removed with the dependencies only it
-    /// needed, or — if something installed still needs it — kept and marked as
-    /// a dependency. Unneeded packages that are not from this prune are counted,
+    /// An extra is a package someone asked for — a formula Homebrew installed
+    /// on request, or a dnf, apt or pacman package installed by name since the
+    /// machine's baseline. It is removed with the dependencies only it needed,
+    /// or — if something installed still needs it — kept and marked as a
+    /// dependency. Unneeded packages that are not from this prune are counted,
     /// never removed. Everything is in the preview before you confirm.
     Prune {
         /// List what would be removed without removing anything.
@@ -1628,8 +1629,8 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
             }
         }
         // Everything that is not a package renders from `items()` — the same list
-        // the count and the confirm are derived from, so "remove N item(s) listed
-        // above" cannot list fewer than N again. (Packages keep their own loop
+        // the count and the confirm are derived from, so "prune the N item(s)
+        // listed above" cannot list fewer than N again. (Packages keep their own loop
         // above: only there does the preview need the `Manager` to turn a mas id
         // into an app name.)
         for (list, item) in prune_plan.items() {
@@ -1691,9 +1692,11 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
             return Ok(());
         }
         // Removal is destructive (dependency-aware uninstall + untrust) — confirm.
+        // A plan may only mark packages as dependencies, so the question names
+        // the verb and the effects clause says what it does.
         if !yes
             && !prompt_no(&format!(
-                "remove {} item(s) listed above? this {}",
+                "prune the {} item(s) listed above? this {}",
                 prune_plan.len(),
                 prune_plan.effects().join(", ")
             ))
@@ -1709,7 +1712,7 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
         let demoted = prune_plan
             .demote
             .iter()
-            .filter(|(pm, n)| !outcome.failed.contains(&format!("{} {n}", pm.name())))
+            .filter(|(pm, n)| !outcome.failed.contains(&format!("{pm} {n}")))
             .count();
         let removed = prune_plan.len() - outcome.failed.len() - demoted;
         if demoted == 0 {

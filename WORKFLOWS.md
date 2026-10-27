@@ -313,6 +313,14 @@ of the drift. You pick a direction and run what it prints:
     only the packages above needed". A formula Homebrew already held as
     unneeded before — what `brew autoremove` would take — is left alone and
     counted. dnf, apt and pacman work the same way (§9c).
+  - An extra something declared still needs is kept. `brew bundle install`
+    marks every formula a Brewfile names as asked for, so deleting a line —
+    `brew "oniguruma"` from a Brewfile that also declares `jq` — leaves a formula
+    Homebrew holds as asked for that nothing declares. drift lists it with what
+    needs it; `reconcile` declares it again; `prune` keeps it installed and marks
+    it as a dependency ("kept and marked as dependencies"), so it leaves with
+    `jq`. That is how to slim a Brewfile that lists dependencies: delete the
+    lines, then `temper prune`.
 
 > **An empty prune says why it is empty.** A manager that is installed and
 > failing cannot be asked what it holds, and its silence is not the same as

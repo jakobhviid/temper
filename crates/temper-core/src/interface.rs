@@ -108,7 +108,8 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         // correctness requirement: `brew bundle cleanup` is dependency-aware, so
         // a formula kept only as another package's transitive dependency is not
         // removed. An extra is a formula installed on request; what it pulled
-        // in goes with it, and an orphan from before is left (`brew_extras_split`).
+        // in goes with it, an orphan from before is left, and one something
+        // declared needs is marked as a dependency (`brew_extras_split`).
         prune: Col::Yes,
         reconcile: Col::Yes,
         ignore: Col::Yes,

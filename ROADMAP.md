@@ -188,14 +188,14 @@ so the headline matches what happened to the machine.
   repository at all: it builds from source through a helper, which is a
   different feature.
 - **A Brewfile can declare a dependency.** `init` and `reconcile` offer only
-  formulae installed on request, but a Brewfile written by hand, or seeded by a
-  temper that took brew's extras from `brew bundle cleanup` alone, can declare
-  what a formula pulled in — `oniguruma` beside `jq`. Once temper has installed
-  it, Homebrew marks it as asked for, so its record cannot tell them apart, and
-  the entry outlives the formula that needed it. One way to find them: a declared formula that another
-  declared formula depends on (`brew uses --installed`) is redundant, and
-  `reconcile` could offer to drop it from the machine's own Brewfile. The same
-  question applies to a dnf, apt or pacman list absorbed by hand.
+  formulae installed on request, but a Brewfile written by hand can declare what
+  a formula pulled in — `oniguruma` beside `jq`. Declared, it is asked for, and it
+  outlives the formula that needed it. Deleting the line and running `prune`
+  makes it a dependency again, but nothing finds these lines for you: a declared
+  formula that another declared formula depends on (`brew uses --installed`) is
+  redundant, and `reconcile` could offer to drop it from the machine's own
+  Brewfile. The same question applies to a dnf, apt or pacman list absorbed by
+  hand.
 - **A repo or source written over one the image ships has no way back.** A
   declared `debian.sources` or `fedora.repo` replaces the image's file with no
   backup, and dropping the declaration makes it residue that `prune` deletes —

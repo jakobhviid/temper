@@ -376,7 +376,11 @@ pattern. What cleanup lists still goes through the same rule as every other
 package manager: a formula Homebrew holds as a dependency (`installed_on_request`
 false) is never an extra — it is offered by no `reconcile`, seeded by no `init`,
 and removed only as a dependency an extra freed, or kept when it was unneeded
-already.
+already. One Homebrew holds as asked for is an extra even when cleanup keeps it
+because something declared needs it, and `prune` marks it as a dependency, as it
+does for dnf, apt and pacman: `brew bundle install` marks every declared formula
+as asked for and nothing unmarks it, so without that a dependency line deleted
+from a Brewfile would be asked for forever, and never leave with what needed it.
 
 **Column 10 was never a real constraint, and saying so cost a release.** "Packages
 cannot be journaled" was repeated until someone asked why: the set temper installs
