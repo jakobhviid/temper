@@ -64,21 +64,6 @@ through to the action's implicit `auth_admin`, and there is nowhere to answer.
 `prune` should say so up front, naming what needs it, exactly as a run needing
 sudo already does; today it finds out when the removal fails.
 
-**An unattended run warns "will fail" on a host where `sudo` would succeed.**
-`sudo::cached()` asks whether a credential is held with `sudo -n -v`. Whether `-v` needs a
-password is governed by sudoers' `verifypw`, whose default (`all`) requires **every** entry
-matching the user to be `NOPASSWD`. openSUSE's stock sudoers has `ALL ALL=(ALL) ALL`, which
-matches everyone. So for a user whose own rule is `NOPASSWD: ALL`, `sudo -n -v` fails while
-every real `sudo -n <command>` succeeds. `acquire` then prints "this run needs root and there
-is no terminal to ask on, so it will fail when it gets there", and the run writes the files
-anyway. A false alarm on the warning meant to be trusted in unattended runs. Probe with
-`sudo -n true`, which asks the question that matters: can a child run a command without a
-password. Fedora, EL, Debian, Ubuntu and Arch do not show it, because they ship no catch-all
-password rule.
-  → Found with the Erebus distro matrix (`jakobhviid/erebus`, `examples/temper/`),
-  2026-10-12, openSUSE Tumbleweed only, with a test user holding
-  `tester ALL=(ALL) NOPASSWD: ALL` in `/etc/sudoers.d`.
-
 **The install summary says `0 changed` on a run that wrote two root-owned files.** The line
 built at `main.rs` ("applied {} config step(s), {} changed") counts journaled config steps.
 An `rpm_repos` write (the repo file plus its key) is outside the journal, so a run whose only

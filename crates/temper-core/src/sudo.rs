@@ -116,7 +116,7 @@ pub fn reusable_by_children() -> bool {
     which("sudo").is_some()
         && Command::new("sh")
             .arg("-c")
-            .arg("sudo -n -v >/dev/null 2>&1; exit $?")
+            .arg("sudo -n true >/dev/null 2>&1; exit $?")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -125,11 +125,18 @@ pub fn reusable_by_children() -> bool {
             .unwrap_or(false)
 }
 
-/// Whether a usable sudo timestamp already exists (never prompts).
+/// Whether a command can run as root without a password — a held timestamp, or
+/// a sudoers rule that needs none (never prompts).
+///
+/// `sudo -n true`, not `sudo -n -v`. Whether `-v` needs a password is governed by
+/// sudoers' `verifypw`, whose default needs **every** rule matching the user to
+/// be `NOPASSWD` — and openSUSE's stock `ALL ALL=(ALL) ALL` matches everyone. So
+/// there `-v` fails for a user whose own rule is `NOPASSWD: ALL`, while every
+/// command they run as root succeeds: the question that matters is the second.
 pub fn cached() -> bool {
     which("sudo").is_some()
         && Command::new("sudo")
-            .args(["-n", "-v"])
+            .args(["-n", "true"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
