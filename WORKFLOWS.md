@@ -646,8 +646,9 @@ the steps behind its count the same way (`· would apply zsh  copy ~/.zshrc`),
 and lists any change `undo` would not be able to revert.
 
 **`prune` reports what it did, not what it planned.** A removal that fails — a
-root-owned file it could not escalate for, a flatpak installed system-wide — is
-listed as still present rather than counted as done, and `--json` carries the
+root-owned file it could not escalate for, a flatpak installed system-wide, a
+formula Homebrew did not remove — is listed as still present rather than counted
+as done, and `--json` carries the
 same list under `failed`. So "3 item(s) removed" means three fewer things exist,
 and a package kept as a dependency is counted apart ("1 kept and marked as
 dependencies").
@@ -670,7 +671,10 @@ retire_packages = ['brew "old"']  # packages that must not be installed
 enacts them with the confirm every destructive thing gets — a directory as
 readily as a file, escalating only if the unprivileged removal is refused.
 `[ignore]` does **not** silence a retirement: ignoring is "don't tell me",
-retiring is "get rid of it".
+retiring is "get rid of it". A retired formula or cask that something declared
+needs is one Homebrew keeps, so `prune` cannot remove it while that stays
+declared: `drift` says so, and `prune` lists it as something it cannot remove
+rather than promising it.
 
 ```sh
 temper retired      # every tombstone, and whether it is still doing work

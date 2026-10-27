@@ -5,7 +5,7 @@
 //! drift-only. Flows `install` / `update` / `prune` / `snapshot` / `restore` /
 //! `adopt` / `reconcile` are all live.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use anyhow::{bail, Result};
@@ -1732,14 +1732,24 @@ pub fn run_drift(
         });
     }
     // Packages declared unwanted that are nonetheless installed.
-    for p in retired_installed(home, machine)? {
+    let retired = retired_installed(home, machine)?;
+    let listed = if retired.iter().any(|p| brew_cleans(p.manager)) {
+        providers::brew_extras_split(&packages::effective_set(home, machine)?, ignore, false)?.listed
+    } else {
+        None
+    };
+    for p in retired {
+        let detail = match brew_keeps(&p, listed.as_ref()) {
+            Some(why) => format!("declared retired, but {why} — `prune` cannot remove it"),
+            None => "declared retired — `prune` removes it".into(),
+        };
         findings.push(Finding {
             app: "retired".into(),
             kind: "retired-package",
             target: format!("{} {}", p.manager.as_str(), p.match_name()),
             ok: false,
             status: "still installed".into(),
-            detail: Some("declared retired — `prune` removes it".into()),
+            detail: Some(detail),
         });
     }
     // Explicitly retired paths that are still here.
@@ -3026,6 +3036,46 @@ mod needs_it_tests {
     }
 }
 
+/// The managers `prune` removes through `brew bundle cleanup`, which takes only
+/// what its own list names.
+fn brew_cleans(m: packages::Manager) -> bool {
+    matches!(m, packages::Manager::Brew | packages::Manager::Cask)
+}
+
+/// Why `prune` cannot remove an installed package, when Homebrew is the reason: a
+/// formula or cask `brew bundle cleanup` does not list is one it keeps, because
+/// something declared needs it. `None` when it can be removed — or when the list
+/// was not read, which says nothing either way.
+fn brew_keeps(p: &packages::Pkg, listed: Option<&HashSet<String>>) -> Option<&'static str> {
+    let listed = listed?;
+    (brew_cleans(p.manager) && !listed.contains(&p.match_name()) && !listed.contains(&p.name))
+        .then_some("something declared needs it, so Homebrew keeps it")
+}
+
+/// What a prune asked to remove and is still installed, read back from each
+/// manager as `dnf`, `apt` and `pacman` removals are — `brew bundle cleanup`
+/// reports what it tried, not what went. A manager that cannot be asked
+/// contributes none: it cannot say the package is still there.
+fn still_installed(wanted: &[(packages::Manager, String)]) -> Vec<String> {
+    let probe: Vec<packages::Pkg> = wanted
+        .iter()
+        .map(|(m, n)| packages::Pkg {
+            manager: *m,
+            name: n.clone(),
+            id: None,
+            raw: String::new(),
+        })
+        .collect();
+    let Ok(installed) = providers::probe(&probe) else {
+        return Vec::new();
+    };
+    wanted
+        .iter()
+        .filter(|(m, n)| installed.probed(*m) && installed.contains(*m, n))
+        .map(|(m, n)| format!("{} {n}", m.as_str()))
+        .collect()
+}
+
 /// The `retire_packages` entries still installed: what drift reports and prune
 /// removes, from one list so the two cannot disagree. A manager that could not
 /// be asked contributes none — it cannot say the package is there.
@@ -3327,6 +3377,10 @@ pub fn run_prune(
     // mentioning it. `[ignore]` deliberately does not silence this — ignoring is
     // "do not tell me about it", and retiring is "get rid of it".
     for p in retired_installed(home, machine)? {
+        if let Some(why) = brew_keeps(&p, brew.listed.as_ref()) {
+            unremovable.push((p.manager.as_str(), p.match_name(), why));
+            continue;
+        }
         let entry = (p.manager, p.match_name());
         if !packages.contains(&entry) {
             packages.push(entry);
@@ -3462,6 +3516,20 @@ pub fn commit_prune(
         };
         providers::prune_apply(&effective, &plan.packages, &brew_deps, ignore, brew_trust)?;
     }
+    // Read back, so the count says what went. The dependencies brew was to take
+    // with them are checked the same way.
+    let mut asked: Vec<(packages::Manager, String)> = plan.packages.clone();
+    asked.extend(
+        plan.dependencies
+            .iter()
+            .filter(|(m, _)| *m == "brew")
+            .map(|(_, n)| (packages::Manager::Brew, n.clone())),
+    );
+    let packages_left = if plan.packages.is_empty() {
+        Vec::new()
+    } else {
+        still_installed(&asked)
+    };
     let brew_demote: Vec<String> = plan
         .demote
         .iter()
@@ -3495,6 +3563,7 @@ pub fn commit_prune(
         .iter()
         .filter(|n| !brew_demoted.contains(n))
         .map(|n| format!("brew {n}"))
+        .chain(packages_left)
         .collect();
     // Host packages before any file, too: a repo is one of those files, and
     // packages go before repos on the way out as they come after them on the way

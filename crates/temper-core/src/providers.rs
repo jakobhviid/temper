@@ -3486,6 +3486,10 @@ pub struct BrewExtras {
     /// still holds them as asked for, so its autoremove never takes them. `prune`
     /// marks them as dependencies: they stay, and leave with what needs them.
     pub demote: Vec<(String, Vec<String>)>,
+    /// Every name `brew bundle cleanup` would remove, short and full — `None`
+    /// when it was not asked. A formula or cask it does not list is one Homebrew
+    /// keeps, because something declared needs it, so `prune` cannot remove it.
+    pub listed: Option<HashSet<String>>,
 }
 
 /// `brew_extras`, with the dependencies `prune` removes alongside and the
@@ -3498,11 +3502,16 @@ pub fn brew_extras_split(
     let Some(raw) = brew_cleanup_list(effective, ignore, seed)? else {
         return Ok(BrewExtras::default());
     };
+    let listed: HashSet<String> = raw
+        .iter()
+        .flat_map(|(_, n)| [n.clone(), n.rsplit('/').next().unwrap_or(n).to_string()])
+        .collect();
     // Without Homebrew's record, a dependency cannot be told from a formula
     // someone asked for, and every one reads as an extra, as it always has.
     let Some(record) = brew_record() else {
         return Ok(BrewExtras {
             extras: raw,
+            listed: Some(listed),
             ..Default::default()
         });
     };
@@ -3513,6 +3522,7 @@ pub fn brew_extras_split(
     };
     let ignored: HashSet<&str> = ignore.brew.iter().map(String::as_str).collect();
     split.demote = asked_but_needed(&record, &raw, &declared_formulae(effective), &ignored);
+    split.listed = Some(listed);
     Ok(split)
 }
 

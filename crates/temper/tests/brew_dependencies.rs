@@ -7,7 +7,9 @@
 //! it and `prune` listed it as though it had been asked for. Homebrew records
 //! the difference (`installed_on_request`), and the fake below carries it — in a
 //! state file, because a prune changes it: `bundle cleanup --force` marks every
-//! formula its file names as asked for, as Homebrew does, and `tab` clears it.
+//! formula its file names as asked for, as Homebrew does, and removes what its
+//! list names and the file does not keep; `tab` clears the mark. A formula named
+//! in `FAKE_BREW_STUCK` is one cleanup fails to remove.
 //!
 //! The fake machine: `keeper` (declared); `jq` (installed by hand); `oniguruma`
 //! (`jq`'s dependency); `tree` (unneeded already — an orphan `brew autoremove`
@@ -62,6 +64,7 @@ impl Env {
         } else {
             "exit 1"
         };
+        let listed = cleanup.split_whitespace().collect::<Vec<_>>().join(" ");
         let cleanup = if cleanup.is_empty() {
             "exit 0".to_string()
         } else {
@@ -75,6 +78,7 @@ impl Env {
 state={state}
 needs() {{ case "$1" in jq) echo oniguruma ;; keeper) echo lib ;; esac; }}
 mark() {{ sed "s/^$1 .*/$1 $2/" "$state" > "$state.t" && mv "$state.t" "$state"; }}
+drop() {{ grep -v "^$1 " "$state" > "$state.t"; mv "$state.t" "$state"; }}
 case "$1 $2" in
   "list --formula") cut -d' ' -f1 "$state" ;;
   "list --cask")    : ;;
@@ -104,6 +108,11 @@ case "$1 $2" in
             [ -f "$a" ] || continue
             cp "$a" {seen}
             for n in $(sed -n 's/^brew "\(.*\)"$/\1/p' "$a"); do mark "$n" true; done
+            for n in {listed}; do
+              grep -qx "brew \"$n\"" "$a" && continue
+              case " ${{FAKE_BREW_STUCK:-}} " in *" $n "*) continue ;; esac
+              drop "$n"
+            done
           done ;;
         *) {cleanup} ;;
       esac ;;
@@ -112,6 +121,7 @@ esac
 exit 0
 "#,
                 state = formula_state.display(),
+                listed = listed,
                 log = log.display(),
                 seen = seen.display(),
             ),
@@ -215,6 +225,11 @@ fn prune_takes_the_dependencies_only_its_extras_needed() {
     );
     assert!(e.read("brew.log").contains("NO_AUTOREMOVE=1"), "{}", e.read("brew.log"));
     assert!(!e.asked("tree"), "the kept orphan is a dependency again:\n{}", e.read("formulae"));
+    assert!(
+        !e.read("formulae").contains("jq ") && !e.read("formulae").contains("oniguruma "),
+        "{}",
+        e.read("formulae")
+    );
     assert!(e.asked("keeper"), "a declared formula stays asked for:\n{}", e.read("formulae"));
 }
 
@@ -303,7 +318,47 @@ fn a_retired_formula_is_pruned_only_when_it_is_installed() {
     assert_eq!(names(&e.json(&["prune", "--dry-run"])), vec!["jq"]);
     assert_eq!(retired(&e), 0);
 
-    let e = Env::with(true, &format!("{MACHINE}nvtop true\n"), CLEANUP, retire);
+    let e = Env::with(true, &format!("{MACHINE}nvtop true\n"), &format!("{CLEANUP}nvtop\n"), retire);
     assert_eq!(names(&e.json(&["prune", "--dry-run"])), vec!["jq", "nvtop"]);
     assert_eq!(retired(&e), 1);
+}
+
+/// A removal brew does not carry out is reported as still here, not counted: the
+/// count is read back from Homebrew's list, as dnf, apt and pacman removals are.
+#[test]
+fn prune_counts_what_left_not_what_it_asked_for() {
+    let e = Env::new(true);
+    let out = e
+        .temper()
+        .env("FAKE_BREW_STUCK", "jq")
+        .args(["--json", "prune", "--yes"])
+        .output()
+        .unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["failed"], serde_json::json!(["brew jq"]), "{doc}");
+    assert!(e.read("formulae").contains("jq true"));
+    assert!(!e.read("formulae").contains("oniguruma"), "{}", e.read("formulae"));
+}
+
+/// A retired formula that a declared one needs is one Homebrew keeps — cleanup
+/// does not list it — so prune names it as something it cannot remove instead
+/// of promising the removal, and drift says the same.
+#[test]
+fn a_retired_formula_something_needs_is_not_promised() {
+    let e = Env::with(true, "keeper true\nlib false\n", "", "retire_packages = ['brew \"lib\"']\n");
+    let plan = e.json(&["prune", "--dry-run"]);
+    assert_eq!(plan["extras"], serde_json::json!([]), "{plan}");
+    let why = &plan["unremovable"][0];
+    assert_eq!((why["manager"].as_str(), why["name"].as_str()), (Some("brew"), Some("lib")), "{plan}");
+    assert!(why["why"].as_str().unwrap().contains("Homebrew keeps it"), "{plan}");
+
+    let drift = e.json(&["drift"]);
+    let retired: Vec<_> = drift["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["kind"] == "retired-package")
+        .collect();
+    assert_eq!(retired.len(), 1, "{drift}");
+    assert!(retired[0]["detail"].as_str().unwrap().contains("cannot remove"), "{drift}");
 }
