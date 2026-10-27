@@ -396,6 +396,17 @@ fn writing_a_repo_says_up_front_that_undo_will_not_take_it_back() {
         said.contains("rpm-repo"),
         "the run must name the repo write as something undo cannot revert.\n{said}"
     );
+    // …and the headline counts it, or the same output says `0 changed` above a
+    // line about a change it cannot revert. The repo and its key are two files.
+    assert!(
+        said.contains("2 repo file(s) written"),
+        "the summary must count the repo files it wrote.\n{said}"
+    );
+    let doc: serde_json::Value = serde_json::from_slice(
+        &e.temper().args(["--json", "install", "--dry-run"]).output().unwrap().stdout,
+    )
+    .unwrap();
+    assert_eq!(doc["repo_files_written"].as_array().map(Vec::len), Some(2), "{doc}");
 }
 
 /// A spec declaring no repos costs nothing — no `rpm` probe, no root ask.

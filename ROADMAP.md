@@ -64,15 +64,6 @@ through to the action's implicit `auth_admin`, and there is nowhere to answer.
 `prune` should say so up front, naming what needs it, exactly as a run needing
 sudo already does; today it finds out when the removal fails.
 
-**The install summary says `0 changed` on a run that wrote two root-owned files.** The line
-built at `main.rs` ("applied {} config step(s), {} changed") counts journaled config steps.
-An `rpm_repos` write (the repo file plus its key) is outside the journal, so a run whose only
-effect was installing a repo prints `0 changed`. The next line then says `temper undo` "cannot
-revert 1 of this run's change(s): rpm-repo", so the same output says both none and one. Count
-non-journaled writes in the summary, or name them separately (`… 0 changed, 1 repo written`),
-so the headline matches what happened to the machine.
-  → Every rpm host in the same matrix run.
-
 ## Scope-model gaps (known, ranked, each one a filled ⚠ or ❌ in the feature matrix)
 
 **The matrix's open cells**, so the summary and the table agree — this file rides

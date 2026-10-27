@@ -309,9 +309,10 @@ of the drift. You pick a direction and run what it prints:
 > **"changed" is a measured claim.** An `exec` with no `check` hook has no drift
 > story: temper ran it and genuinely cannot tell whether it did anything, so it
 > reports `ran (no drift-check)` and stays out of the changed count. That is why a
-> converged machine can report `0 changed` even with such steps — before, every
-> run looked like it did work it may never have done. Give the step a `check`
-> hook and it becomes measurable.
+> converged machine can report `0 changed` even with such steps. Give the step a
+> `check` hook and it becomes measurable. Repository files — rpm repos, apt
+> sources, pacman repos and their keys — are written outside the journal, so they
+> are counted apart: `… 0 changed, 2 repo file(s) written`.
 
 - **Packages installed but not declared (extras):** decide the direction —
   - converge spec→machine: `temper prune` (uninstall them, asks first);

@@ -1227,6 +1227,7 @@ fn cmd_install(
                 "machine": m.name, "packages": r.packages,
                 "changed": r.steps_changed, "total": r.steps_total,
                 "reboot": r.reboot, "dry_run": dry_run, "packages_only": packages_only,
+                "repo_files_written": r.repo_files,
                 "unrevertible": r.unrevertible.iter()
                     .map(|(label, why)| format!("{label} — {why}"))
                     .collect::<Vec<_>>(),
@@ -1242,8 +1243,10 @@ fn cmd_install(
         };
         let cannot = undo_cannot(dry_run);
         println!(
-            "install-missing {}: {verb} {} declared package(s), config skipped",
-            m.name, r.packages
+            "install-missing {}: {verb} {} declared package(s), config skipped{}",
+            m.name,
+            r.packages,
+            repo_files_clause(&r.repo_files, dry_run)
         );
         print_failed_providers(&r.failed);
         print_unrevertible(&r.unrevertible, cannot);
@@ -1281,8 +1284,10 @@ fn cmd_install(
         // change" reads as "installing one package" and means the opposite. The
         // steps half already states what its numbers are; this one did not.
         println!(
-            "install {}: {} package(s) declared, {steps}",
-            m.name, r.packages
+            "install {}: {} package(s) declared, {steps}{}",
+            m.name,
+            r.packages,
+            repo_files_clause(&r.repo_files, dry_run)
         );
         print_failed_providers(&r.failed);
         print_unrevertible(&r.unrevertible, cannot);
@@ -1292,6 +1297,17 @@ fn cmd_install(
     }
     remind_if_dirty(&home, &manifest::effective_git(&ft.git, &m.git));
     Ok(())
+}
+
+/// The repository files a run wrote as root, said beside the step count: they
+/// are outside the journal, so a run whose only effect was a repo would read
+/// `0 changed` while the next line says one of its changes cannot be undone.
+fn repo_files_clause(files: &[String], dry_run: bool) -> String {
+    match (files.len(), dry_run) {
+        (0, _) => String::new(),
+        (n, true) => format!(", would write {n} repo file(s)"),
+        (n, false) => format!(", {n} repo file(s) written"),
+    }
 }
 
 // Steps skipped by a failed `when` gate are announced *live* by the step phase's

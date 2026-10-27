@@ -2407,6 +2407,11 @@ pub struct InstallReport {
     /// Steps skipped because their `when` probe failed (app not present) —
     /// announced loudly (Principle #6). Each entry is a probe description.
     pub skipped: Vec<String>,
+    /// Repository files this run wrote as root — rpm repos, apt sources, pacman
+    /// repos, their keys and pacman's `Include` — or, on a dry run, would write.
+    /// Outside the journal, so `steps_changed` does not count them, and a run
+    /// whose only effect was a repo would otherwise say `0 changed`.
+    pub repo_files: Vec<String>,
     /// Providers whose converge reported failure, by name.
     ///
     /// The run continues past one — a bad cask is not a reason to skip flatpak,
@@ -2484,27 +2489,37 @@ pub fn run_install(
     // package from it failed, and because a failed batch is retried per item,
     // failed once each — burying any genuine failure in a wall of expected ones.
     // Repos go first on the way in; `prune` takes them last on the way out.
-    providers::rpm_repos_converge(
+    let mut repo_files = providers::rpm_repos_converge(
         home,
         &providers::effective_rpm_repos(home, machine)?,
         dry_run,
     )?;
     // apt sources likewise, before any apt install. The `apt-get update` that
     // makes a new source visible is part of that install.
-    providers::apt_sources_converge(
+    repo_files.extend(providers::apt_sources_converge(
         home,
         &providers::effective_apt_sources(home, machine)?,
         dry_run,
-    )?;
+    )?);
     // pacman repos too: the `Include`, each key, each repo file, and the
     // database of a repo pacman has not synced yet, so a package the same run
     // declares from it can be found.
-    providers::pacman_repos_converge(
+    repo_files.extend(providers::pacman_repos_converge(
         home,
         &machine.name,
         &providers::effective_pacman_repos(home, machine)?,
         dry_run,
-    )?;
+    )?);
+    // A dry run writes nothing, so it says what it would write: the files among
+    // the pending writes (a pacman key is a keyring entry, not a file).
+    if dry_run {
+        repo_files = providers::rpm_repos_pending(home, &providers::effective_rpm_repos(home, machine)?)
+            .into_iter()
+            .chain(providers::apt_sources_pending(home, &providers::effective_apt_sources(home, machine)?))
+            .chain(providers::pacman_repos_pending(home, &providers::effective_pacman_repos(home, machine)?))
+            .filter(|p| p.starts_with('/'))
+            .collect();
+    }
     // The journal opens BEFORE the converge, not after it. It used to be created
     // for the config-step phase only, so `install --packages-only` returned
     // without ever journaling anything — packages were unrevertible because
@@ -2593,6 +2608,7 @@ pub fn run_install(
         return Ok(InstallReport {
             packages,
             failed,
+            repo_files,
             upgraded: None, // `install-missing` adds, never upgrades
             steps_changed: 0,
             steps_ran: 0,
@@ -2720,6 +2736,7 @@ pub fn run_install(
     Ok(InstallReport {
         packages,
         failed,
+        repo_files,
         upgraded: None, // `install` converges the declared set; `update` upgrades
         steps_changed: changed,
         steps_ran: ran,
@@ -4008,6 +4025,7 @@ pub fn run_update(
     Ok(InstallReport {
         packages: effective.len(),
         failed,
+        repo_files: Vec::new(), // `update` converges no repos
         upgraded,
         steps_changed: changed,
         steps_ran: ran,
