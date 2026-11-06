@@ -1031,6 +1031,39 @@ fn cleanup_flag(m: Manager) -> Option<&'static str> {
     }
 }
 
+/// The type flags a prune's `brew bundle cleanup` runs with: every type the
+/// declared set holds, and every type the confirmed plan removes. Pure, so it
+/// is testable.
+///
+/// Naming any type turns the unnamed ones off, so a type that appears only in
+/// the plan — an extra tap on a spec that declares no taps — must be named
+/// too, or brew skips the removal the user just confirmed. Naming it removes
+/// nothing beyond the plan: the cleanup file already holds the declared set,
+/// `[ignore]`, and a keeper for everything else cleanup would take.
+///
+/// `cleanup` tags a cask extra `Brew` (see `parse_cleanup_extras`), so
+/// `casks` — what `brew list --cask` holds — says which flag it needs.
+/// `dependencies` is whether the plan frees formulae with its extras: they
+/// are removed as formulae, whatever the extras are.
+fn cleanup_flags(
+    effective: &[Pkg],
+    extras: &[(Manager, String)],
+    dependencies: bool,
+    casks: &HashSet<String>,
+) -> Vec<&'static str> {
+    let removes = |m: Manager| {
+        extras.iter().any(|(e, n)| match e {
+            Manager::Brew if casks.contains(n) => m == Manager::Cask,
+            other => *other == m,
+        }) || (m == Manager::Brew && dependencies)
+    };
+    Manager::ALL
+        .iter()
+        .filter(|&&m| effective.iter().any(|p| p.manager == m) || removes(m))
+        .filter_map(|&m| cleanup_flag(m))
+        .collect()
+}
+
 /// `[ignore]` entries rendered as Brewfile tokens, so `brew bundle cleanup`
 /// treats them as things that may stay.
 ///
@@ -1187,17 +1220,9 @@ pub fn prune_apply(
         // off from the user's environment. temper would then preview a cask
         // removal, get it confirmed, watch brew skip it, and report success: a
         // silent cap (Principle #6) whose cause lives outside the repo. Passing
-        // the flag for each type we actually put in the file makes the set
-        // temper's decision, which is the only way temper can honestly report on
-        // it. Note this must cover EVERY type present — naming one type turns
-        // the others off.
-        let mut flags: Vec<&str> = Vec::new();
-        for &m in Manager::ALL {
-            let Some(flag) = cleanup_flag(m) else { continue };
-            if effective.iter().any(|p| p.manager == m) {
-                flags.push(flag);
-            }
-        }
+        // the flags makes the set temper's decision, which is the only way
+        // temper can honestly report on it. See `cleanup_flags` for which.
+        let flags = cleanup_flags(effective, extras, !brew_deps.dependencies.is_empty(), &casks);
         // Streamed on purpose: prune is destructive, confirmed, and the user
         // is watching it happen. Under `--json` that stream would land in the
         // document, so it goes to stderr instead.
@@ -4585,6 +4610,60 @@ mod cleanup_tests {
         assert_eq!(
             parse_cleanup_extras(text, &ignored(&[])),
             vec![(Manager::Tap, "joshmedeski/sesh".to_string())]
+        );
+    }
+
+    fn declared(lines: &[&str]) -> Vec<Pkg> {
+        lines.iter().map(|l| crate::packages::parse(l).unwrap()).collect()
+    }
+
+    fn extra(m: Manager, n: &str) -> (Manager, String) {
+        (m, n.to_string())
+    }
+
+    /// An extra tap on a spec that declares none is removed with the rest.
+    /// The flags came from the declared set alone, so cleanup ran with
+    /// `--formula --cask`, never computed a tap to untap, and prune reported
+    /// the confirmed tap as "could NOT be removed".
+    #[test]
+    fn a_type_only_the_plan_names_is_flagged() {
+        let spec = declared(&["brew \"jq\"", "cask \"ghostty\""]);
+        assert_eq!(
+            cleanup_flags(&spec, &[extra(Manager::Tap, "someone/tap")], false, &HashSet::new()),
+            vec!["--formula", "--cask", "--tap"]
+        );
+    }
+
+    /// cleanup tags a cask extra `Brew`; it is still removed as a cask.
+    #[test]
+    fn a_cask_extra_is_flagged_as_a_cask() {
+        let spec = declared(&["brew \"jq\""]);
+        let casks: HashSet<String> = ["stray".to_string()].into();
+        assert_eq!(
+            cleanup_flags(&spec, &[extra(Manager::Brew, "stray")], false, &casks),
+            vec!["--formula", "--cask"]
+        );
+    }
+
+    /// The formulae a prune frees go as formulae, whatever its extras are.
+    #[test]
+    fn freed_dependencies_are_flagged_as_formulae() {
+        let spec = declared(&["cask \"ghostty\""]);
+        let casks: HashSet<String> = ["stray".to_string()].into();
+        assert_eq!(
+            cleanup_flags(&spec, &[extra(Manager::Brew, "stray")], true, &casks),
+            vec!["--formula", "--cask"]
+        );
+    }
+
+    /// The control: a type neither declared nor removed stays off, and flatpak
+    /// is never cleanup's.
+    #[test]
+    fn a_type_nobody_names_stays_off() {
+        let spec = declared(&["brew \"jq\""]);
+        assert_eq!(
+            cleanup_flags(&spec, &[extra(Manager::Flatpak, "org.x.App")], false, &HashSet::new()),
+            vec!["--formula"]
         );
     }
 }

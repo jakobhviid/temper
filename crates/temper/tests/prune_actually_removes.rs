@@ -591,3 +591,47 @@ org.b.Stray\\tsystem\\norg.c.Stray\\tuser\\n' ;; \
         "the declared app must survive: {called:?}"
     );
 }
+
+/// A tap and a cask the spec declares no kind of are removed with the rest.
+///
+/// Naming any type to `brew bundle cleanup` turns the unnamed ones off, and the
+/// types were read from the declared set alone. A spec of formulae ran cleanup
+/// with `--formula` only, so brew never computed the tap to untap or the cask to
+/// uninstall: both previewed, both confirmed, neither attempted.
+#[test]
+fn prune_removes_extras_of_a_type_the_spec_declares_none_of() {
+    let e = Env::new();
+    // The dry listing names both extras and exits 1, as real cleanup does when
+    // it finds any; the `--force` call is the one under test.
+    e.stub(
+        "brew",
+        "case \"$1 $2\" in \
+         \"list --formula\") echo jq ;; \
+         \"list --cask\") echo stray ;; \
+         \"trust --json\") echo '{\"taps\":[]}' ;; \
+         \"bundle cleanup\") case \" $* \" in *\" --force \"*) : ;; \
+           *) printf 'Would uninstall casks:\\nstray\\nWould untap:\\nsomeone/tap\\n'; exit 1 ;; \
+         esac ;; \
+         esac",
+    );
+    e.spec(&format!(
+        "[[machine]]\nname = \"t\"\nos = \"{}\"\npackages = [\"brew \\\"jq\\\"\"]\n",
+        os()
+    ));
+
+    e.temper().args(["prune", "--yes"]).output().unwrap();
+
+    let called = e.log("brew");
+    let cleanup = called
+        .lines()
+        .find(|l| l.starts_with("bundle cleanup --force"))
+        .unwrap_or_else(|| panic!("cleanup never ran; brew was called with:\n{called}"));
+    let flags: Vec<&str> = cleanup.split_whitespace().filter(|a| a.starts_with("--")).collect();
+    for flag in ["--formula", "--cask", "--tap"] {
+        assert!(
+            flags.contains(&flag),
+            "cleanup ran without `{flag}`, so brew skips a removal the user confirmed: \
+             {cleanup:?}"
+        );
+    }
+}
