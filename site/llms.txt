@@ -1,0 +1,51 @@
+# temper
+
+> temper converges a macOS or Linux machine to a spec kept in a folder of plain, human-readable files: packages and configuration, with read-only drift reports, absorbing live state back into the spec, and undo.
+
+Keep your machines the way you declared them: packages and configuration, described in a folder of plain, human-readable files. The complete reference, for people and LLMs, is built into the tool: run `temper --llm`.
+temper is one of the software projects by Jakob Hviid, all listed at https://jakob.hviid.phd/software/ (for LLMs: https://jakob.hviid.phd/llms.txt).
+
+## What it does
+
+- **Packages and config, one tool**: brew, cask, flatpak, mas, VS Code, GNOME extensions, rpm-ostree, and the distro's own dnf, apt or pacman, plus file, key, marker-block and root-owned `/etc` config steps. Real files, not a new language.
+- **Drift, with the command to fix it**: `temper drift` only reads. It reports what is out of sync and ends with the exact command for each way out, in both directions.
+- **Two directions**: `temper install` converges the machine toward the spec. `temper reconcile` absorbs the machine's live state back into the spec: packages, tap trust and GNOME settings, per key.
+- **Reversible, and says where it is not**: File writes, dconf keys and package installs are journaled, and `temper undo` reverts the last run without overwriting a file changed since. A run that touches state it cannot revert says so before you confirm.
+
+## Install
+
+Homebrew, on macOS and Linux. Installs a prebuilt binary with its man page and shell completions, so no compiler is needed. The tap is trusted once first, as Homebrew 6 and later ask.
+
+```sh
+brew trust --tap jakobhviid/tap
+brew install jakobhviid/tap/temper
+```
+
+Or one line, without Homebrew. No compiler and no root: installs the prebuilt binary to `~/.local/bin`.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jakobhviid/temper/main/install.sh | sh
+```
+
+Then point it at your folder. Records where the folder lives, so temper runs from anywhere. Optional: run from inside the folder and it is found there. On a machine already set up the way you like, `temper init` writes its entry and seeds it from what is installed.
+
+```sh
+temper setup ~/my-spec
+```
+
+## Docs
+
+- [README](https://raw.githubusercontent.com/jakobhviid/temper/main/README.md): the quickstart, where it runs and how it is tested
+- [WORKFLOWS.md](https://raw.githubusercontent.com/jakobhviid/temper/main/WORKFLOWS.md): the operating loops (drift, decide, run)
+- [SPEC.md](https://raw.githubusercontent.com/jakobhviid/temper/main/SPEC.md): the `temper.toml` and app-bundle schema
+- [ARCHITECTURE.md](https://raw.githubusercontent.com/jakobhviid/temper/main/ARCHITECTURE.md): the model, from engine and data to primitives and verbs
+- [PRINCIPLES.md](https://raw.githubusercontent.com/jakobhviid/temper/main/PRINCIPLES.md): the guardrails that keep it small
+
+## Optional
+
+- [Project page](https://jakob.hviid.phd/temper/): the page this file accompanies
+- [Source](https://github.com/jakobhviid/temper): MIT licensed
+- [Releases](https://github.com/jakobhviid/temper/releases)
+- [jakobhviid/alloy](https://github.com/jakobhviid/alloy): a complete temper folder for a stock Bazzite desktop, to read end to end
+- [All software by Jakob Hviid](https://jakob.hviid.phd/software/)
+- [Jakob Hviid's site, for LLMs](https://jakob.hviid.phd/llms.txt)
