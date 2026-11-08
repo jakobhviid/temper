@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- temper's icon: the tempered bar on an anvil. The navy tile is shared by every tool's icon; the canonical copy of
+       each icon is site/icon.svg in its repository (jakobhviid.github.io/_software-template/README.md). -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d3a5f"/><stop offset="1" stop-color="#002642"/></linearGradient>
+    <linearGradient id="temper" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#d4d7dc"/><stop offset="0.16" stop-color="#d4d7dc"/>
+      <stop offset="0.26" stop-color="#ead08a"/><stop offset="0.40" stop-color="#d39a45"/>
+      <stop offset="0.54" stop-color="#a5603a"/><stop offset="0.66" stop-color="#7b4a9e"/>
+      <stop offset="0.80" stop-color="#3f6fd0"/><stop offset="1" stop-color="#5b8fd8"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="124" height="124" rx="28" fill="url(#tile)"/>
+  <rect x="2.5" y="2.5" width="123" height="123" rx="27.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+<path d="M14 62 Q30 62 34 56 H100 V70 H84 Q76 72 76 80 V88 H90 V100 H38 V88 H52 V80 Q52 72 44 70 Q26 70 14 62 Z" fill="#f3efe4"/>
+   <rect x="38" y="40" width="58" height="13" rx="3" fill="url(#temper)"/>
+</svg>

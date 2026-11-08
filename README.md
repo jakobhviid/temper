@@ -1,3 +1,5 @@
+<img src="site/icon.svg" alt="" width="96" align="right">
+
 # temper
 
 **Keep your machines the way you declared them.** Describe a machine — its
