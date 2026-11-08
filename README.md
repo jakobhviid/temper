@@ -64,6 +64,7 @@ contract, that folder is one application of it.
 curl -fsSL https://raw.githubusercontent.com/jakobhviid/temper/main/install.sh | sh
 
 # …or via Homebrew:
+brew trust --tap jakobhviid/tap   # once: Homebrew 6 and later load a third-party tap only when trusted
 brew install jakobhviid/tap/temper
 ```
 
