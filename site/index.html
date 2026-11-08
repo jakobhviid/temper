@@ -1,0 +1,147 @@
+<!doctype html>
+<!-- temper's project page (at jakob.hviid.phd/temper), published from site/ by .github/workflows/pages.yml. The layout and
+     style.css are shared by every command-line tool's page; the canonical copy is in
+     jakobhviid.github.io/_software-template/. Only the words and examples here are temper's own. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>temper: keep your machines the way you declared them</title>
+  <meta name="description" content="temper converges a macOS or Linux machine to a spec kept in a folder of plain, human-readable files: packages and configuration, with read-only drift reports, absorbing live state back into the spec, and undo.">
+  <link rel="canonical" href="https://jakob.hviid.phd/temper/">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="wrap">
+    <nav class="bar">
+      <span class="crumbs"><a href="https://jakob.hviid.phd/">Jakob Hviid</a><span class="sep">/</span><a href="https://jakob.hviid.phd/software/">Software</a><span class="sep">/</span><strong>temper</strong></span>
+      <span class="links"><a href="#install">Install</a><a href="https://github.com/jakobhviid/temper">GitHub</a></span>
+    </nav>
+
+    <header class="hero">
+      <h1>temper</h1>
+      <p class="tagline">Keep your machines the way you declared them: packages and configuration, described in a folder of plain, human-readable files.</p>
+      <pre class="command"><code>brew trust --tap jakobhviid/tap</code><code>brew install jakobhviid/tap/temper</code></pre>
+      <p class="actions">
+        <a class="button" href="#install">Install</a>
+        <a class="button ghost" href="https://github.com/jakobhviid/temper#readme">Read the README</a>
+      </p>
+      <p class="platforms">macOS and Linux, x86_64 and arm64 · MIT licensed</p>
+    </header>
+
+    <main>
+      <section id="what">
+        <h2>What it does</h2>
+        <p class="section-lead">The tool is the same for everyone; the spec is a folder you bring: a git repo, a synced
+          Nextcloud or Dropbox folder, a USB stick. It holds one manifest, a recipe per app, and the real files those
+          recipes deploy. Adding an app is a config file you write, never a tool release.</p>
+        <div class="features">
+          <div class="feature">
+            <h3>Packages and config, one tool</h3>
+            <p>brew, cask, flatpak, mas, VS Code, GNOME extensions, rpm-ostree, and the distro's own dnf, apt or pacman,
+              plus file, key, marker-block and root-owned <code>/etc</code> config steps. Real files, not a new
+              language.</p>
+          </div>
+          <div class="feature">
+            <h3>Drift, with the command to fix it</h3>
+            <p><code>temper drift</code> only reads. It reports what is out of sync and ends with the exact command
+              for each way out, in both directions.</p>
+          </div>
+          <div class="feature">
+            <h3>Two directions</h3>
+            <p><code>temper install</code> converges the machine toward the spec. <code>temper reconcile</code>
+              absorbs the machine's live state back into the spec: packages, tap trust and GNOME settings, per
+              key.</p>
+          </div>
+          <div class="feature">
+            <h3>Reversible, and says where it is not</h3>
+            <p>File writes, dconf keys and package installs are journaled, and <code>temper undo</code> reverts the
+              last run without overwriting a file changed since. A run that touches state it cannot revert says so
+              before you confirm.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="look">
+        <h2>A first look</h2>
+        <p class="section-lead">On a Debian machine, a package installed by name since temper's baseline and declared
+          nowhere is an extra. <code>temper prune</code> removes it; <code>temper reconcile</code> absorbs it into the
+          machine's own list.</p>
+<pre><code><span class="dim">$</span> temper drift
+<span class="dim">drift ·</span> m
+
+  apt
+    <span class="warn">✗</span> bc        <span class="warn">extra</span>  <span class="dim">[apt-extra]</span>
+    <span class="warn">✗</span> libonig5  <span class="warn">extra</span>  <span class="dim">[apt-extra]</span>
+    <span class="dim">… 1 more in sync</span></code></pre>
+      </section>
+
+      <section id="install">
+        <h2>Install</h2>
+        <div class="install-step">
+          <h3>Homebrew, on macOS and Linux</h3>
+          <p>Installs a prebuilt binary with its man page and shell completions, so no compiler is needed. The tap is trusted once first, as Homebrew 6 and later ask.</p>
+          <pre class="command"><code>brew trust --tap jakobhviid/tap</code><code>brew install jakobhviid/tap/temper</code></pre>
+        </div>
+        <div class="install-step">
+          <h3>Or one line, without Homebrew</h3>
+          <p>No compiler and no root: installs the prebuilt binary to <code>~/.local/bin</code>.</p>
+          <pre class="command"><code>curl -fsSL https://raw.githubusercontent.com/jakobhviid/temper/main/install.sh | sh</code></pre>
+        </div>
+        <div class="install-step">
+          <h3>Then point it at your folder</h3>
+          <p>Records where the folder lives, so temper runs from anywhere. Optional: run from inside the folder and it
+            is found there. On a machine already set up the way you like, <code>temper init</code> writes its entry
+            and seeds it from what is installed.</p>
+          <pre class="command"><code>temper setup ~/my-spec</code></pre>
+        </div>
+      </section>
+
+      <section id="docs">
+        <h2>Documentation</h2>
+        <ul class="docs">
+          <li><a href="https://github.com/jakobhviid/temper#readme">README</a>: the quickstart, where it runs and how
+            it is tested</li>
+          <li><a href="https://github.com/jakobhviid/temper/blob/main/WORKFLOWS.md">WORKFLOWS.md</a>: the operating
+            loops (drift, decide, run)</li>
+          <li><a href="https://github.com/jakobhviid/temper/blob/main/SPEC.md">SPEC.md</a>: the
+            <code>temper.toml</code> and app-bundle schema</li>
+          <li><a href="https://github.com/jakobhviid/temper/blob/main/ARCHITECTURE.md">ARCHITECTURE.md</a>: the
+            model, from engine and data to primitives and verbs</li>
+          <li><a href="https://github.com/jakobhviid/temper/blob/main/PRINCIPLES.md">PRINCIPLES.md</a>: the guardrails
+            that keep it small</li>
+          <li><a href="https://github.com/jakobhviid/alloy">jakobhviid/alloy</a>: a complete temper folder for a stock
+            Bazzite desktop, to read end to end</li>
+          <li><a href="https://github.com/jakobhviid/temper/releases">Releases</a></li>
+        </ul>
+      </section>
+    </main>
+
+    <footer>
+      <p>temper is open source under the MIT licence.</p>
+      <p><strong>AI disclosure.</strong> Parts of this project were written with the assistance of AI coding agents.
+        All changes are reviewed by the maintainer.</p>
+      <p>One of the <a href="https://jakob.hviid.phd/software/">software projects</a> by
+        <a href="https://jakob.hviid.phd/">Jakob Hviid</a>. All of them install from the
+        <a href="https://github.com/jakobhviid/homebrew-tap">jakobhviid/tap</a> Homebrew tap.</p>
+    </footer>
+  </div>
+
+  <script>
+    // A copy button on every command block; a block of several commands copies them all, one per line.
+    for (const block of document.querySelectorAll("pre.command")) {
+      const button = document.createElement("button");
+      button.className = "copy";
+      button.type = "button";
+      button.textContent = "Copy";
+      button.addEventListener("click", async () => {
+        const lines = [...block.querySelectorAll("code")].map((code) => code.textContent.trim());
+        await navigator.clipboard.writeText(lines.join("\n"));
+        button.textContent = "Copied";
+        setTimeout(() => (button.textContent = "Copy"), 1500);
+      });
+      block.appendChild(button);
+    }
+  </script>
+</body>
+</html>
