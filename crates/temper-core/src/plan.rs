@@ -2843,8 +2843,9 @@ pub struct PrunePlan {
     pub unremovable: Vec<(&'static str, String, &'static str)>,
     /// What this run leaves in place that it would otherwise act on, as
     /// `(list, item, why)`: the items the user chose to keep (`--keep`, or `c` at
-    /// the confirm), whose `why` is `None`, and what stays because something kept
-    /// needs it, with the reason. Not work, so not in `items()`; published in
+    /// the confirm), whose `why` is `None`, and what stays because something that
+    /// stays needs it — a kept item, or an edited repo file — with the reason.
+    /// Not work, so not in `items()`; published in
     /// `--json` as `kept`. Nothing is written — the next `prune` offers them
     /// again, and `drift` still reports them.
     pub kept: Vec<(&'static str, String, Option<&'static str>)>,
@@ -3174,7 +3175,10 @@ impl PrunePlan {
         self.flatpak_remotes.retain(|i| !is_kept("flatpak_remotes", i));
         self.residue.retain(|i| !is_kept("residue", i));
         self.retired.retain(|i| !is_kept("retired", i));
+        // First, before anything `run_prune` already held for a reason of its own.
+        let held = std::mem::take(&mut self.kept);
         self.kept = kept.iter().map(|(l, i)| (*l, i.clone(), None)).collect();
+        self.kept.extend(held);
 
         let kind = |key: &str| kinds.get(key).map(String::as_str);
         if kept.iter().any(|(l, _)| *l == "rpm_ostree") {
@@ -3190,10 +3194,17 @@ impl PrunePlan {
             .iter()
             .any(|(l, i, _)| *l == "residue" && kind(i) == Some("pacman-repo"))
         {
-            self.kept.extend(std::mem::take(&mut self.pacman_keys).into_iter().map(|k| {
-                ("pacman_keys", k, Some("a pacman repo you kept may be signed with it"))
-            }));
+            self.hold_pacman_keys("a pacman repo you kept may be signed with it");
         }
+    }
+
+    /// Move the pacman keys out of the plan and into `kept`, with the reason.
+    fn hold_pacman_keys(&mut self, why: &'static str) {
+        self.kept.extend(
+            std::mem::take(&mut self.pacman_keys)
+                .into_iter()
+                .map(|k| ("pacman_keys", k, Some(why))),
+        );
     }
 
     /// The `--json` document. Derived one key per list for the same reason the
@@ -3896,6 +3907,7 @@ pub fn run_prune(
     // reportable. A ledger is a record, not a licence to delete a user's edits.
     let declared = deployed_paths(home, machine)?;
     let (mut residue, mut residue_edited) = (Vec::new(), Vec::new());
+    let mut pacman_repo_stays = false;
     for (key, rec) in crate::ledger::residue(&machine.name, &declared) {
         if !crate::ledger::still_present(&rec) {
             continue; // already gone — not work, and counting it would inflate the total
@@ -3903,6 +3915,7 @@ pub fn run_prune(
         if crate::ledger::is_untouched(&rec) {
             residue.push(key);
         } else {
+            pacman_repo_stays |= rec.kind == "pacman-repo";
             residue_edited.push(key);
         }
     }
@@ -3975,7 +3988,7 @@ pub fn run_prune(
             Vec::new()
         }
     };
-    Ok(PrunePlan {
+    let mut plan = PrunePlan {
         packages,
         untrust,
         extensions,
@@ -3999,7 +4012,14 @@ pub fn run_prune(
         unavailable,
         unremovable,
         kept: Vec::new(),
-    })
+    };
+    // An edited repo file is reported and left on disk, and a pacman repo on
+    // disk with its key gone fails every sync. Which dropped repo a key signed
+    // is not recorded, so none goes while one of their files stays.
+    if pacman_repo_stays {
+        plan.hold_pacman_keys("a pacman repo file you edited stays, and may be signed with it");
+    }
+    Ok(plan)
 }
 
 /// What `PrunePlan::changes_from` finds.
@@ -4226,6 +4246,7 @@ pub fn commit_prune(
     // Residue carries how to remove it: a file is deleted, a block's region is
     // edited out of a file that stays.
     let mut recorded = crate::ledger::load(&machine.name);
+    let mut pacman_repo_stays = false;
     for key in &plan.residue {
         let Some(rec) = recorded.get(key).cloned() else {
             continue;
@@ -4260,14 +4281,24 @@ pub fn commit_prune(
                     "{} could not remove {key}: {e}",
                     crate::ui::yellow(crate::ui::g_warn())
                 );
+                pacman_repo_stays |= rec.kind == "pacman-repo";
                 failed.push(key.clone());
             }
         }
     }
     let _ = crate::ledger::save(&machine.name, &recorded);
     // After the residue above, which takes a dropped repo's file: a repo still
-    // on disk with its key gone would fail every sync.
-    if !plan.pacman_keys.is_empty() {
+    // on disk with its key gone would fail every sync. So a repo file that could
+    // not be removed keeps the keys, the plan's rule for an edited one.
+    if !plan.pacman_keys.is_empty() && pacman_repo_stays {
+        eprintln!(
+            "{} keeping {} pacman key(s) — a pacman repo file could not be removed, \
+             and may be signed with them",
+            crate::ui::yellow(crate::ui::g_warn()),
+            plan.pacman_keys.len()
+        );
+        failed.extend(plan.pacman_keys.iter().cloned());
+    } else if !plan.pacman_keys.is_empty() {
         let removed = providers::pacman_keys_remove(&machine.name, &plan.pacman_keys);
         failed.extend(plan.pacman_keys.iter().filter(|k| !removed.contains(k)).cloned());
     }

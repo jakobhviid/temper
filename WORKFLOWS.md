@@ -1060,7 +1060,11 @@ an upgrade, is the partial upgrade Arch does not support, and upgrading is
 pacman's keyring` or `not locally signed` when it is not trusted. Drop the
 declaration and the repo file is residue that `prune` removes after the
 packages, and `prune` deletes the keys temper imported once no declared repo uses
-them — never a key the machine had before. The `Include` and `00-temper.conf`
+them — never a key the machine had before. A repo file that stays on disk keeps
+the keys, because pacman checks a repo against its keyring and one whose key is
+gone fails every sync: an edited file, which `prune` reports and leaves, holds
+them back in the plan (listed under `kept`, with why), and a file `prune` fails
+to remove holds them back in the run (reported as not removed). The `Include` and `00-temper.conf`
 stay: inert without repo files, and removing them in the wrong order would leave
 pacman unable to read its configuration. On a host without pacman, a bundle's
 repos are inert and a machine's own report `unavailable`. The AUR itself is not
