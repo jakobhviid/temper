@@ -321,10 +321,20 @@ mod tests {
         let _ = quiet.kill();
         let _ = quiet.wait();
 
+        // A copy of the shell, not of `sleep`: a multi-call coreutils picks the
+        // program from its own name and will not run as `sudo` — uutils, which
+        // Ubuntu 26.04 ships, exits with "unknown program". The copy blocks on
+        // `read` from a pipe held open, so it starts nothing.
         let dir = tempfile::tempdir().unwrap();
         let sudo = dir.path().join("sudo");
-        std::fs::copy(crate::primitives::which("sleep").unwrap(), &sudo).unwrap();
-        let mut asking = spawn(Command::new("sh").args(["-c", &format!("{} 5; true", sudo.display())]));
+        std::fs::copy(crate::primitives::which("sh").unwrap(), &sudo).unwrap();
+        let mut asking = Command::new("sh")
+            .args(["-c", &format!("{} -c 'read x'; true", sudo.display())])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
         settle();
         let a = find_under(asking.id()).expect("a childless sudo is asking");
         assert!(a.what.starts_with("sudo is asking for"), "{a:?}");
