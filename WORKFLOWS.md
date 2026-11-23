@@ -315,7 +315,8 @@ of the drift. You pick a direction and run what it prints:
 > are counted apart: `… 0 changed, 2 repo file(s) written`.
 
 - **Packages installed but not declared (extras):** decide the direction —
-  - converge spec→machine: `temper prune` (uninstall them, asks first);
+  - converge spec→machine: `temper prune` (uninstall them, asks first — `c`
+    at the confirm chooses per item);
   - absorb spec←machine: `temper reconcile` (interactively add/drop).
     or `temper reconcile --csw` to take the machine's state for every item
     at once (see §5);
@@ -363,6 +364,35 @@ of the drift. You pick a direction and run what it prints:
 > desktop for those. In an ssh session temper says so before it starts, and a
 > step that fails there names the command that works from it —
 > `sudo flatpak install --system <ids>` or `sudo flatpak uninstall --system <ids>`.
+
+> **Prune some, keep the rest.** The confirm is `[y/N/c]`: `c` goes through the
+> plan one item at a time — each package, tap, extension, layered rpm, remote
+> and file, the grain `reconcile` asks at — and Enter keeps the item. `--keep
+> NAME` makes the same choice without asking, and is how a `--json` run makes
+> it; it is repeatable, and takes a package by name (`jq`) or as the preview
+> lists it (`brew jq`), a tap, an extension uuid, a remote or a path.
+>
+> ```sh
+> temper prune --keep jq --keep org.gnome.Boxes
+> ```
+>
+> Kept is for this run only. Nothing is written to the spec, `drift` still
+> reports the item, and the next `prune` offers it again — the answer for a
+> package you are trying out. To stop being asked, declare it (`reconcile`) or
+> ignore it (`[machine.ignore]`).
+>
+> What a removal frees depends on everything removed with it, so the plan is
+> worked out again from what you keep and shown once more, a `· keep` line per
+> kept item, before the confirm. Keep `jq` and the `oniguruma` only it needed
+> stays too. Freed dependencies, a package manager's autoremove and pacman keys
+> follow from the rest and are never asked about; `--keep oniguruma` says to keep
+> what frees it. Two things stay because something kept needs them, each with
+> its reason: a kept layered rpm keeps the rpm repo files, which rpm-ostree
+> re-resolves it from on every deployment, and a kept pacman repo file keeps the
+> keys, without which it fails every sync. A `--keep` that names nothing in the
+> plan stops the run before anything is removed. `--json` lists what stayed
+> under `kept`, as `{list, item, why}` — `list` is the key the item would
+> otherwise be under, and `why` is null for what you chose.
 - **dnf / apt / pacman:** an extra is only what was installed by name since the
 machine's baseline — the image's own packages never are. `prune` removes it with
 the dependencies only it needed (all listed in the preview), and keeps one that
@@ -664,8 +694,8 @@ root-owned file it could not escalate for, a flatpak installed system-wide, a
 formula Homebrew did not remove — is listed as still present rather than counted
 as done, and `--json` carries the
 same list under `failed`. So "3 item(s) removed" means three fewer things exist,
-and a package kept as a dependency is counted apart ("1 kept and marked as
-dependencies").
+a package kept as a dependency is counted apart ("1 kept and marked as
+dependencies"), and so is what you kept ("2 left in place").
 
 ## 8. Retire something across the fleet
 
@@ -912,8 +942,9 @@ prune m: 3 item(s) removed
 names. `dependencies` (freed) and `demote` (kept as dependencies), brew's
 included, hold `"<manager> <name>"` strings, `autoremove` names the package managers
 whose own autoremove will run, `unremovable` holds `{manager, name, why}`
-objects, `unavailable` names package managers it could not ask, and `failed`
-names anything that did not go as planned.
+objects, `unavailable` names package managers it could not ask, `kept` what you
+chose to leave in place (§3), and `failed` names anything that did not go as
+planned.
 
 **`undo`.** It reverts an install the same way: it removes what the run
 installed by name, with the dependencies only those packages needed. It marks

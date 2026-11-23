@@ -119,6 +119,11 @@ enum Cmd {
     /// or — if something installed still needs it — kept and marked as a
     /// dependency. Unneeded packages that are not from this prune are counted,
     /// never removed. Everything is in the preview before you confirm.
+    ///
+    /// The confirm takes `c` to choose per item — each package, tap, extension,
+    /// remote and file, as `reconcile` asks — and `--keep` makes the same choice
+    /// without asking. What you keep is left in place for this run only: nothing
+    /// is written to the spec, and the next `prune` offers it again.
     Prune {
         /// List what would be removed without removing anything.
         #[arg(long)]
@@ -126,6 +131,11 @@ enum Cmd {
         /// Skip the confirmation prompt (removal is destructive; default asks).
         #[arg(long)]
         yes: bool,
+        /// Leave this item in place, this run only. Repeatable. A package by name
+        /// (`jq`) or as prune lists it (`brew jq`), a tap, an extension uuid, a
+        /// remote or a path. A name that matches nothing is an error.
+        #[arg(long, value_name = "NAME")]
+        keep: Vec<String>,
     },
     /// Scaffold THIS machine into the folder, then seed it from live state.
     ///
@@ -433,7 +443,7 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Update) => cmd_update(json, verbose)?,
         Some(Cmd::Drift { machine }) => cmd_drift(machine, json)?,
         Some(Cmd::Undo { run, list, dry_run }) => cmd_undo(run, list, dry_run, json)?,
-        Some(Cmd::Prune { dry_run, yes }) => cmd_prune(dry_run, yes, json)?,
+        Some(Cmd::Prune { dry_run, yes, keep }) => cmd_prune(dry_run, yes, &keep, json)?,
         Some(Cmd::Init { name, role, yes }) => cmd_init(name, role, yes, json)?,
         Some(Cmd::Snapshot { machine, include_shared }) => cmd_snapshot(machine, include_shared, json)?,
         Some(Cmd::Adopt) => cmd_adopt(json)?,
@@ -1587,7 +1597,7 @@ fn render_drift(machine: &str, items: &[plan::Finding], composed: &[String]) {
     }
 }
 
-fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
+fn cmd_prune(dry_run: bool, yes: bool, keep: &[String], json: bool) -> Result<()> {
     let home = find_home_pulling()?;
     let ft = load_fleet(&home)?;
     let m = machine::resolve(&ft, None)?;
@@ -1597,14 +1607,21 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
     let result = (|| -> Result<()> {
         // Compute the plan WITHOUT removing anything, so we can preview + confirm.
         let ignore = manifest::effective_ignore(&home, &ft.ignore, &m)?;
-        let prune_plan = plan::run_prune(&home, &m, &ignore, &manifest::effective_trust(&home, &ft.brew.trust, &m)?)?;
+        let trust = manifest::effective_trust(&home, &ft.brew.trust, &m)?;
+        let mut prune_plan = plan::run_prune(&home, &m, &ignore, &trust)?;
+        // `--keep` is matched against the whole plan, so a name that matches
+        // nothing stops the run before anything is removed.
+        let mut kept = prune_plan.resolve_keep(keep)?;
+        if !kept.is_empty() {
+            prune_plan = plan::run_prune_keeping(&home, &m, &ignore, &trust, &kept)?;
+        }
 
         if json {
             // No tty to confirm on: JSON is a preview unless `--yes` explicitly opts
             // into the (destructive) removal.
             let removed = yes && !dry_run && !prune_plan.is_empty();
             let failed = if removed {
-                plan::commit_prune(&home, &m, &prune_plan, &ignore, &manifest::effective_trust(&home, &ft.brew.trust, &m)?)?.failed
+                plan::commit_prune(&home, &m, &prune_plan, &ignore, &trust)?.failed
             } else {
                 Vec::new()
             };
@@ -1622,126 +1639,110 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
             .packages
             .iter()
             .any(|(m, _)| *m == packages::Manager::Mas)
+            || kept.iter().any(|(l, i)| *l == "packages" && i.starts_with("mas "))
         {
             providers::mas_names()
         } else {
             std::collections::BTreeMap::new()
         };
-        for (mgr, name) in &prune_plan.packages {
-            match mgr {
-                packages::Manager::Mas => match mas_names.get(name) {
-                    Some(app) => println!("  - mas \"{app}\" (id {name})"),
-                    None => println!("  - mas {name}"),
-                },
-                _ => println!("  - {} {}", mgr.as_str(), name),
+        // The preview and the confirm repeat until the plan shown is the one to
+        // run: choosing per item works the plan out again, and what it frees can
+        // change with what is kept, so the new plan is shown and confirmed too.
+        let mut first = true;
+        loop {
+            print_prune_preview(&prune_plan, &mas_names);
+            // Over ssh, a system-wide flatpak removal needs a polkit password with no
+            // way to ask for it — said before the confirm rather than after the failure.
+            if first && providers::over_ssh() {
+                let system: Vec<String> = providers::flatpak_app_scopes()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|(app, inst)| {
+                        inst == "system"
+                            && prune_plan
+                                .packages
+                                .iter()
+                                .any(|(m, n)| *m == packages::Manager::Flatpak && n == app)
+                    })
+                    .map(|(app, _)| app)
+                    .collect();
+                if !system.is_empty() {
+                    eprintln!(
+                        "{}",
+                        ui::yellow(&format!(
+                            "  {} {} system-wide flatpak(s) over ssh: polkit authorizes their removal \
+                             and may have no way to ask for a password here — `sudo flatpak \
+                             uninstall --system {}` works where prune does not",
+                            ui::g_warn(),
+                            system.len(),
+                            system.join(" ")
+                        ))
+                    );
+                }
             }
-        }
-        // Everything that is not a package renders from `items()` — the same list
-        // the count and the confirm are derived from, so "prune the N item(s)
-        // listed above" cannot list fewer than N again. (Packages keep their own loop
-        // above: only there does the preview need the `Manager` to turn a mas id
-        // into an app name.)
-        for (list, item) in prune_plan.items() {
-            if list == "packages" {
-                continue;
+            first = false;
+            if prune_plan.is_empty() {
+                if prune_plan.kept.is_empty() {
+                    println!("prune {}: nothing to remove.", m.name);
+                } else {
+                    println!(
+                        "prune {}: nothing to remove — {} item(s) left in place.",
+                        m.name,
+                        prune_plan.kept.len()
+                    );
+                }
+                // …but say whether that is an answer or a shrug. A manager that is
+                // installed and failing reports nothing, and "nothing to remove" is
+                // the wrong conclusion to draw from "I could not look".
+                if !prune_plan.unavailable.is_empty() {
+                    println!(
+                        "{}",
+                        ui::yellow(&format!(
+                            "  could not ask {} what is installed — whatever it holds \
+                             is unexamined, not absent.",
+                            prune_plan.unavailable.join(", ")
+                        ))
+                    );
+                }
+                return Ok(());
             }
-            println!("  - {}", plan::PrunePlan::describe(list, &item));
-        }
-        if !prune_plan.residue_edited.is_empty() && !json {
-            println!(
-                "  {} {} file(s) the spec no longer declares were EDITED since \
-                 temper deployed them — reported, not removed:",
-                ui::yellow(ui::g_warn()),
-                prune_plan.residue_edited.len()
-            );
-            for path in &prune_plan.residue_edited {
-                println!("      {path}");
-            }
-        }
-        // Extras this user cannot remove — reported whether or not there is other
-        // work, because they are the reason `drift` still lists something prune
-        // just walked past. Printed before the emptiness check for exactly that
-        // case: a machine whose only extras are system flatpaks has an empty
-        // plan, and "nothing to remove" alone reads as "nothing is out of place".
-        if !prune_plan.unremovable.is_empty() && !json {
-            for (mgr, name, why) in &prune_plan.unremovable {
+            if dry_run {
                 println!(
-                    "{}",
-                    ui::yellow(&format!(
-                        "  {} {mgr} {name} — {why}; prune cannot remove it",
-                        ui::g_warn(),
-                    ))
+                    "prune {}: {} item(s) (dry-run, nothing removed)",
+                    m.name,
+                    prune_plan.len()
                 );
+                return Ok(());
             }
-        }
-        // Over ssh, a system-wide flatpak removal needs a polkit password with no
-        // way to ask for it — said before the confirm rather than after the failure.
-        if providers::over_ssh() {
-            let system: Vec<String> = providers::flatpak_app_scopes()
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|(app, inst)| {
-                    inst == "system"
-                        && prune_plan
-                            .packages
-                            .iter()
-                            .any(|(m, n)| *m == packages::Manager::Flatpak && n == app)
-                })
-                .map(|(app, _)| app)
-                .collect();
-            if !system.is_empty() {
-                eprintln!(
-                    "{}",
-                    ui::yellow(&format!(
-                        "  {} {} system-wide flatpak(s) over ssh: polkit authorizes their removal \
-                         and may have no way to ask for a password here — `sudo flatpak \
-                         uninstall --system {}` works where prune does not",
-                        ui::g_warn(),
-                        system.len(),
-                        system.join(" ")
-                    ))
-                );
+            if yes {
+                break;
             }
-        }
-        if prune_plan.is_empty() {
-            println!("prune {}: nothing to remove.", m.name);
-            // …but say whether that is an answer or a shrug. A manager that is
-            // installed and failing reports nothing, and "nothing to remove" is
-            // the wrong conclusion to draw from "I could not look".
-            if !prune_plan.unavailable.is_empty() {
-                println!(
-                    "{}",
-                    ui::yellow(&format!(
-                        "  could not ask {} what is installed — whatever it holds \
-                         is unexamined, not absent.",
-                        prune_plan.unavailable.join(", ")
-                    ))
-                );
-            }
-            return Ok(());
-        }
-        if dry_run {
-            println!(
-                "prune {}: {} item(s) (dry-run, nothing removed)",
-                m.name,
-                prune_plan.len()
-            );
-            return Ok(());
-        }
-        // Removal is destructive (dependency-aware uninstall + untrust) — confirm.
-        // A plan may only mark packages as dependencies, so the question names
-        // the verb and the effects clause says what it does.
-        if !yes
-            && !prompt_no(&format!(
+            // Removal is destructive (dependency-aware uninstall + untrust) — confirm.
+            // A plan may only mark packages as dependencies, so the question names
+            // the verb and the effects clause says what it does.
+            match prompt_prune(&format!(
                 "prune the {} item(s) listed above? this {}",
                 prune_plan.len(),
                 prune_plan.effects().join(", ")
-            ))
-        {
-            println!("aborted — nothing removed.");
-            return Ok(());
+            )) {
+                PruneChoice::All => break,
+                PruneChoice::Abort => {
+                    println!("aborted — nothing removed.");
+                    return Ok(());
+                }
+                PruneChoice::Each => {
+                    let more = choose_what_to_keep(&prune_plan, &mas_names);
+                    // Yes to every item is the plan as shown, confirmed item by item.
+                    if more.is_empty() {
+                        break;
+                    }
+                    kept.extend(more);
+                    prune_plan = plan::run_prune_keeping(&home, &m, &ignore, &trust, &kept)?;
+                    println!();
+                }
+            }
         }
-        let outcome = plan::commit_prune(&home, &m, &prune_plan, &ignore, &manifest::effective_trust(&home, &ft.brew.trust, &m)?)?;
+        let outcome = plan::commit_prune(&home, &m, &prune_plan, &ignore, &trust)?;
         // The count is what happened, not what was planned. A permission error
         // or a directory where a file was expected used to warn and still be
         // reported as removed (Principle #6b: report the effect).
@@ -1752,14 +1753,14 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
             .filter(|(pm, n)| !outcome.failed.contains(&format!("{pm} {n}")))
             .count();
         let removed = prune_plan.len() - outcome.failed.len() - demoted;
-        if demoted == 0 {
-            println!("prune {}: {removed} item(s) removed", m.name);
-        } else {
-            println!(
-                "prune {}: {removed} item(s) removed, {demoted} kept and marked as dependencies",
-                m.name
-            );
+        let mut said = vec![format!("{removed} item(s) removed")];
+        if demoted > 0 {
+            said.push(format!("{demoted} kept and marked as dependencies"));
         }
+        if !prune_plan.kept.is_empty() {
+            said.push(format!("{} left in place", prune_plan.kept.len()));
+        }
+        println!("prune {}: {}", m.name, said.join(", "));
         if !outcome.failed.is_empty() {
             println!(
                 "  {} {} item(s) could NOT be removed and are still here:",
@@ -1777,6 +1778,101 @@ fn cmd_prune(dry_run: bool, yes: bool, json: bool) -> Result<()> {
     })();
     remind_if_dirty(&home, &gc);
     result
+}
+
+/// What a prune will do, then what it reports and what it leaves in place.
+fn print_prune_preview(
+    p: &plan::PrunePlan,
+    mas_names: &std::collections::BTreeMap<String, String>,
+) {
+    for (mgr, name) in &p.packages {
+        println!("  - {}", package_label(mgr.as_str(), name, mas_names));
+    }
+    // Everything that is not a package renders from `items()` — the same list
+    // the count and the confirm are derived from, so "prune the N item(s)
+    // listed above" cannot list fewer than N again. (Packages keep their own loop
+    // above: only there does the preview need the `Manager` to turn a mas id
+    // into an app name.)
+    for (list, item) in p.items() {
+        if list == "packages" {
+            continue;
+        }
+        println!("  - {}", plan::PrunePlan::describe(list, &item));
+    }
+    if !p.residue_edited.is_empty() {
+        println!(
+            "  {} {} file(s) the spec no longer declares were EDITED since \
+             temper deployed them — reported, not removed:",
+            ui::yellow(ui::g_warn()),
+            p.residue_edited.len()
+        );
+        for path in &p.residue_edited {
+            println!("      {path}");
+        }
+    }
+    // Extras this user cannot remove — reported whether or not there is other
+    // work, because they are the reason `drift` still lists something prune
+    // just walked past. Printed before the emptiness check for exactly that
+    // case: a machine whose only extras are system flatpaks has an empty
+    // plan, and "nothing to remove" alone reads as "nothing is out of place".
+    for (mgr, name, why) in &p.unremovable {
+        println!(
+            "{}",
+            ui::yellow(&format!(
+                "  {} {mgr} {name} — {why}; prune cannot remove it",
+                ui::g_warn(),
+            ))
+        );
+    }
+    for (list, item, why) in &p.kept {
+        let name = match item.split_once(' ') {
+            Some((mgr, n)) if *list == "packages" => package_label(mgr, n, mas_names),
+            _ => plan::PrunePlan::name(list, item),
+        };
+        let line = match why {
+            Some(why) => format!("· keep {name} — {why}"),
+            None => format!("· keep {name}"),
+        };
+        println!("  {}", ui::dim(&line));
+    }
+}
+
+/// A package as the preview names it: a mas id by its app's name where known.
+fn package_label(
+    mgr: &str,
+    name: &str,
+    mas_names: &std::collections::BTreeMap<String, String>,
+) -> String {
+    match (mgr, mas_names.get(name)) {
+        ("mas", Some(app)) => format!("mas \"{app}\" (id {name})"),
+        _ => format!("{mgr} {name}"),
+    }
+}
+
+/// Ask about each item, at the grain `reconcile` asks at, and return what to
+/// keep. Enter keeps it: the destructive answer is the one you type.
+fn choose_what_to_keep(
+    p: &plan::PrunePlan,
+    mas_names: &std::collections::BTreeMap<String, String>,
+) -> Vec<(&'static str, String)> {
+    println!(
+        "\n{}",
+        ui::bold("Choose per item — y prunes it, Enter keeps it for this run:")
+    );
+    let mut kept = Vec::new();
+    for (list, item) in p.choices() {
+        let what = match (list, item.split_once(' ')) {
+            ("packages", Some((mgr, name))) => {
+                format!("uninstall {}", package_label(mgr, name, mas_names))
+            }
+            ("demote", _) => format!("mark {item} as a dependency (it stays installed)"),
+            _ => plan::PrunePlan::describe(list, &item),
+        };
+        if !prompt_no(&format!("  {what}?")) {
+            kept.push((list, item));
+        }
+    }
+    kept
 }
 
 /// Scaffold this machine into the folder, then seed it from live state.
@@ -3150,6 +3246,26 @@ fn sudo_guard(user: &str, json: bool) -> Result<()> {
 fn prompt_no(msg: &str) -> bool {
     print!("{msg} [y/N] ");
     read_reply().starts_with('y')
+}
+
+enum PruneChoice {
+    All,
+    Each,
+    Abort,
+}
+
+/// `[y/N/c]` — default no, `c` asks about each item. The whole plan stays one
+/// keystroke; choosing is the escape, as `k` is for a dconf section.
+fn prompt_prune(msg: &str) -> PruneChoice {
+    print!("{msg} [y/N/c]  (c = choose per item) ");
+    let r = read_reply();
+    if r.starts_with('y') {
+        PruneChoice::All
+    } else if r.starts_with('c') {
+        PruneChoice::Each
+    } else {
+        PruneChoice::Abort
+    }
 }
 
 enum SectionChoice {

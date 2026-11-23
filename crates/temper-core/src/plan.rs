@@ -2841,6 +2841,13 @@ pub struct PrunePlan {
     /// verbose one — it spends the user's trust on the single prompt standing
     /// between them and an irreversible removal.
     pub unremovable: Vec<(&'static str, String, &'static str)>,
+    /// What this run leaves in place that it would otherwise act on, as
+    /// `(list, item, why)`: the items the user chose to keep (`--keep`, or `c` at
+    /// the confirm), whose `why` is `None`, and what stays because something kept
+    /// needs it, with the reason. Not work, so not in `items()`; published in
+    /// `--json` as `kept`. Nothing is written — the next `prune` offers them
+    /// again, and `drift` still reports them.
+    pub kept: Vec<(&'static str, String, Option<&'static str>)>,
 }
 
 impl PrunePlan {
@@ -3029,6 +3036,136 @@ impl PrunePlan {
         }
     }
 
+    /// The lists that follow from the others rather than being chosen: what a
+    /// removal frees, the autoremove it falls back to, the keys of a dropped
+    /// repo. Keeping an item works them out again; nobody is asked about them.
+    pub const CONSEQUENCES: &'static [&'static str] = &["dependencies", "autoremove", "pacman_keys"];
+
+    /// What `prune` asks about one at a time and `--keep` can name — the grain
+    /// `reconcile` asks at: each package, tap, extension, layered rpm, remote and
+    /// file.
+    pub fn choices(&self) -> Vec<(&'static str, String)> {
+        self.items()
+            .into_iter()
+            .filter(|(l, _)| !Self::CONSEQUENCES.contains(l))
+            .collect()
+    }
+
+    /// How one item is named on its own, without the verb — in a "keep" line,
+    /// and as `--keep` accepts it.
+    pub fn name(list: &str, item: &str) -> String {
+        match list {
+            "packages" | "demote" | "residue" | "retired" => item.to_string(),
+            "dnf" | "apt" | "pacman" => format!("{list} {item}"),
+            "untrust" => format!("tap {item}"),
+            "extensions" => format!("extension {item}"),
+            "rpm_ostree" => format!("rpm-ostree {item}"),
+            "flatpak_remotes" => format!("flatpak remote {item}"),
+            "pacman_keys" => format!("pacman key {item}"),
+            other => format!("{other} {item}"),
+        }
+    }
+
+    /// Whether `--keep <arg>` names this item: as `name` writes it (`brew jq`,
+    /// `apt cowsay`, `tap a/b`), as the plan holds it (`a/b`, a uuid, a path), or
+    /// by the package's bare name (`jq`). A path matches with `~` expanded too,
+    /// because the shell expands it before temper sees it.
+    fn named_by(list: &str, item: &str, arg: &str) -> bool {
+        if arg == item || arg == Self::name(list, item) {
+            return true;
+        }
+        match list {
+            "packages" | "demote" => item.split_once(' ').is_some_and(|(_, n)| n == arg),
+            "residue" | "retired" => {
+                // A block's residue is keyed `path#marker`; its path names it too.
+                let path = item.rsplit_once('#').map_or(item, |(p, _)| p);
+                arg == path || expand_tilde(path) == Path::new(arg)
+            }
+            _ => false,
+        }
+    }
+
+    /// The items `--keep` names, from this plan's choices. An argument that names
+    /// none is an error, not a warning: `--keep jqq --yes` would otherwise remove
+    /// the `jq` it was written to protect.
+    pub fn resolve_keep(&self, args: &[String]) -> Result<Vec<(&'static str, String)>> {
+        let choices = self.choices();
+        let mut out: Vec<(&'static str, String)> = Vec::new();
+        for arg in args {
+            let hits: Vec<_> = choices
+                .iter()
+                .filter(|(l, i)| Self::named_by(l, i, arg))
+                .cloned()
+                .collect();
+            if hits.is_empty() {
+                if self
+                    .items()
+                    .iter()
+                    .any(|(l, i)| Self::CONSEQUENCES.contains(l) && Self::named_by("packages", i, arg))
+                {
+                    bail!(
+                        "--keep {arg}: it goes because of what else is pruned — keep the \
+                         package that frees it, and it stays too"
+                    );
+                }
+                bail!(
+                    "--keep {arg} names nothing this prune would act on — nothing was \
+                     removed; `temper prune --dry-run` lists what it would"
+                );
+            }
+            for h in hits {
+                if !out.contains(&h) {
+                    out.push(h);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Take `kept` out of the plan, and with it what something kept needs:
+    ///
+    /// - a kept layered rpm keeps every rpm repo file, because rpm-ostree
+    ///   re-resolves each layered package on every deployment and cannot without
+    ///   the repo it came from — the rule `commit_prune` applies to a failed
+    ///   un-layer;
+    /// - a kept pacman repo file keeps the keys, because a repo still on disk
+    ///   with its key gone fails every sync.
+    ///
+    /// `kinds` maps a residue key to the primitive that deployed it.
+    fn keep(&mut self, kept: &[(&'static str, String)], kinds: &BTreeMap<String, String>) {
+        let is_kept = |list: &str, item: &str| kept.iter().any(|(l, i)| *l == list && i == item);
+        self.packages
+            .retain(|(m, n)| !is_kept("packages", &format!("{} {n}", m.as_str())));
+        self.untrust.retain(|i| !is_kept("untrust", i));
+        self.extensions.retain(|i| !is_kept("extensions", i));
+        self.rpm_ostree.retain(|i| !is_kept("rpm_ostree", i));
+        self.system.retain(|(pm, n)| !is_kept(pm.name(), n));
+        self.demote.retain(|(pm, n)| !is_kept("demote", &format!("{pm} {n}")));
+        self.flatpak_remotes.retain(|i| !is_kept("flatpak_remotes", i));
+        self.residue.retain(|i| !is_kept("residue", i));
+        self.retired.retain(|i| !is_kept("retired", i));
+        self.kept = kept.iter().map(|(l, i)| (*l, i.clone(), None)).collect();
+
+        let kind = |key: &str| kinds.get(key).map(String::as_str);
+        if kept.iter().any(|(l, _)| *l == "rpm_ostree") {
+            let (held, rest): (Vec<String>, Vec<String>) =
+                std::mem::take(&mut self.residue).into_iter().partition(|k| kind(k) == Some("rpm-repo"));
+            self.residue = rest;
+            self.kept.extend(held.into_iter().map(|k| {
+                ("residue", k, Some("a layered rpm you kept may need it to re-resolve"))
+            }));
+        }
+        if self
+            .kept
+            .iter()
+            .any(|(l, i, _)| *l == "residue" && kind(i) == Some("pacman-repo"))
+        {
+            self.kept.extend(std::mem::take(&mut self.pacman_keys).into_iter().map(|k| {
+                ("pacman_keys", k, Some("a pacman repo you kept may be signed with it"))
+            }));
+        }
+    }
+
     /// The `--json` document. Derived one key per list for the same reason the
     /// count is: hand-writing the object omitted `flatpak_remotes` and `retired`
     /// while `commit_prune` removed both.
@@ -3077,6 +3214,15 @@ impl PrunePlan {
                     "name": n,
                     "why": why,
                 }))
+                .collect::<Vec<_>>()),
+        );
+        // Each under the list it would otherwise have been published in.
+        doc.insert(
+            "kept".into(),
+            serde_json::json!(self
+                .kept
+                .iter()
+                .map(|(l, i, why)| serde_json::json!({ "list": l, "item": i, "why": why }))
                 .collect::<Vec<_>>()),
         );
         doc.insert("removed".into(), serde_json::json!(removed));
@@ -3385,6 +3531,8 @@ mod prune_plan_tests {
                 "org.image.Baked".into(),
                 "installed system-wide, not by you",
             )],
+            // Left in place this run, so not work either.
+            kept: vec![("packages", "brew kept".into(), None)],
         };
         assert!(!p.is_empty());
         assert_eq!(p.len(), 13, "a list prune acts on is not being counted");
@@ -3409,6 +3557,142 @@ mod prune_plan_tests {
         }
         assert!(PrunePlan::default().is_empty());
         assert_eq!(PrunePlan::default().len(), 0);
+    }
+
+    fn several() -> PrunePlan {
+        PrunePlan {
+            packages: vec![
+                (packages::Manager::Brew, "jq".into()),
+                (packages::Manager::Flatpak, "org.x.App".into()),
+            ],
+            untrust: vec!["user/tap".into()],
+            extensions: vec!["a@x".into()],
+            rpm_ostree: vec!["vpn".into()],
+            system: vec![(syspkg::SysPm::Apt, "cowsay".into())],
+            dependencies: vec![("brew", "oniguruma".into())],
+            demote: vec![("dnf", "libfoo".into())],
+            pacman_keys: vec!["0123ABCD".into()],
+            flatpak_remotes: vec!["vendor".into()],
+            residue: vec![
+                "~/.config/gone".into(),
+                "/etc/yum.repos.d/vpn.repo".into(),
+                "/etc/pacman.d/extra.conf".into(),
+            ],
+            retired: vec!["~/.config/retired".into()],
+            ..Default::default()
+        }
+    }
+
+    /// The user chooses at reconcile's grain — each package, tap, extension,
+    /// file — and never what follows from those choices.
+    #[test]
+    fn what_follows_from_a_choice_is_not_offered_as_one() {
+        let lists: Vec<&str> = several().choices().into_iter().map(|(l, _)| l).collect();
+        for c in PrunePlan::CONSEQUENCES {
+            assert!(!lists.contains(c), "`{c}` follows from other choices, and was offered as one");
+        }
+        assert_eq!(several().choices().len(), several().len() - 2);
+        for c in PrunePlan::CONSEQUENCES {
+            assert!(PrunePlan::LISTS.contains(c), "`{c}` is not a list prune acts on");
+        }
+    }
+
+    /// `--keep` takes a name the way prune shows it, or the bare name.
+    #[test]
+    fn keep_takes_the_name_prune_shows_or_the_bare_one() {
+        let p = several();
+        let keep = |arg: &str| p.resolve_keep(&[arg.to_string()]).unwrap();
+        assert_eq!(keep("jq"), vec![("packages", "brew jq".to_string())]);
+        assert_eq!(keep("brew jq"), vec![("packages", "brew jq".to_string())]);
+        assert_eq!(keep("apt cowsay"), vec![("apt", "cowsay".to_string())]);
+        assert_eq!(keep("cowsay"), vec![("apt", "cowsay".to_string())]);
+        assert_eq!(keep("tap user/tap"), vec![("untrust", "user/tap".to_string())]);
+        assert_eq!(keep("user/tap"), vec![("untrust", "user/tap".to_string())]);
+        assert_eq!(keep("libfoo"), vec![("demote", "dnf libfoo".to_string())]);
+        assert_eq!(keep("~/.config/retired"), vec![("retired", "~/.config/retired".to_string())]);
+        // The shell expands `~` before temper sees it.
+        let expanded = expand_tilde("~/.config/gone").display().to_string();
+        assert_eq!(keep(&expanded), vec![("residue", "~/.config/gone".to_string())]);
+    }
+
+    /// A `--keep` that matches nothing is not a no-op: the run it guards would
+    /// remove the thing a typo meant to protect.
+    #[test]
+    fn a_keep_that_names_nothing_stops_the_run() {
+        let p = several();
+        let err = p.resolve_keep(&["jqq".to_string()]).unwrap_err().to_string();
+        assert!(err.contains("names nothing"), "{err}");
+        // A dependency goes because of what else is pruned; keeping it means
+        // keeping what frees it, and the error says so.
+        let err = p.resolve_keep(&["oniguruma".to_string()]).unwrap_err().to_string();
+        assert!(err.contains("keep the package that frees it"), "{err}");
+    }
+
+    /// Kept is out of the plan, and so is what something kept needs.
+    #[test]
+    fn keeping_takes_the_item_and_what_it_needs_out_of_the_plan() {
+        let kinds: BTreeMap<String, String> = [
+            ("~/.config/gone", "copy"),
+            ("/etc/yum.repos.d/vpn.repo", "rpm-repo"),
+            ("/etc/pacman.d/extra.conf", "pacman-repo"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        let mut p = several();
+        p.keep(&[("packages", "brew jq".into()), ("retired", "~/.config/retired".into())], &kinds);
+        assert_eq!(p.packages, vec![(packages::Manager::Flatpak, "org.x.App".to_string())]);
+        assert!(p.retired.is_empty());
+        assert_eq!(p.residue.len(), 3, "nothing kept needs a repo file");
+        assert_eq!(p.pacman_keys.len(), 1);
+        assert_eq!(p.kept.len(), 2);
+        assert!(p.kept.iter().all(|(_, _, why)| why.is_none()));
+
+        // A kept layered rpm keeps the rpm repo files: rpm-ostree re-resolves it
+        // on every deployment.
+        let mut p = several();
+        p.keep(&[("rpm_ostree", "vpn".into())], &kinds);
+        assert!(p.rpm_ostree.is_empty());
+        assert!(!p.residue.contains(&"/etc/yum.repos.d/vpn.repo".to_string()));
+        assert!(p.kept.iter().any(|(l, i, why)| *l == "residue"
+            && i == "/etc/yum.repos.d/vpn.repo"
+            && why.is_some()));
+        assert_eq!(p.pacman_keys.len(), 1, "no pacman repo was kept");
+
+        // A kept pacman repo file keeps the keys: a repo on disk with its key
+        // gone fails every sync.
+        let mut p = several();
+        p.keep(&[("residue", "/etc/pacman.d/extra.conf".into())], &kinds);
+        assert!(p.pacman_keys.is_empty());
+        assert!(p.kept.iter().any(|(l, _, why)| *l == "pacman_keys" && why.is_some()));
+    }
+
+    /// For one run a kept extra is ignored: that is what takes it out of the
+    /// dependency arithmetic and puts it in the file `brew bundle cleanup` reads.
+    #[test]
+    fn a_kept_extra_is_ignored_for_the_run() {
+        let kept = [
+            ("packages", "brew jq".to_string()),
+            ("packages", "mas 123".to_string()),
+            ("untrust", "user/tap".to_string()),
+            ("extensions", "a@x".to_string()),
+            ("rpm_ostree", "vpn".to_string()),
+            ("apt", "cowsay".to_string()),
+            ("demote", "dnf libfoo".to_string()),
+            ("flatpak_remotes", "vendor".to_string()),
+            ("residue", "~/.config/gone".to_string()),
+        ];
+        let base = Ignore { brew: vec!["already".into()], ..Default::default() };
+        let i = keeping(&base, &kept);
+        assert_eq!(i.brew, vec!["already".to_string(), "jq".to_string()]);
+        assert_eq!(i.mas, vec!["123".to_string()]);
+        assert_eq!(i.tap, vec!["user/tap".to_string()]);
+        assert_eq!(i.gnome_extensions, vec!["a@x".to_string()]);
+        assert_eq!(i.rpm_ostree, vec!["vpn".to_string()]);
+        assert_eq!(i.apt, vec!["cowsay".to_string()]);
+        assert_eq!(i.dnf, vec!["libfoo".to_string()]);
+        assert_eq!(i.flatpak_remote, vec!["vendor".to_string()]);
     }
 }
 
@@ -3632,7 +3916,71 @@ pub fn run_prune(
             .collect(),
         unavailable,
         unremovable,
+        kept: Vec::new(),
     })
+}
+
+/// The same prune, leaving `kept` in place. Worked out again rather than
+/// filtered, because what a removal frees depends on everything removed with
+/// it: keep `jq` and the `oniguruma` it needs stays too, and a dependency two
+/// extras shared is not freed by removing one of them.
+pub fn run_prune_keeping(
+    home: &Path,
+    machine: &Machine,
+    ignore: &Ignore,
+    brew_trust: &[String],
+    kept: &[(&'static str, String)],
+) -> Result<PrunePlan> {
+    let mut plan = run_prune(home, machine, &keeping(ignore, kept), brew_trust)?;
+    if !kept.is_empty() {
+        let kinds = crate::ledger::load(&machine.name)
+            .into_iter()
+            .map(|(k, rec)| (k, rec.kind))
+            .collect();
+        plan.keep(kept, &kinds);
+    }
+    Ok(plan)
+}
+
+/// `ignore`, plus what the user kept. For one run a kept extra is protected
+/// exactly as an ignored one is: out of the plan, out of what its removal frees,
+/// and named in the file `brew bundle cleanup` reads. Held in memory only —
+/// nothing is written to the spec. Files have no ignore list; `PrunePlan::keep`
+/// takes those out, and anything else this misses, after.
+fn keeping(ignore: &Ignore, kept: &[(&'static str, String)]) -> Ignore {
+    let mut out = ignore.clone();
+    for (list, item) in kept {
+        let (key, name) = match *list {
+            // `brew jq`, `flatpak org.x.Y`, `dnf htop` — the manager is the list.
+            "packages" | "demote" => match item.split_once(' ') {
+                Some(pair) => pair,
+                None => continue,
+            },
+            "untrust" => ("tap", item.as_str()),
+            "extensions" => ("gnome_extensions", item.as_str()),
+            "flatpak_remotes" => ("flatpak_remote", item.as_str()),
+            other => (other, item.as_str()),
+        };
+        let field = match key {
+            "brew" => &mut out.brew,
+            "cask" => &mut out.cask,
+            "tap" => &mut out.tap,
+            "flatpak" => &mut out.flatpak,
+            "mas" => &mut out.mas,
+            "vscode" => &mut out.vscode,
+            "gnome_extensions" => &mut out.gnome_extensions,
+            "rpm_ostree" => &mut out.rpm_ostree,
+            "flatpak_remote" => &mut out.flatpak_remote,
+            "dnf" => &mut out.dnf,
+            "apt" => &mut out.apt,
+            "pacman" => &mut out.pacman,
+            _ => continue,
+        };
+        if !field.iter().any(|n| n == name) {
+            field.push(name.to_string());
+        }
+    }
+    out
 }
 
 /// Apply a prune: uninstall the packages and `brew untrust` the taps.
@@ -3647,6 +3995,11 @@ pub fn commit_prune(
     ignore: &Ignore,
     brew_trust: &[String],
 ) -> Result<PruneOutcome> {
+    // What the user kept is protected here as it was in the plan: `brew bundle
+    // cleanup` removes whatever its file does not name.
+    let kept: Vec<(&'static str, String)> =
+        plan.kept.iter().map(|(l, i, _)| (*l, i.clone())).collect();
+    let ignore = &keeping(ignore, &kept);
     // Uninstalling a pkg-based cask needs root per cask, same as installing one.
     // No `acquire` here: the plan is already confirmed and brew asks in its own
     // words on the first one — this just stops it asking again for the rest.
