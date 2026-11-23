@@ -3122,6 +3122,36 @@ impl PrunePlan {
         Ok(out)
     }
 
+    /// How this plan differs from `before`, the plan the user was shown, beyond
+    /// what they chose to keep. Keeping one item reworks the rest — the
+    /// dependencies its removal freed stay, a package it needs is kept as a
+    /// dependency rather than removed — and the user has seen none of that. What
+    /// stays is said, with why; work `before` did not include needs their yes.
+    pub fn changes_from(&self, before: &PrunePlan) -> PlanChanges {
+        let (now, was) = (self.items(), before.items());
+        let chosen = |l: &str, i: &str| {
+            self.kept.iter().any(|(kl, ki, why)| why.is_none() && *kl == l && ki == i)
+        };
+        let stays = was
+            .iter()
+            .filter(|(l, i)| !now.iter().any(|(nl, ni)| nl == l && ni == i) && !chosen(l, i))
+            .map(|(l, i)| {
+                let held = self.kept.iter().find_map(|(kl, ki, why)| (kl == l && ki == i).then_some(*why)).flatten();
+                let why = match (held, *l) {
+                    (Some(why), _) => why.to_string(),
+                    (None, "dependencies") => "something you kept needs it".to_string(),
+                    (None, "autoremove") => {
+                        format!("nothing of {i}'s is removed, so its autoremove does not run")
+                    }
+                    (None, _) => "it stays with what you kept".to_string(),
+                };
+                (*l, i.clone(), why)
+            })
+            .collect();
+        let added = now.into_iter().filter(|x| !was.contains(x)).collect();
+        PlanChanges { stays, added }
+    }
+
     /// Take `kept` out of the plan, and with it what something kept needs:
     ///
     /// - a kept layered rpm keeps every rpm repo file, because rpm-ostree
@@ -3668,6 +3698,58 @@ mod prune_plan_tests {
         assert!(p.kept.iter().any(|(l, _, why)| *l == "pacman_keys" && why.is_some()));
     }
 
+    /// After a walk, the user hears what keeping reworked: what stays that the
+    /// plan they saw removed, with why, and the work it did not show — and not
+    /// the items they kept themselves, which they just answered.
+    #[test]
+    fn what_keeping_reworks_is_said_and_what_was_chosen_is_not() {
+        let before = PrunePlan {
+            packages: vec![
+                (packages::Manager::Brew, "jq".into()),
+                (packages::Manager::Brew, "yq".into()),
+            ],
+            rpm_ostree: vec!["vpn".into()],
+            dependencies: vec![("brew", "oniguruma".into())],
+            residue: vec!["/etc/yum.repos.d/vpn.repo".into()],
+            ..Default::default()
+        };
+        let after = PrunePlan {
+            packages: vec![(packages::Manager::Brew, "yq".into())],
+            demote: vec![("brew", "libfoo".into())],
+            kept: vec![
+                ("packages", "brew jq".into(), None),
+                ("rpm_ostree", "vpn".into(), None),
+                ("residue", "/etc/yum.repos.d/vpn.repo".into(), Some("a layered rpm you kept may need it")),
+            ],
+            ..Default::default()
+        };
+        let c = after.changes_from(&before);
+        assert_eq!(
+            c.stays,
+            vec![
+                ("dependencies", "brew oniguruma".to_string(), "something you kept needs it".to_string()),
+                ("residue", "/etc/yum.repos.d/vpn.repo".to_string(), "a layered rpm you kept may need it".to_string()),
+            ]
+        );
+        assert_eq!(c.added, vec![("demote", "brew libfoo".to_string())]);
+
+        // A plan that only shrank by what was kept has nothing to say.
+        let only_kept = PrunePlan {
+            packages: vec![(packages::Manager::Brew, "yq".into())],
+            kept: vec![("packages", "brew jq".into(), None)],
+            ..Default::default()
+        };
+        let before = PrunePlan {
+            packages: vec![
+                (packages::Manager::Brew, "jq".into()),
+                (packages::Manager::Brew, "yq".into()),
+            ],
+            ..Default::default()
+        };
+        let c = only_kept.changes_from(&before);
+        assert!(c.stays.is_empty() && c.added.is_empty());
+    }
+
     /// For one run a kept extra is ignored: that is what takes it out of the
     /// dependency arithmetic and puts it in the file `brew bundle cleanup` reads.
     #[test]
@@ -3918,6 +4000,14 @@ pub fn run_prune(
         unremovable,
         kept: Vec::new(),
     })
+}
+
+/// What `PrunePlan::changes_from` finds.
+pub struct PlanChanges {
+    /// `(list, item, why)`: in the plan the user was shown, and staying.
+    pub stays: Vec<(&'static str, String, String)>,
+    /// `(list, item)`: work the plan the user was shown did not include.
+    pub added: Vec<(&'static str, String)>,
 }
 
 /// The same prune, leaving `kept` in place. Worked out again rather than

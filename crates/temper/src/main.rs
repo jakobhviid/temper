@@ -12,6 +12,7 @@
 //! setkey journaling+undo, sysfile drift). `defaults`/mas and full flatpak
 //! converge await a Mac / a fuller run.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::io::IsTerminal;
 use std::process::ExitCode;
@@ -122,8 +123,9 @@ enum Cmd {
     ///
     /// The confirm takes `c` to choose per item — each package, tap, extension,
     /// remote and file, as `reconcile` asks — and `--keep` makes the same choice
-    /// without asking. What you keep is left in place for this run only: nothing
-    /// is written to the spec, and the next `prune` offers it again.
+    /// without asking. The answers are the confirm: prune asks again only for
+    /// work they did not cover. What you keep is left in place for this run
+    /// only: nothing is written to the spec, and the next `prune` offers it again.
     Prune {
         /// List what would be removed without removing anything.
         #[arg(long)]
@@ -1633,54 +1635,44 @@ fn cmd_prune(dry_run: bool, yes: bool, keep: &[String], json: bool) -> Result<()
             return Ok(());
         }
 
-        // Resolve mas ids → app names for a legible preview (lazily; only when a
-        // mas extra is present), mirroring `drift`.
-        let mas_names = if prune_plan
-            .packages
-            .iter()
-            .any(|(m, _)| *m == packages::Manager::Mas)
-            || kept.iter().any(|(l, i)| *l == "packages" && i.starts_with("mas "))
-        {
-            providers::mas_names()
-        } else {
-            std::collections::BTreeMap::new()
-        };
-        // The preview and the confirm repeat until the plan shown is the one to
-        // run: choosing per item works the plan out again, and what it frees can
-        // change with what is kept, so the new plan is shown and confirmed too.
-        let mut first = true;
-        loop {
-            print_prune_preview(&prune_plan, &mas_names);
-            // Over ssh, a system-wide flatpak removal needs a polkit password with no
-            // way to ask for it — said before the confirm rather than after the failure.
-            if first && providers::over_ssh() {
-                let system: Vec<String> = providers::flatpak_app_scopes()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|(app, inst)| {
-                        inst == "system"
-                            && prune_plan
-                                .packages
-                                .iter()
-                                .any(|(m, n)| *m == packages::Manager::Flatpak && n == app)
-                    })
-                    .map(|(app, _)| app)
-                    .collect();
-                if !system.is_empty() {
-                    eprintln!(
-                        "{}",
-                        ui::yellow(&format!(
-                            "  {} {} system-wide flatpak(s) over ssh: polkit authorizes their removal \
-                             and may have no way to ask for a password here — `sudo flatpak \
-                             uninstall --system {}` works where prune does not",
-                            ui::g_warn(),
-                            system.len(),
-                            system.join(" ")
-                        ))
-                    );
-                }
+        // App Store ids and flatpak app ids, by the names the user knows them by
+        // (lazily; only when the plan holds one), mirroring `drift`.
+        let names = package_names(&prune_plan, &kept);
+        print_prune_preview(&prune_plan, &names);
+        // Over ssh, a system-wide flatpak removal needs a polkit password with no
+        // way to ask for it — said before the confirm rather than after the failure.
+        if providers::over_ssh() {
+            let system: Vec<String> = providers::flatpak_app_scopes()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(app, inst)| {
+                    inst == "system"
+                        && prune_plan
+                            .packages
+                            .iter()
+                            .any(|(m, n)| *m == packages::Manager::Flatpak && n == app)
+                })
+                .map(|(app, _)| app)
+                .collect();
+            if !system.is_empty() {
+                eprintln!(
+                    "{}",
+                    ui::yellow(&format!(
+                        "  {} {} system-wide flatpak(s) over ssh: polkit authorizes their removal \
+                         and may have no way to ask for a password here — `sudo flatpak \
+                         uninstall --system {}` works where prune does not",
+                        ui::g_warn(),
+                        system.len(),
+                        system.join(" ")
+                    ))
+                );
             }
-            first = false;
+        }
+        // The confirm, and the per-item walk it offers. The walk's answers are the
+        // confirm for everything the user was shown; keeping one item reworks the
+        // rest, and only work they were not shown is asked about again.
+        let mut question = "listed above";
+        loop {
             if prune_plan.is_empty() {
                 if prune_plan.kept.is_empty() {
                     println!("prune {}: nothing to remove.", m.name);
@@ -1690,6 +1682,7 @@ fn cmd_prune(dry_run: bool, yes: bool, keep: &[String], json: bool) -> Result<()
                         m.name,
                         prune_plan.kept.len()
                     );
+                    print_kept_hint(&prune_plan, &names);
                 }
                 // …but say whether that is an answer or a shrug. A manager that is
                 // installed and failing reports nothing, and "nothing to remove" is
@@ -1721,7 +1714,7 @@ fn cmd_prune(dry_run: bool, yes: bool, keep: &[String], json: bool) -> Result<()
             // A plan may only mark packages as dependencies, so the question names
             // the verb and the effects clause says what it does.
             match prompt_prune(&format!(
-                "prune the {} item(s) listed above? this {}",
+                "prune the {} item(s) {question}? this {}",
                 prune_plan.len(),
                 prune_plan.effects().join(", ")
             )) {
@@ -1731,14 +1724,28 @@ fn cmd_prune(dry_run: bool, yes: bool, keep: &[String], json: bool) -> Result<()
                     return Ok(());
                 }
                 PruneChoice::Each => {
-                    let more = choose_what_to_keep(&prune_plan, &mas_names);
+                    let more = choose_what_to_keep(&prune_plan, &names);
                     // Yes to every item is the plan as shown, confirmed item by item.
                     if more.is_empty() {
                         break;
                     }
                     kept.extend(more);
-                    prune_plan = plan::run_prune_keeping(&home, &m, &ignore, &trust, &kept)?;
-                    println!();
+                    let next = plan::run_prune_keeping(&home, &m, &ignore, &trust, &kept)?;
+                    let changes = next.changes_from(&prune_plan);
+                    prune_plan = next;
+                    if !changes.stays.is_empty() || !changes.added.is_empty() {
+                        println!("\n{}", ui::bold("What you kept changes the rest of the plan:"));
+                        for (list, item, why) in &changes.stays {
+                            println!("  · {} stays — {why}", item_label(list, item, &names));
+                        }
+                        for (list, item) in &changes.added {
+                            println!("  + {}", item_action(list, item, &names));
+                        }
+                    }
+                    if changes.added.is_empty() && !prune_plan.is_empty() {
+                        break;
+                    }
+                    question = "with that change";
                 }
             }
         }
@@ -1774,6 +1781,8 @@ fn cmd_prune(dry_run: bool, yes: bool, keep: &[String], json: bool) -> Result<()
         if outcome.reboot {
             println!("  ! reboot required (rpm-ostree staged a deployment)");
         }
+        // Advice last, after anything that went wrong.
+        print_kept_hint(&prune_plan, &names);
         Ok(())
     })();
     remind_if_dirty(&home, &gc);
@@ -1781,18 +1790,15 @@ fn cmd_prune(dry_run: bool, yes: bool, keep: &[String], json: bool) -> Result<()
 }
 
 /// What a prune will do, then what it reports and what it leaves in place.
-fn print_prune_preview(
-    p: &plan::PrunePlan,
-    mas_names: &std::collections::BTreeMap<String, String>,
-) {
+fn print_prune_preview(p: &plan::PrunePlan, names: &BTreeMap<String, String>) {
     for (mgr, name) in &p.packages {
-        println!("  - {}", package_label(mgr.as_str(), name, mas_names));
+        println!("  - {}", package_label(mgr.as_str(), name, names));
     }
     // Everything that is not a package renders from `items()` — the same list
     // the count and the confirm are derived from, so "prune the N item(s)
     // listed above" cannot list fewer than N again. (Packages keep their own loop
-    // above: only there does the preview need the `Manager` to turn a mas id
-    // into an app name.)
+    // above: only there does the preview need the `Manager` to turn an id into
+    // an app name.)
     for (list, item) in p.items() {
         if list == "packages" {
             continue;
@@ -1825,10 +1831,7 @@ fn print_prune_preview(
         );
     }
     for (list, item, why) in &p.kept {
-        let name = match item.split_once(' ') {
-            Some((mgr, n)) if *list == "packages" => package_label(mgr, n, mas_names),
-            _ => plan::PrunePlan::name(list, item),
-        };
+        let name = item_label(list, item, names);
         let line = match why {
             Some(why) => format!("· keep {name} — {why}"),
             None => format!("· keep {name}"),
@@ -1837,15 +1840,47 @@ fn print_prune_preview(
     }
 }
 
-/// A package as the preview names it: a mas id by its app's name where known.
-fn package_label(
-    mgr: &str,
-    name: &str,
-    mas_names: &std::collections::BTreeMap<String, String>,
-) -> String {
-    match (mgr, mas_names.get(name)) {
-        ("mas", Some(app)) => format!("mas \"{app}\" (id {name})"),
-        _ => format!("{mgr} {name}"),
+/// Display names for the packages whose id is not what the user knows them by —
+/// App Store ids and flatpak app ids — keyed `<manager> <id>`. Asked for only
+/// when the plan, or what was kept from it, holds one.
+fn package_names(p: &plan::PrunePlan, kept: &[(&'static str, String)]) -> BTreeMap<String, String> {
+    let held = |mgr: packages::Manager| {
+        p.packages.iter().any(|(m, _)| *m == mgr)
+            || kept.iter().any(|(l, i)| *l == "packages" && i.starts_with(&format!("{} ", mgr.as_str())))
+    };
+    let mut out = BTreeMap::new();
+    if held(packages::Manager::Mas) {
+        out.extend(providers::mas_names().into_iter().map(|(id, n)| (format!("mas {id}"), n)));
+    }
+    if held(packages::Manager::Flatpak) {
+        out.extend(providers::flatpak_names().into_iter().map(|(id, n)| (format!("flatpak {id}"), n)));
+    }
+    out
+}
+
+/// A package as the preview names it: by the app's name where the id is not it.
+fn package_label(mgr: &str, name: &str, names: &BTreeMap<String, String>) -> String {
+    match names.get(&format!("{mgr} {name}")) {
+        Some(app) if mgr == "mas" => format!("mas \"{app}\" (id {name})"),
+        Some(app) => format!("{mgr} \"{app}\" ({name})"),
+        None => format!("{mgr} {name}"),
+    }
+}
+
+/// One prune item named on its own: `flatpak "Flatseal" (…)`, `apt cowsay`, a path.
+fn item_label(list: &str, item: &str, names: &BTreeMap<String, String>) -> String {
+    match item.split_once(' ') {
+        Some((mgr, n)) if list == "packages" => package_label(mgr, n, names),
+        _ => plan::PrunePlan::name(list, item),
+    }
+}
+
+/// What pruning one item does, as the walk asks it.
+fn item_action(list: &str, item: &str, names: &BTreeMap<String, String>) -> String {
+    match list {
+        "packages" => format!("uninstall {}", item_label(list, item, names)),
+        "demote" => format!("mark {item} as a dependency (it stays installed)"),
+        _ => plan::PrunePlan::describe(list, item),
     }
 }
 
@@ -1853,7 +1888,7 @@ fn package_label(
 /// keep. Enter keeps it: the destructive answer is the one you type.
 fn choose_what_to_keep(
     p: &plan::PrunePlan,
-    mas_names: &std::collections::BTreeMap<String, String>,
+    names: &BTreeMap<String, String>,
 ) -> Vec<(&'static str, String)> {
     println!(
         "\n{}",
@@ -1861,18 +1896,40 @@ fn choose_what_to_keep(
     );
     let mut kept = Vec::new();
     for (list, item) in p.choices() {
-        let what = match (list, item.split_once(' ')) {
-            ("packages", Some((mgr, name))) => {
-                format!("uninstall {}", package_label(mgr, name, mas_names))
-            }
-            ("demote", _) => format!("mark {item} as a dependency (it stays installed)"),
-            _ => plan::PrunePlan::describe(list, &item),
-        };
-        if !prompt_no(&format!("  {what}?")) {
+        if !prompt_no(&format!("  {}?", item_action(list, &item, names))) {
             kept.push((list, item));
         }
     }
     kept
+}
+
+/// What keeping something means next time, and how to settle it for good —
+/// said when the user kept something by choice. A kept item is an open
+/// decision: a summary that stops at "left in place" leaves them to rediscover
+/// it at the next prune.
+fn print_kept_hint(p: &plan::PrunePlan, names: &BTreeMap<String, String>) {
+    let chosen: Vec<(&str, &str)> = p
+        .kept
+        .iter()
+        .filter(|(_, _, why)| why.is_none())
+        .map(|(l, i, _)| (*l, i.as_str()))
+        .collect();
+    let (verb, them, which) = match chosen.len() {
+        0 => return,
+        1 => ("stays", "it", "it"),
+        _ => ("stay", "them", "one"),
+    };
+    let labels: Vec<String> = chosen.iter().map(|(l, i)| item_label(l, i, names)).collect();
+    println!(
+        "  {} {verb} this run — drift still lists {them}, and the next prune asks again.",
+        labels.join(", ")
+    );
+    // A file has no spec entry to absorb it into and no ignore list; an extra has both.
+    if chosen.iter().any(|(l, _)| !matches!(*l, "residue" | "retired")) {
+        println!(
+            "  To settle {which} for good: `temper reconcile` declares it, `[machine.ignore]` silences it."
+        );
+    }
 }
 
 /// Scaffold this machine into the folder, then seed it from live state.

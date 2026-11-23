@@ -160,33 +160,83 @@ fn a_kept_formula_is_left_installed() {
     );
 }
 
-/// `c` asks about each item; Enter keeps it. The plan is worked out again from
-/// what was kept, shown, and confirmed before anything runs.
+/// `c` asks about each item; Enter keeps it. The answers are the confirm: a plan
+/// that only lost what was kept runs without a second question, and the summary
+/// says what keeping means next time.
 #[test]
 fn choosing_per_item_prunes_only_what_you_said_yes_to() {
     let e = Env::new();
     e.fake_brew();
     e.spec("");
 
-    // c to choose; Enter keeps trying-out; y prunes done-with; y confirms the
-    // plan worked out again from that.
+    // c to choose; Enter keeps trying-out; y prunes done-with. Nothing else.
     let out = e
         .temper()
         .arg("prune")
-        .write_stdin("c\n\ny\ny\n")
+        .write_stdin("c\n\ny\n")
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
     assert!(stdout.contains("uninstall brew trying-out?"), "{stdout}");
-    assert!(stdout.contains("keep brew trying-out"), "the new plan must say what it keeps: {stdout}");
+    assert_eq!(
+        stdout.matches("prune the ").count(),
+        1,
+        "the walk's answers were asked for again: {stdout}"
+    );
+    assert!(!stdout.contains("changes the rest of the plan"), "nothing changed: {stdout}");
     // The fake still lists what cleanup was told to remove, so the count reads
     // it back as not removed; what is asserted here is what was kept.
     assert!(stdout.contains(", 1 left in place"), "{stdout}");
+    assert!(
+        stdout.contains("brew trying-out stays this run")
+            && stdout.contains("the next prune asks again")
+            && stdout.contains("`temper reconcile` declares it"),
+        "the summary must say what keeping means and how to settle it: {stdout}"
+    );
 
     let handed = e.handed();
     assert!(handed.contains(&"trying-out".to_string()), "{handed:?}");
     assert!(!handed.contains(&"done-with".to_string()), "{handed:?}");
+}
+
+/// A flatpak is listed by the name it shows the user, not only its id.
+#[test]
+fn a_flatpak_is_named_as_the_user_knows_it() {
+    let e = Env::new();
+    let bin = e.bin.path().join("flatpak");
+    fs::write(
+        &bin,
+        "#!/bin/sh\n\
+         case \"$*\" in\n\
+           *columns=application,name*) printf 'org.declared.App\\tDeclared\\ncom.github.tchx84.Flatseal\\tFlatseal\\n' ;;\n\
+           *columns=application,installation*) printf 'org.declared.App\\tsystem\\ncom.github.tchx84.Flatseal\\tsystem\\n' ;;\n\
+           *columns=application*) printf 'org.declared.App\\ncom.github.tchx84.Flatseal\\n' ;;\n\
+         esac\n\
+         exit 0\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fs::write(
+        e.home.path().join("temper.toml"),
+        format!(
+            "[[machine]]\nname = \"t\"\nos = \"{}\"\npackages = [\"flatpak \\\"org.declared.App\\\"\"]\n",
+            os()
+        ),
+    )
+    .unwrap();
+
+    let out = e.temper().args(["prune", "--dry-run"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("flatpak \"Flatseal\" (com.github.tchx84.Flatseal)"),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// Keeping everything is a prune with nothing to do, and brew is not called.
@@ -199,6 +249,7 @@ fn keeping_every_item_removes_nothing() {
     let out = e.temper().arg("prune").write_stdin("c\n\n\n").output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("nothing to remove — 2 item(s) left in place"), "{stdout}");
+    assert!(stdout.contains("stay this run"), "{stdout}");
     assert!(read(&e.cleanup_log()).is_empty(), "cleanup ran: {}", read(&e.cleanup_log()));
 }
 
@@ -246,4 +297,65 @@ fn a_kept_path_stays() {
     assert!(dir.join("old-a").exists(), "kept by the spec's spelling, and removed");
     assert!(dir.join("old-b").exists(), "kept by the expanded path, and removed");
     assert!(!dir.join("old-c").exists(), "not kept, and still here");
+}
+
+/// Keeping one item can keep another the user was never asked about: a kept
+/// pacman repo file keeps the keys, since a repo on disk without its key fails
+/// every sync. That is said, with why — and asked about only if it added work.
+#[test]
+fn what_keeping_holds_back_is_said() {
+    const KEY: &str = "0123456789ABCDEF0123456789ABCDEF01234567";
+    let e = Env::new();
+    let stub = |name: &str, body: &str| {
+        let p = e.bin.path().join(name);
+        fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    };
+    let key_log = e.fake_home.path().join("pacman-key.log");
+    stub("pacman", "exit 0");
+    stub("pacman-key", &format!("echo \"$@\" >> {}", key_log.display()));
+    let keys = e.state.path().join("pacman-keys");
+    fs::create_dir_all(&keys).unwrap();
+    fs::write(keys.join("t.json"), format!("[\"{KEY}\"]")).unwrap();
+
+    // A repo file temper deployed, untouched since, and dropped from the spec.
+    let assets = e.home.path().join("assets");
+    fs::create_dir_all(&assets).unwrap();
+    fs::write(assets.join("extra.conf"), "[extra]\n").unwrap();
+    let spec = |steps: &str| {
+        fs::write(
+            e.home.path().join("temper.toml"),
+            format!("[[machine]]\nname = \"t\"\nos = \"{}\"\napps = [\"a\"]\n", os()),
+        )
+        .unwrap();
+        fs::create_dir_all(e.home.path().join("apps")).unwrap();
+        fs::write(e.home.path().join("apps/a.toml"), steps).unwrap();
+    };
+    spec("[[step]]\ncopy = \"assets/extra.conf\"\nto = \"~/repos/extra.conf\"\n");
+    e.temper().arg("install").assert().success();
+    let ledger = e.state.path().join("deployed/t.json");
+    let mut l: serde_json::Value = serde_json::from_str(&read(&ledger)).unwrap();
+    for rec in l.as_object_mut().unwrap().values_mut() {
+        rec["kind"] = serde_json::json!("pacman-repo");
+    }
+    fs::write(&ledger, l.to_string()).unwrap();
+    spec("");
+
+    // c to choose; Enter keeps the repo file — the only item asked about.
+    let out = e.temper().arg("prune").write_stdin("c\n\n").output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("What you kept changes the rest of the plan:"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("pacman key {KEY} stays — a pacman repo you kept")),
+        "{stdout}"
+    );
+    assert_eq!(stdout.matches("prune the ").count(), 1, "it added no work: {stdout}");
+    assert!(stdout.contains("nothing to remove — 2 item(s) left in place"), "{stdout}");
+    assert!(!read(&key_log).contains("--delete"), "{}", read(&key_log));
+    assert!(e.fake_home.path().join("repos/extra.conf").exists());
 }

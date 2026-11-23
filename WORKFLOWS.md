@@ -367,32 +367,43 @@ of the drift. You pick a direction and run what it prints:
 
 > **Prune some, keep the rest.** The confirm is `[y/N/c]`: `c` goes through the
 > plan one item at a time — each package, tap, extension, layered rpm, remote
-> and file, the grain `reconcile` asks at — and Enter keeps the item. `--keep
-> NAME` makes the same choice without asking, and is how a `--json` run makes
-> it; it is repeatable, and takes a package by name (`jq`) or as the preview
-> lists it (`brew jq`), a tap, an extension uuid, a remote or a path.
+> and file, the grain `reconcile` asks at — and Enter keeps the item. Flatpaks
+> and App Store apps are named as they show themselves (`flatpak "Flatseal"
+> (com.github.tchx84.Flatseal)`). `--keep NAME` makes the same choice without
+> asking, and is how a `--json` run makes it; it is repeatable, and takes a
+> package by name (`jq`) or as the preview lists it (`brew jq`), a tap, an
+> extension uuid, a remote or a path. A `--keep` that names nothing in the plan
+> stops the run before anything is removed.
 >
 > ```sh
 > temper prune --keep jq --keep org.gnome.Boxes
 > ```
 >
+> The answers are the confirm: what you said `y` to is removed without a second
+> question. Keeping one item can rework the rest, because what a removal frees
+> depends on everything removed with it, so the plan is worked out again from
+> what you keep, and anything you were not shown is said under "What you kept
+> changes the rest of the plan":
+>
+> ```
+>   · brew oniguruma stays — something you kept needs it
+>   + mark brew libfoo as a dependency (it stays installed)
+> ```
+>
+> A `·` line is something staying, with why: a dependency only what you kept
+> needed, the rpm repo files a kept layered rpm re-resolves from on every
+> deployment, the keys a kept pacman repo file is checked against. Those are
+> said and not asked. A `+` line is work the first preview did not show, and
+> prune asks again before doing it. Freed dependencies, a package manager's
+> autoremove and pacman keys follow from the rest and are never asked about one
+> by one; `--keep oniguruma` says to keep what frees it.
+>
 > Kept is for this run only. Nothing is written to the spec, `drift` still
 > reports the item, and the next `prune` offers it again — the answer for a
-> package you are trying out. To stop being asked, declare it (`reconcile`) or
-> ignore it (`[machine.ignore]`).
->
-> What a removal frees depends on everything removed with it, so the plan is
-> worked out again from what you keep and shown once more, a `· keep` line per
-> kept item, before the confirm. Keep `jq` and the `oniguruma` only it needed
-> stays too. Freed dependencies, a package manager's autoremove and pacman keys
-> follow from the rest and are never asked about; `--keep oniguruma` says to keep
-> what frees it. Two things stay because something kept needs them, each with
-> its reason: a kept layered rpm keeps the rpm repo files, which rpm-ostree
-> re-resolves it from on every deployment, and a kept pacman repo file keeps the
-> keys, without which it fails every sync. A `--keep` that names nothing in the
-> plan stops the run before anything is removed. `--json` lists what stayed
-> under `kept`, as `{list, item, why}` — `list` is the key the item would
-> otherwise be under, and `why` is null for what you chose.
+> package you are trying out. The summary says so and names the two ways to
+> settle it: declare it (`reconcile`) or silence it (`[machine.ignore]`).
+> `--json` lists what stayed under `kept`, as `{list, item, why}` — `list` is the
+> key the item would otherwise be under, and `why` is null for what you chose.
 - **dnf / apt / pacman:** an extra is only what was installed by name since the
 machine's baseline — the image's own packages never are. `prune` removes it with
 the dependencies only it needed (all listed in the preview), and keeps one that

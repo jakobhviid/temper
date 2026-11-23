@@ -257,6 +257,28 @@ pub fn mas_names() -> std::collections::BTreeMap<String, String> {
     out
 }
 
+/// Map of installed flatpak app id → the name it shows the user (`flatpak
+/// list`'s Name column). Empty where flatpak is absent. Used by `prune` so a
+/// reverse-DNS id reads as the app the user knows.
+pub fn flatpak_names() -> std::collections::BTreeMap<String, String> {
+    if !have("flatpak") {
+        return std::collections::BTreeMap::new();
+    }
+    run_lines("flatpak", &["list", "--app", "--columns=application,name"])
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|l| parse_flatpak_name_line(l))
+        .collect()
+}
+
+/// `com.github.tchx84.Flatseal\tFlatseal` → the id and its name. An app whose
+/// name is its id has nothing to add.
+fn parse_flatpak_name_line(line: &str) -> Option<(String, String)> {
+    let (id, name) = line.split_once('\t')?;
+    let (id, name) = (id.trim(), name.trim());
+    (!id.is_empty() && !name.is_empty() && id != name).then(|| (id.to_string(), name.to_string()))
+}
+
 /// Resolve a brew short name to its `(manager, fully-qualified token name)` via
 /// Resolve short brew names to their fully-qualified identity in **one**
 /// `brew info --json=v2 <name…>` call — a tap formula/cask becomes its
@@ -3958,6 +3980,22 @@ mod mas_tests {
         );
         assert_eq!(parse_mas_line(""), None);
         assert_eq!(parse_mas_line("justoneword"), None);
+    }
+
+    #[test]
+    fn parse_flatpak_name_rows() {
+        assert_eq!(
+            parse_flatpak_name_line("com.github.tchx84.Flatseal\tFlatseal"),
+            Some(("com.github.tchx84.Flatseal".into(), "Flatseal".into()))
+        );
+        assert_eq!(
+            parse_flatpak_name_line("org.gnome.Boxes\tBoxes "),
+            Some(("org.gnome.Boxes".into(), "Boxes".into()))
+        );
+        // A name that is the id adds nothing; a row without a name is not one.
+        assert_eq!(parse_flatpak_name_line("org.x.App\torg.x.App"), None);
+        assert_eq!(parse_flatpak_name_line("org.x.App\t"), None);
+        assert_eq!(parse_flatpak_name_line("org.x.App"), None);
     }
 }
 
